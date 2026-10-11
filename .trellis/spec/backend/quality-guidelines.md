@@ -123,12 +123,26 @@ Do not claim default Go tests cover the C bridge. Default Go checks exclude that
 
 ## Commit and Finish Work
 
-Use Trellis for phase order and task records. Use `/git-commit` mode to review and approve each work commit.
+Use a hybrid workflow. Trellis owns development phases and managed task artifacts. `/git-commit` owns the review and approval of ordinary work commits.
+
+### Ownership Boundary
+
+| Change | Owner |
+| --- | --- |
+| Product code, project specs, and reviewed runtime or AI integration changes | Trellis work phase with `/git-commit` review |
+| Task planning artifacts, status, and archive moves | Trellis task workflow |
+| Session journals and generated workspace indexes | Trellis session workflow |
+| Initial installation of portable Trellis and AI integration files | Reviewed work commit |
+| Local identity, session pointers, caches, credentials, and machine-only settings | Local files, not a blanket work commit |
+
+Do not mix task or workspace bookkeeping into an unrelated work commit. Do not rewrite an earlier commit to change this boundary.
+
+### Ordinary Work Commits
 
 1. Record source-backed findings in the relevant spec before drafting the commit.
 2. Inspect the working tree and staged files.
-3. Separate task changes from existing or unrelated work.
-4. Stage only the verified task paths.
+3. Separate work changes from Trellis bookkeeping and unrelated changes.
+4. Stage only the verified work paths.
 5. Review the complete staged diff.
 6. Draft an English Conventional Commit with an imperative subject.
 7. Keep the subject within 74 characters.
@@ -136,9 +150,7 @@ Use Trellis for phase order and task records. Use `/git-commit` mode to review a
 9. Check the effective Git signing policy.
 10. If the signing policy is unset, ask the user to choose signed or unsigned.
 11. Show the exact file list, message, and signing behavior.
-12. Obtain final approval immediately before each non-temporary commit.
-13. Create work commits before archive and journal commits.
-14. Obtain approval for archive and journal commits before running auto-commit lifecycle commands.
+12. Obtain final approval immediately before each non-temporary work commit.
 
 Useful checks:
 
@@ -151,8 +163,30 @@ git config --get --bool commit.gpgSign
 
 For the signing-policy check, exit status `1` means unset. A configured value takes precedence unless the user explicitly chooses otherwise.
 
-Do not change Git configuration. Do not disable signing after a signing failure. Do not include unrelated staged files or push without approval.
+Task-creation consent and an earlier commit request do not replace final work-commit approval.
 
-Task-creation consent and an earlier commit request do not replace final commit approval.
+### Trellis-Managed Artifacts
 
-References: [Trellis commit phase](../../workflow.md) and [repository commit rules](../../../AGENTS.md). The user requested this combined mode during the bootstrap task.
+Follow `.trellis/workflow.md` for task planning, completion, archival, and session records. Use the supported Trellis commands for lifecycle operations.
+
+Create work commits before archive and journal commits. Once the workflow authorizes finish-work, use its native artifact and auto-commit steps.
+
+Do not add `/git-commit` confirmation before every generated bookkeeping commit. Do not replace native artifact handling with manual staging or custom commits.
+
+Honor `session_auto_commit` and `session_commit_message` in `.trellis/config.yaml`. Do not disable auto-commit merely to force the ordinary commit workflow.
+
+The archive command commits task changes. The session command commits workspace records. Both use scoped Git pathspecs and preserve unrelated staged work.
+
+Inspect their results after each step. Verify signatures when Git signing is enabled. Stop on signing or lifecycle failure.
+
+Do not change Git configuration or downgrade signing to bypass a failure. Do not push without approval.
+
+References:
+
+- [Trellis workflow](../../workflow.md): work commits, archive, and session order.
+- [Lifecycle configuration](../../config.yaml): artifact auto-commit settings.
+- [Archive implementation](../../scripts/common/task_store.py): scoped task commits.
+- [Session implementation](../../scripts/add_session.py): scoped workspace commits.
+- [Repository commit rules](../../../AGENTS.md): imperative subjects and body wrapping.
+
+The user clarified this ownership boundary during the bootstrap task. Native artifact handling is not an exception to Trellis. It is part of the hybrid workflow.

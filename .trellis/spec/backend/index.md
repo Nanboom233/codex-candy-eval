@@ -68,4 +68,6 @@ Limit instructions to 20 words. Limit descriptions to 25 words. Use one instruct
 
 Describe current repository patterns. Cite real owner files or tests. Do not invent dependencies, frameworks, migration systems, or production guarantees.
 
-For commits, follow the [combined Trellis and git-commit process](./quality-guidelines.md#commit-and-finish-work). Record spec changes before the work commit.
+For ordinary work commits, follow the [hybrid commit process](./quality-guidelines.md#commit-and-finish-work). Record spec changes before the work commit.
+
+Trellis manages task artifacts, archive commits, and session records through its native workflow. Do not apply ordinary `/git-commit` gates to each generated bookkeeping commit.
