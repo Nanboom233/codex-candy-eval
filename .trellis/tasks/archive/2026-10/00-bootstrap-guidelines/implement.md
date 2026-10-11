@@ -19,8 +19,12 @@
 - [x] Update `index.md` with correct links, scope, pre-development checks, and quality checks.
 - [x] Load `trellis-check` and review the documents.
 - [x] Update the PRD acceptance checklist and this plan from verified evidence.
-- [x] Record the combined Trellis and `/git-commit` convention in the quality guide.
-- [ ] Obtain separate approval for commit, archive, and session-record operations.
+- [x] Create and verify signed work commit `2e01ddb`.
+- [x] Correct the spec to keep Trellis-managed artifacts in their native workflow.
+- [x] Resolve the inclusion of machine-specific AI configuration. The user chose portable files only.
+- [x] Review and validate portable Trellis and AI installation files.
+- [x] Approve and create signed ordinary work commit `f84347d`.
+- [x] Hand off task archival and session records to native Trellis finish-work.
 
 ## Validation
 
@@ -38,9 +42,15 @@
 
 ## Scope Checks
 
-Only edit `.trellis/spec/backend/` and this existing task's artifacts during implementation. Leave business code, vendored files, Go dependencies, platform integrations, generated runtime scripts, deployment settings, and the user's existing `AGENTS.md` changes untouched.
+Edit the project specs and current task artifacts to record the hybrid workflow. The user approved review of existing Trellis and AI installation files for the next commit.
 
-Do not read `.env`, run deployments, invoke live model requests, commit, or archive without the required approval. Do not delete existing files or reset the working tree for recovery.
+Do not change business code, dependencies, deployment settings, or runtime behavior. Do not stage task or workspace bookkeeping in the ordinary work commit.
+
+Include only reviewed installation files. Resolve machine-specific configuration before staging it. Preserve ignored identity, session pointers, private values, and caches.
+
+Do not read `.env` or run deployments. Do not invoke live model requests. Follow `/git-commit` approval for ordinary work commits and native Trellis gates for lifecycle steps.
+
+Do not delete existing files or reset the working tree for recovery.
 
 ## Verification Results
 
@@ -61,10 +71,29 @@ Do not read `.env`, run deployments, invoke live model requests, commit, or arch
 
 Existing HTML comments remain unchanged. The new content fills their sections. The optional Metabase style include was unavailable. The review used `/output` rules.
 
-No production deployment, live evaluation, or C shared-library build ran. This task changes documentation only.
+No production deployment, live evaluation, or C shared-library build ran. The follow-up tracks existing Trellis runtime files and portable AI integration.
+
+## Installation Verification
+
+- `verify_installation.py` checks the staged installation, not live AI sessions.
+- Python syntax passed for 34 files.
+- JSON parsing passed for three files.
+- TOML parsing passed for four files.
+- Spec links resolve to files tracked in the proposed commit.
+- Task records, personal journals, local Devin settings, and the Codex machine-only MCP block are not staged.
+- Git whitespace checks passed after agent line-ending normalization and template formatting fixes.
+- Template differences were reviewed as platform command variants, existing model pins, Codex hook variants, and stale memory-tool documentation.
+- Memory-tool documentation now matches `trellis mem list --help` platform filters and its OpenCode phase limitation.
+- Go vet, uncached race tests, and Node UI checks passed again.
+
+The static workspace root guide belongs to the installation commit. The generated developer index and journal remain for the native session command.
+
+A separate parallel task appeared during verification. It is excluded from the work commit and bootstrap archival. No cross-platform AI CLI end-to-end tests ran.
 
 ## Completion State
 
-The guideline documents are complete. Commit, archive, and the finish-work journal remain pending separate approval. The task stays selected with status `in_progress`.
+The work commits are complete: `2e01ddb` and `f84347d`. Both passed local GPG verification. Machine-only settings remain outside the commits.
 
-Do not run lifecycle auto-commits before that approval. Do not describe the pending lifecycle steps as complete.
+The user authorized native Trellis finish-work. Task and workspace changes stay in that lifecycle. Native commands own the archive move and journal commit.
+
+Read `task.json` and the session journal for the final lifecycle state. The separate parallel task remains untouched.

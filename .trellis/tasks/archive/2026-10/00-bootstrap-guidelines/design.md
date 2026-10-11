@@ -25,6 +25,18 @@ Retain `database-guidelines.md` for link compatibility. Its title and content wi
 
 The backend index will explain that the UI ships as embedded plain JavaScript, HTML, and CSS. This task does not introduce a separate frontend spec tree.
 
+## Installation Follow-up
+
+The user requested a second work commit for the existing Trellis runtime and AI integration files. Preserve their current behavior.
+
+Include portable runtime scripts, workflow templates, guides, agents, skills, and reviewed platform configuration. Keep task and session bookkeeping in the native Trellis lifecycle.
+
+The user chose portable files only. Stage the Trellis part of `.codex/config.toml`, not its machine-only MCP block. Leave `.devin/config.local.json` and `.devin/hooks.v1.json` untracked.
+
+Include the static workspace root guide with the installation. Leave the developer journal and generated personal index for the native session command.
+
+Normalize Devin agent line endings through `.gitattributes`. Preserve their rules and permission lists. Do not edit Git configuration.
+
 ## Compatibility
 
 Preserve file paths, module layout, plugin versions, management contracts, and the generated thinking guides. No runtime data or deployment state changes.
@@ -53,5 +65,5 @@ Report unavailable tools or pre-existing failures separately. Documentation and 
 
 - Existing uncommitted files belong to the user. Preserve them and review only this task's edits.
 - Template headings can suggest nonexistent technologies. Replace their content with observed patterns rather than introduce those technologies.
-- Archive and journal commands can auto-commit. Require separate approval before such operations.
+- Trellis owns archive and journal commits. Use its native finish-work gates, not extra `/git-commit` review for each generated commit.
 - If a guideline is wrong, correct only that document. Do not reset the repository or overwrite unrelated content.

@@ -40,7 +40,15 @@ Preserve unrelated working-tree changes. Do not modify product source, embedded 
 
 ### R5: Workflow completion
 
-Keep planning and implementation separate. After approval, select the existing task with the supported Trellis runtime. Verify the guidelines and report checks and any remaining lifecycle blockers. Do not commit or run auto-commit lifecycle operations without separate approval.
+Keep planning and implementation separate. After approval, select the existing task with the supported Trellis runtime. Verify the guidelines and report checks and remaining lifecycle blockers.
+
+Use `/git-commit` review for ordinary work commits. Use the native Trellis workflow for task artifacts, archive commits, and session records.
+
+### R6: Complete the Trellis installation commit
+
+Correct the spec to describe this hybrid ownership boundary. Include the existing portable Trellis runtime and AI integration files in the next work commit. Preserve local configuration until its inclusion is resolved.
+
+Do not change plugin code, Git signing configuration, or generated runtime behavior. Keep ignored identity, session state, caches, and private configuration out of the commit.
 
 ## Acceptance Criteria
 
@@ -51,6 +59,8 @@ Keep planning and implementation separate. After approval, select the existing t
 - [x] AC5 / R1-R2: No unfinished content markers remain in `.trellis/spec/backend/`. Index links resolve to the final guideline files.
 - [x] AC6 / R4: Product files and pre-existing unrelated changes remain unchanged by this task.
 - [x] AC7 / R5: Required planning artifacts exist before activation, and final verification results and lifecycle state are explicit.
+- [x] AC8 / R5-R6: The spec separates ordinary work commits from native Trellis artifact handling.
+- [x] AC9 / R6: Signed work commit `f84347d` includes the approved Trellis and AI installation files without private or runtime state.
 
 ## Out of Scope
 
@@ -58,7 +68,7 @@ Keep planning and implementation separate. After approval, select the existing t
 - New spec layers, databases, and logging dependencies.
 - Trellis runtime changes and hook changes.
 - Deployments, releases, and live quota use.
-- Automatic Git commits.
+- Disabling or replacing Trellis native lifecycle auto-commits.
 
 ## Review Status
 
@@ -66,4 +76,14 @@ The user approved the final planning summary. The supported runtime selected thi
 
 The user then requested `/output` style for documents and Chinese replies. This changes wording, not the approved scope.
 
-The user requested spec records and the combined Trellis and `/git-commit` process. The quality guide now records that convention. Final commit approval and the signing choice remain pending.
+The user approved the signed work commit `2e01ddb`. Its signature passed local verification.
+
+The user then clarified the hybrid workflow. Trellis-managed artifacts retain their native lifecycle. The next work commit must include Trellis and AI integration files.
+
+The spec now records this boundary. The user chose portable files only.
+
+The next work commit excludes the Codex machine-only MCP block and both Devin local configuration files. Task and session records remain in the native Trellis lifecycle.
+
+The user approved the 152-file work commit and native finish-work. Commit `f84347d` passed local GPG verification.
+
+A separate parallel task appeared during verification and remains outside this task. Native finish-work will archive only the bootstrap task and record this session.

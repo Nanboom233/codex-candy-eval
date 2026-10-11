@@ -3,7 +3,7 @@
   "name": "00-bootstrap-guidelines",
   "title": "Bootstrap Guidelines",
   "description": "Fill in project development guidelines for AI agents",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "docs",
   "scope": null,
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "codex-candy-eval-plugin",
   "assignee": "codex-candy-eval-plugin",
   "createdAt": "2026-10-11",
-  "completedAt": null,
+  "completedAt": "2026-10-11",
   "branch": "main",
   "base_branch": null,
   "worktree_path": null,
-  "commit": null,
+  "commit": "f84347d",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -23,6 +23,6 @@
   "relatedFiles": [
     ".trellis/spec/backend/"
   ],
-  "notes": "First-time setup task created by trellis init (backend project). Guidelines and local checks are complete. Commit, archive, and finish-work journal await separate approval.",
+  "notes": "First-time setup task created by trellis init (backend project). Signed work commits 2e01ddb and f84347d passed local verification. Hybrid workflow and portable installation are complete. The user authorized native Trellis finish-work for this task only. Machine-only settings and the parallel task remain excluded.",
   "meta": {}
 }
