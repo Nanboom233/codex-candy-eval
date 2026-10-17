@@ -34,3 +34,6 @@ project_doc_fallback_filenames = ["AGENTS.md"]
 # (this file) takes precedence over user-level `~/.codex/config.toml`.
 [agents]
   max_depth = 1
+
+  [mcp_servers.pycharm]
+    url = "http://127.0.0.1:64462/stream"
