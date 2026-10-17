@@ -1,0 +1,582 @@
+{
+  "title": "Current Sub2API native adapter scope inventory",
+  "date": "2026-10-14",
+  "active_task": ".trellis/tasks/10-11-sub2api-runtime-patch",
+  "scope": "Read-only inventory of current adapter/rules.json, adapter/ui-rules.json, adapter/runtime templates, and adapter/build.py against pristine Sub2API v0.2.16.",
+  "baseline": {
+    "tag": "v0.2.16",
+    "revision": "01842576b3d5c1e2545b5a99ad555d36e28ed306",
+    "source_archive_sha256": "eef7e0519b05b8254c981efbab7bfe74c5d89897c67053e81380987366daae89",
+    "tree": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/extracted/sub2api-01842576b3d5c1e2545b5a99ad555d36e28ed306"
+  },
+  "host_reference_base": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/extracted/sub2api-01842576b3d5c1e2545b5a99ad555d36e28ed306",
+  "decision_policy": {
+    "approval_status_default": "pending",
+    "current_authorization": "Inventory and make individual recommendations only. No product edits, grouped approval, deletion, build, deployment, or cleanup is authorized by this inventory.",
+    "provenance_note": "Historical PRDs/specs record earlier product intent and implementation rationale. The current task explicitly says they are not current retention approval.",
+    "status_values": ["pending", "approved_retain", "approved_remove", "deferred"]
+  },
+  "coverage": {
+    "structural_rule_count": 73,
+    "covered_rule_ordinals": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73],
+    "declaration_files": 6,
+    "declaration_definitions": 13,
+    "import_files": 15,
+    "ui_edit_count": 8,
+    "runtime_template_count": 16,
+    "runtime_templates": [
+      "adapter/runtime/backend/cmd/server/maintenance_client.go.in",
+      "adapter/runtime/backend/internal/handler/admin_codex_eval.go.in",
+      "adapter/runtime/backend/internal/pkg/evalroute/evalroute.go.in",
+      "adapter/runtime/backend/internal/server/middleware/api_key_auth_eval.go.in",
+      "adapter/runtime/backend/internal/service/eval_host_runtime.go.in",
+      "adapter/runtime/backend/internal/service/eval_http_transport.go.in",
+      "adapter/runtime/backend/internal/service/eval_identity.go.in",
+      "adapter/runtime/backend/internal/service/eval_key_runtime.go.in",
+      "adapter/runtime/backend/internal/service/eval_maintenance.go.in",
+      "adapter/runtime/backend/internal/service/eval_maintenance_linux.go.in",
+      "adapter/runtime/backend/internal/service/eval_maintenance_other.go.in",
+      "adapter/runtime/backend/internal/service/eval_menu.go.in",
+      "adapter/runtime/backend/internal/service/eval_runtime_ports.go.in",
+      "adapter/runtime/backend/internal/service/eval_target_adapter.go.in",
+      "adapter/runtime/backend/internal/service/openai_eval_directed.go.in",
+      "adapter/runtime/frontend/src/utils/codex-eval-menu.ts"
+    ],
+    "covered_declarations": [
+      "adapter/rules.json#/Declarations/internal/repository/api_key_repo.go/0-3",
+      "adapter/rules.json#/Declarations/internal/server/http.go/0",
+      "adapter/rules.json#/Declarations/internal/service/api_key_service.go/0-1",
+      "adapter/rules.json#/Declarations/internal/service/gateway_usage_billing.go/0-1",
+      "adapter/rules.json#/Declarations/internal/service/openai_gateway_forward.go/0",
+      "adapter/rules.json#/Declarations/internal/service/openai_gateway_passthrough.go/0"
+    ],
+    "covered_import_files": [
+      "cmd/server/main.go",
+      "internal/handler/gateway_handler_responses.go",
+      "internal/handler/openai_gateway_handler.go",
+      "internal/repository/api_key_repo.go",
+      "internal/server/middleware/api_key_auth.go",
+      "internal/server/middleware/api_key_auth_google.go",
+      "internal/service/gateway_usage_billing.go",
+      "internal/service/openai_account_scheduler.go",
+      "internal/service/openai_gateway_forward.go",
+      "internal/service/openai_gateway_passthrough.go",
+      "internal/service/openai_gateway_scheduling.go",
+      "internal/service/openai_profit_control.go",
+      "internal/service/openai_sticky_compat.go",
+      "internal/service/openai_ws_forwarder_support.go",
+      "internal/service/openai_ws_forwarder_v2.go"
+    ],
+    "covered_ui_edits": {
+      "frontend/src/components/layout/AppSidebar.vue": 3,
+      "frontend/src/views/user/CustomPageView.vue": 4,
+      "frontend/src/utils/embedded-url.ts": 1
+    }
+  },
+  "items": [
+    {
+      "id": "N01",
+      "category": "maintenance-cli",
+      "title": "Early same-binary maintenance capability and client modes",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/0", "ordinal": 1},
+        {"file": "adapter/runtime/backend/cmd/server/maintenance_client.go.in", "lines": "14-37"}
+      ],
+      "host_refs": [
+        {"file": "backend/cmd/server/main.go", "lines": "55-94", "symbols": ["main", "flag.Parse", "runMainServer"]},
+        {"file": "install.py", "lines": "813-834", "symbols": ["Installer.maintenance"]},
+        {"file": "install.py", "lines": "1039-1070", "symbols": ["Installer.rollback", "Installer.uninstall"]}
+      ],
+      "affected_host_symbols": ["cmd/server.main", "service.EvalMaintenanceClient"],
+      "current_behavior": "Before native startup and flag.Parse, the server binary answers an explicit capability flag or runs a bounded status/deactivate client that contacts the live runtime socket. It does not initialize Wire, the database, or a second server in these modes.",
+      "requirement_provenance": {
+        "current": "Current task PRD B10-B12 requires inventory and individual decisions only; it grants no retention approval.",
+        "historical": "Earlier active product PRD R10 required install/status/rollback/uninstall and verified cleanup; archived design called for explicit maintenance capability probing. These are provenance only now."
+      },
+      "native_api_availability_or_redundancy": "Pristine main.go has only --version and --setup CLI paths; normal flag parsing precedes runMainServer. No native maintenance client/socket API exists. The installer currently invokes these exact flags for status and deactivation.",
+      "dependencies": ["N14 protected maintenance socket", "installer status/rollback/uninstall behavior", "N18 deployment identity facts"],
+      "deletion_effect": "The current installer can no longer obtain live runtime status or prove drain and owned-Key revocation before rollback/uninstall. The CLI template and capability rule can be removed only together with those installer behaviors or a separately approved replacement.",
+      "recommendation": "Retain conditionally while live maintenance-backed status and cleanup remain product requirements. Review the capability flag and client protocol separately from server listener changes.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N02",
+      "category": "server-startup",
+      "title": "Maintenance goroutine plus HTTP ListenAndServe-to-Serve rewrite",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/1", "ordinal": 2},
+        {"file": "adapter/rules.json", "pointer": "/Imports/cmd~1server~1main.go/0"}
+      ],
+      "host_refs": [
+        {"file": "backend/cmd/server/main.go", "lines": "134-194", "symbols": ["runMainServer"]},
+        {"file": "backend/internal/server/http.go", "lines": "112-163", "symbols": ["ProvideHTTPServer"]},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "83-89", "symbols": ["EvalHostRuntime.BindRouter"]},
+        {"file": "adapter/runtime/backend/internal/service/eval_http_transport.go.in", "lines": "47-106", "symbols": ["evalServeHTTPTransport.RoundTrip"]}
+      ],
+      "affected_host_symbols": ["cmd/server.runMainServer", "http.Server.ListenAndServe", "http.Server.Serve", "service.EvalHostRuntime.ServeMaintenance"],
+      "current_behavior": "The rule binds a TCP listener explicitly, starts the maintenance socket goroutine, and serves that listener with http.Server.Serve. The runtime's evaluation transport invokes the already-built router directly; ProvideEvalHTTPServer binds that router to the runtime and wraps it with a request guard.",
+      "requirement_provenance": {
+        "current": "No current task requirement says to replace the native HTTP serving API.",
+        "historical": "Earlier design required maintenance startup and a real-router binding, but did not require an externally captured listener; historical rationale is not approval."
+      },
+      "native_api_availability_or_redundancy": "The host's existing ListenAndServe already binds and serves its configured address. The direct in-process transport uses the Gin handler, not the TCP listener. ServeMaintenance independently binds a Unix socket and accepts no http.Server listener.",
+      "dependencies": ["N01 maintenance client", "N05 router binding and guard", "N14 maintenance socket"],
+      "deletion_effect": "Removing the entire rule stops maintenance service startup. Removing only the net.Listen/Serve replacement preserves native HTTP startup while the maintenance goroutine can still run; that is the independently removable portion identified by source evidence.",
+      "recommendation": "Split this rule. Retain maintenance goroutine startup only if N01/N14 remain; remove the explicit TCP listener and Serve substitution because no current runtime consumer needs the listener.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N03",
+      "category": "shutdown-drain",
+      "title": "Stop evaluation admission and drain active evaluation work before host shutdown",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/2", "ordinal": 3},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "187-222", "symbols": ["stopAdmission", "Shutdown"]}
+      ],
+      "host_refs": [
+        {"file": "backend/cmd/server/main.go", "lines": "180-194", "symbols": ["runMainServer signal wait and Server.Shutdown"]},
+        {"file": "backend/cmd/server/wire_gen.go", "lines": "395-510", "symbols": ["provideCleanup"]},
+        {"file": "internal/eval/runs.go", "lines": "668-687", "symbols": ["RunManager.Shutdown"]}
+      ],
+      "affected_host_symbols": ["cmd/server.runMainServer", "service.EvalHostRuntime.Shutdown", "codexeval.RunManager.Shutdown", "Application.Cleanup"],
+      "current_behavior": "On SIGINT/SIGTERM the rule repeatedly asks EvalHostRuntime to reject new starts, cancel active runs and wait for both manager completion and in-process HTTP response producers, then calls the native HTTP server shutdown.",
+      "requirement_provenance": {
+        "current": "Current task B10-B12 requires audit only. No current approval to retain this exact main.go hook or its retry policy.",
+        "historical": "Earlier product requirement R3 preserved normal gateway/accounting behavior; archived design required shutdown handling. Prior specs and tests remain evidence, not approval."
+      },
+      "native_api_availability_or_redundancy": "The pristine host shuts down only its http.Server and later calls Application.Cleanup. It has no evaluation manager to cancel or flush. The manager's native-to-this-product Shutdown cancels workers, stops new work, and waits on its drain channel.",
+      "dependencies": ["N04 runtime graph", "N05 in-process router", "evaluation core RunManager and durable history", "N13 producer cancellation"],
+      "deletion_effect": "Removing drain leaves asynchronous evaluation workers and streamed router producers outside the host shutdown contract; the process may exit before final run state settles. Moving the call into Application.Cleanup is possible only if it is ordered before dependency cleanup, which currently starts parallel cleanup work.",
+      "recommendation": "Retain the drain behavior only if asynchronous evaluations and durable terminal history remain required. Review the repeated fresh five-second timeout loop separately: the current loop has no total shutdown deadline and may wait indefinitely if work never settles.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N04",
+      "category": "dependency-injection",
+      "title": "Wire runtime, target adapter and administrator handler into generated application graph",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/3", "/Rules/4", "/Rules/5", "/Rules/6", "/Rules/7", "/Rules/8", "/Rules/9", "/Rules/10", "/Rules/11", "/Rules/12", "/Rules/13", "/Rules/14", "/Rules/15", "/Rules/16", "/Rules/17", "/Rules/18", "/Rules/19", "/Rules/20", "/Rules/21", "/Rules/22", "/Rules/23", "/Rules/24", "/Rules/25", "/Rules/26", "/Rules/27", "/Rules/30", "/Rules/37", "/Rules/38", "/Rules/39", "/Rules/71"]}
+      ],
+      "host_refs": [
+        {"file": "backend/cmd/server/wire.go", "lines": "27-64", "symbols": ["Application", "initializeApplication"]},
+        {"file": "backend/cmd/server/wire_gen.go", "lines": "35-365", "symbols": ["initializeApplication generated Wire graph"]},
+        {"file": "backend/internal/service/wire.go", "lines": "858-900", "symbols": ["service.ProviderSet"]},
+        {"file": "backend/internal/handler/handler.go", "lines": "9-40", "symbols": ["AdminHandlers"]},
+        {"file": "backend/internal/handler/wire.go", "lines": "234-290", "symbols": ["handler.ProviderSet"]}
+      ],
+      "affected_host_symbols": ["cmd/server.Application", "cmd/server.initializeApplication", "internal/service.ProviderSet", "internal/handler.AdminHandlers", "internal/handler.ProviderSet", "internal/server.ProviderSet"],
+      "current_behavior": "Adds EvalHostRuntime and AdminCodexEvalHandler, constructs their dependencies from existing repositories/services, changes ProvideRouter/server construction inputs, and patches generated wire_gen.go statements and return literals so the adapted source compiles.",
+      "requirement_provenance": {
+        "current": "Current task B10-B12 requires the graph edits to be inventoried; it does not approve them.",
+        "historical": "Earlier product requirements R3, R5, R7 and archived design's adapter-port section required normal gateway dispatch, exact account target resolution, and administrator endpoints."
+      },
+      "native_api_availability_or_redundancy": "Sub2API uses google/wire with a declarative wire.go and generated wire_gen.go. Native Wire generation is available; the current adapter instead carries many AST mutations against generated graph output. There is no native EvalHostRuntime provider.",
+      "dependencies": ["N05 router binding", "N06 admin API", "N07 capability/auth", "N08 accounting identity", "N10 target adapter", "N12 directed scheduling", "N18 runtime facts"],
+      "deletion_effect": "Deleting isolated generated-wire rules leaves unresolved symbols or drops runtime/handler construction. Removing the feature requires removing the declarative provider, generated graph edits, and dependent templates together. Rule-level changes to generated output may be reducible by regenerating Wire after source-provider edits.",
+      "recommendation": "Retain only the dependency edges required by individually retained features. Treat generated wire_gen.go rewrites as build glue, not separate product behavior; consider replacing the long generated-file rule set with the native Wire generator after source-level review.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N05",
+      "category": "router-transport",
+      "title": "Bind and guard the real Gin router for private in-process evaluation dispatch",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/40", "/Rules/41"]},
+        {"file": "adapter/rules.json", "declaration": "/Declarations/internal/server/http.go/0"},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "83-89,224-232"},
+        {"file": "adapter/runtime/backend/internal/service/eval_http_transport.go.in", "lines": "47-125"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/server/http.go", "lines": "29-45,112-163", "symbols": ["ProvideRouter", "ProvideHTTPServer"]},
+        {"file": "backend/internal/server/router.go", "lines": "22-95", "symbols": ["SetupRouter"]}
+      ],
+      "affected_host_symbols": ["server.ProvideRouter", "server.ProvideHTTPServer", "http.Server.Handler", "Gin Engine"],
+      "current_behavior": "The injected server provider preserves native HTTP configuration, binds the composed real handler into EvalHostRuntime, then adds a guard rejecting external evaluation target/probe headers. The transport calls that same handler through an in-process bounded pipe transport.",
+      "requirement_provenance": {
+        "current": "No current retention approval; this is under the individual inventory requirement B11.",
+        "historical": "Archived product design required evaluation through the real Responses gateway and rejected synthetic Gin contexts or direct upstream forwarding."
+      },
+      "native_api_availability_or_redundancy": "The host already exposes Gin through ProvideRouter and wraps it in net/http through ProvideHTTPServer, but no runtime field binds the router to a new evaluator. The existing server provider is reusable and retained by the injected wrapper.",
+      "dependencies": ["N03 drain", "N04 graph", "N07 private capability", "N11 Responses routing"],
+      "deletion_effect": "Without BindRouter, evaluation cannot enter the native middleware/handler chain; without Guard, network requests could present reserved directed headers accepted by the added adapter path.",
+      "recommendation": "Retain conditionally if the evaluator remains a native gateway client. The wrapper is a narrow host hook; preserve native server configuration and verify the guard remains on all external requests.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N06",
+      "category": "admin-api",
+      "title": "Administrator evaluation APIs and static evaluation shell route",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/47", "/Rules/48"]},
+        {"file": "adapter/runtime/backend/internal/handler/admin_codex_eval.go.in", "lines": "19-216"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/server/router.go", "lines": "126-135", "symbols": ["registerRoutes"]},
+        {"file": "backend/internal/server/routes/admin.go", "lines": "13-33", "symbols": ["RegisterAdminRoutes admin-auth group"]}
+      ],
+      "affected_host_symbols": ["server.registerRoutes", "routes.RegisterAdminRoutes", "handler.AdminHandlers", "AdminCodexEvalHandler"],
+      "current_behavior": "Adds admin-protected status, activate, target list, state, start, cancel, record, clear-history, flush and deactivate APIs. Adds /codex-eval/ui as a static shell endpoint outside the authenticated API group; the handler exposes no evaluation operations on that path.",
+      "requirement_provenance": {
+        "current": "Current task requires inventory only and leaves every item pending.",
+        "historical": "Earlier product requirements R7-R8 called for admin login, first activation, target selection, runs and persistent history."
+      },
+      "native_api_availability_or_redundancy": "Native adminAuth, audit, rate limiting and route registration are reused. No native evaluation endpoints or evaluation UI shell exist in pristine source.",
+      "dependencies": ["N04 graph", "N05 router/embedded route", "N10 target adapter", "evaluation core"],
+      "deletion_effect": "Removing these routes removes the control surface, activation and run/history API. Removing only the shell route leaves the admin JSON API intact but the current sidebar target cannot load.",
+      "recommendation": "Retain conditionally if an in-panel evaluation workflow is still wanted. Keep the API endpoints individually reviewable from the UI-shell route; they have different access requirements.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N07",
+      "category": "private-capability-auth",
+      "title": "Process-bound directed capability, credential isolation and native auth integration",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/42", "/Rules/43", "/Rules/44", "/Rules/45", "/Rules/46"]},
+        {"file": "adapter/runtime/backend/internal/pkg/evalroute/evalroute.go.in", "lines": "10-101"},
+        {"file": "adapter/runtime/backend/internal/server/middleware/api_key_auth_eval.go.in", "lines": "13-65"},
+        {"file": "adapter/runtime/backend/internal/service/eval_identity.go.in", "lines": "8-54"},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "36-68,273-310"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/server/middleware/api_key_auth.go", "lines": "35-110", "symbols": ["APIKeyAuthMiddleware", "apiKeyAuthWithSubscription"]},
+        {"file": "backend/internal/server/middleware/api_key_auth_google.go", "lines": "1-100", "symbols": ["Google API-key middleware"]},
+        {"file": "backend/internal/service/api_key_service.go", "lines": "494-620", "symbols": ["APIKeyService.Create", "APIKeyService.GetByKey"]}
+      ],
+      "affected_host_symbols": ["apiKeyAuthWithSubscription", "APIKeyAuthWithSubscriptionGoogle", "APIKeyService.AuthenticateEvalCapability", "evalroute.WithTarget", "evalroute.FromContext"],
+      "current_behavior": "An opaque context key and runtime-owned capability bind the exact runtime generation, accounting identity and target. Only canonical POST /v1/responses can use it. Network headers cannot mint the capability; normal auth remains for ordinary requests, while private lookup/seed values are rejected on public credential paths.",
+      "requirement_provenance": {
+        "current": "No current retention decision; active B11 requests provenance and dependency accounting.",
+        "historical": "Earlier product R5 and R14 required server-created private routing capability and isolation from public credential routes."
+      },
+      "native_api_availability_or_redundancy": "Native API-key auth and context access are reused, but pristine source has no process-bound evaluation capability, exact target context, or public rejection for the private identity. The native middleware has to be narrowly extended at the auth boundary.",
+      "dependencies": ["N05 router transport", "N08 owned accounting key", "N11 directed Responses path", "N12 exact scheduling", "N13 cancellation"],
+      "deletion_effect": "Without this behavior the evaluation would require an ordinary network credential/header path or bypass native auth. Removing selected rules requires removing the corresponding internal capability producer and all auth/template consumers together.",
+      "recommendation": "Retain conditionally if native gateway dispatch and private identity remain required. Preserve the distinction between internal context capability and user-supplied headers; avoid retaining obsolete probe-ticket handling if no current producer exists.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N08",
+      "category": "accounting-key-lifecycle",
+      "title": "Atomic fixed-expiry accounting Key, durable ownership state and conditional revoke",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/49", "ordinal": 50},
+        {"file": "adapter/rules.json", "declarations": ["/Declarations/internal/repository/api_key_repo.go/0", "/Declarations/internal/repository/api_key_repo.go/1", "/Declarations/internal/repository/api_key_repo.go/2", "/Declarations/internal/repository/api_key_repo.go/3", "/Declarations/internal/service/api_key_service.go/0", "/Declarations/internal/service/api_key_service.go/1"]},
+        {"file": "adapter/runtime/backend/internal/service/eval_key_runtime.go.in", "lines": "21-73,75-316,321-589"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/service/api_key_service.go", "lines": "88-126,494-565", "symbols": ["APIKeyRepository", "APIKeyService.Create"]},
+        {"file": "backend/internal/repository/api_key_repo.go", "lines": "40-130,245-285,347-435", "symbols": ["Create", "GetByID", "Update", "Delete", "soft-delete filtering"]},
+        {"file": "backend/internal/service/gateway_usage_billing.go", "lines": "289-305,373-405", "symbols": ["APIKeyID usage accounting and quota/cache updates"]}
+      ],
+      "affected_host_symbols": ["APIKeyService.Create", "APIKeyRepository", "apiKeyRepository", "Ent APIKey predicates", "usage billing foreign key and counters"],
+      "current_behavior": "Persists a protected versioned intent and secret seed, derives a stored lookup, creates the native accounting row with a fixed past expiry in one insert, verifies exact identity/owner/status/binding/configuration, migrates only known legacy state, and conditionally expires/revokes through added repository methods while preserving native ID/counters/history.",
+      "requirement_provenance": {
+        "current": "Current task only requires inventory and individual approval.",
+        "historical": "Earlier product requirements R3-R5 and archived accounting-identity research required native usage foreign keys and atomic fixed expiry; they are not current approval."
+      },
+      "native_api_availability_or_redundancy": "Native APIKeyService.Create and Ent repository operations exist, but Create supports relative expiry, not atomic insertion with a fixed past timestamp. Existing repository Delete and Update are broader than the exact owner/configuration predicate required here. Native usage billing requires APIKey.ID.",
+      "dependencies": ["N07 private auth", "N09 Key redaction", "N14 deactivation/revocation", "native UsageLog APIKey foreign key and billing updates"],
+      "deletion_effect": "Removing the accounting row breaks the normal usage foreign key/billing pipeline. Removing conditional expiry/revoke leaves a partial transaction that cannot safely distinguish the owned row from changed, rebound or deleted user data. Removing only v1 migration can reduce legacy compatibility but would strand installations with a recorded v1 intent.",
+      "recommendation": "Retain only if native usage accounting and reversible owned-row cleanup remain requirements. Review v1 migration compatibility, copied Create implementation, and each repository predicate as separate possible reductions; do not remove the identity transaction as a batch.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N09",
+      "category": "dto-redaction",
+      "title": "Hide the owned lookup value in native API-key DTO projections",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/28", "ordinal": 29},
+        {"file": "adapter/runtime/backend/internal/service/eval_identity.go.in", "lines": "36-43", "symbols": ["IsEvalOwnedAPIKeyID"]}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/handler/dto/mappers.go", "lines": "80-125", "symbols": ["APIKeyFromService"]}
+      ],
+      "affected_host_symbols": ["handler/dto.APIKeyFromService", "service.IsEvalOwnedAPIKeyID"],
+      "current_behavior": "The native mapper still projects its ordinary APIKey fields, but clears Key for the exact protected evaluation-owned row ID.",
+      "requirement_provenance": {
+        "current": "No current approval; inventoried under B11.",
+        "historical": "Earlier product R4/R7 required a private identity that is never returned to browsers."
+      },
+      "native_api_availability_or_redundancy": "The existing mapper is the common native serialization boundary and currently copies APIKey.Key into DTOs. No native per-row secret redaction exists.",
+      "dependencies": ["N08 owned accounting Key", "EvalKeyIdentity APIKey ID"],
+      "deletion_effect": "The derived lookup credential can appear in admin API-key responses and nested DTOs that use this mapper.",
+      "recommendation": "Retain conditionally while the owned row is exposed through native DTO endpoints; otherwise remove the row from those projections through an explicitly reviewed alternative. Do not rely on its protected storage location to hide a serialized field.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N10",
+      "category": "target-metadata",
+      "title": "Exact native account/group resolution and safe target-list projection",
+      "adapter_refs": [
+        {"file": "adapter/runtime/backend/internal/service/eval_target_adapter.go.in", "lines": "11-197"},
+        {"file": "adapter/runtime/backend/internal/service/eval_key_runtime.go.in", "lines": "591-615", "symbols": ["ResolveDirectedTargetGroup"]}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/service/admin_service.go", "lines": "14-80", "symbols": ["AdminService"]},
+        {"file": "backend/internal/service/admin_account.go", "lines": "55-70", "symbols": ["GetAccount", "GetAccountsByIDs"]},
+        {"file": "backend/internal/service/group_service.go", "lines": "17-52", "symbols": ["GroupRepository"]},
+        {"file": "backend/internal/repository/group_repo.go", "lines": "1078-1115", "symbols": ["GetAccountIDsByGroupIDs"]}
+      ],
+      "affected_host_symbols": ["AdminService.GetAccount", "AdminService.GetAccountsByIDs", "GroupRepository.GetAccountIDsByGroupIDs", "APIKeyService.ResolveDirectedTargetGroup"],
+      "current_behavior": "Resolves requested positive group/account IDs exactly, requires active OpenAI group/account membership and supported account family, lists sanitized scalar DTOs with per-group membership preserved, and treats the list as a snapshot rather than authorization.",
+      "requirement_provenance": {
+        "current": "No current keep/drop decision; the audit specifically inventories current runtime templates.",
+        "historical": "Earlier product R5-R6 required exact group/account targeting without alternate target substitution."
+      },
+      "native_api_availability_or_redundancy": "Native AdminService and GroupRepository already expose account hydration and group membership. The feature logic is an adapter over those APIs; no generic native target resolver exists. The multi-group membership query returns a union, so the adapter queries groups independently before deduplicated hydration.",
+      "dependencies": ["N04 service graph", "N11 directed request", "N12 exact scheduler selection", "codexeval.TargetResolver"],
+      "deletion_effect": "The UI cannot safely enumerate/resolve exact targets; the run manager cannot re-resolve a target before execution. Direct fallback to native broad scheduler selection would weaken exact targeting.",
+      "recommendation": "Retain conditionally if selected account/group targeting remains a product requirement. Keep metadata projection separate from gateway authorization and admission.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N11",
+      "category": "responses-routing",
+      "title": "Restrict capability use to native OpenAI Responses and pin its target through handler admission",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/29", "/Rules/31", "/Rules/32", "/Rules/33", "/Rules/34", "/Rules/35", "/Rules/36"]},
+        {"file": "adapter/runtime/backend/internal/pkg/evalroute/evalroute.go.in", "lines": "10-101"},
+        {"file": "adapter/runtime/backend/internal/service/openai_eval_directed.go.in", "lines": "12-168"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/handler/gateway_handler_responses.go", "lines": "20-105", "symbols": ["GatewayHandler.Responses converted endpoint"]},
+        {"file": "backend/internal/handler/openai_gateway_handler.go", "lines": "389-420,640-790,850-1005", "symbols": ["OpenAIGatewayHandler.Responses directed target, slot and retry flow"]},
+        {"file": "backend/internal/server/routes/gateway.go", "lines": "20-90", "symbols": ["RegisterGatewayRoutes"]}
+      ],
+      "affected_host_symbols": ["GatewayHandler.Responses", "OpenAIGatewayHandler.Responses", "OpenAI slot acquisition", "post-slot target recheck", "same-account retry/failover"],
+      "current_behavior": "The capability is rejected by the converted GatewayHandler Responses endpoint and accepted only in the native OpenAI handler. The OpenAI handler carries the target from request context, rechecks the exact account after acquiring its normal slot/profit admission, prevents target-changing failover branches, and submits partial usage to normal billing where available.",
+      "requirement_provenance": {
+        "current": "No current approval; this item is separately reviewable under B11.",
+        "historical": "Earlier product R3, R5-R6 required native Responses processing, normal admission/billing, and no target substitution."
+      },
+      "native_api_availability_or_redundancy": "The native OpenAI Responses handler and gateway routes already run parsing, accounting and forwarding. No native directed-target context exists. The separate converted Responses handler is a different endpoint path and must not consume the OpenAI-only capability.",
+      "dependencies": ["N05 router transport", "N07 capability auth", "N10 target metadata", "N12 scheduler", "N13 cancellation and partial usage"],
+      "deletion_effect": "Without these guards, the target may be lost, changed by a failover/retry branch, or reach a handler that does not implement the intended native OpenAI contract.",
+      "recommendation": "Retain conditionally if exact-target native evaluation remains required. Review each retry/profit/continuation guard against the actual directed call graph; do not remove guards by assuming one scheduler hook covers handler-level target changes.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N12",
+      "category": "directed-scheduling",
+      "title": "Select one exact account and bypass incompatible sticky/fallback selectors",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/52", "/Rules/53", "/Rules/61", "/Rules/62", "/Rules/63", "/Rules/64", "/Rules/65", "/Rules/66"]},
+        {"file": "adapter/runtime/backend/internal/service/openai_eval_directed.go.in", "lines": "12-168"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/service/openai_account_scheduler.go", "lines": "2163-2335", "symbols": ["selectAccountWithScheduler", "selectAccountWithSchedulerOnce"]},
+        {"file": "backend/internal/service/openai_gateway_scheduling.go", "lines": "905-930,1138-1165", "symbols": ["sticky-hit and load-aware selectors"]},
+        {"file": "backend/internal/service/openai_profit_control.go", "lines": "344-380", "symbols": ["sticky binding during and after profit admission"]},
+        {"file": "backend/internal/service/openai_sticky_compat.go", "lines": "154-180", "symbols": ["setStickySessionAccountID"]},
+        {"file": "backend/internal/service/openai_ws_forwarder_support.go", "lines": "463-505", "symbols": ["selectAccountByPreviousResponseIDForCapability"]}
+      ],
+      "affected_host_symbols": ["OpenAIGatewayService.selectAccountWithScheduler", "selectAccountWithSchedulerOnce", "selectDirectedEvaluationAccount", "RecheckDirectedEvaluationAccount", "sticky selectors", "previous_response_id selectors"],
+      "current_behavior": "The scheduler receives an internal directed target, selects that exact account under the existing model/capability/transport checks, prevents scheduler retries or sticky-session/previous-response selectors from switching to a different account, and rechecks availability after the host slot is acquired.",
+      "requirement_provenance": {
+        "current": "Current task B11 requires dependencies and deletion effects; no feature retention is approved.",
+        "historical": "Earlier product R5-R6 explicitly required exact account binding and no fallback."
+      },
+      "native_api_availability_or_redundancy": "Native scheduling, group restrictions, model eligibility and shared concurrency are available and reused. Native scheduler selection is intentionally multi-account/fallback-capable and has no request-owned exact account input.",
+      "dependencies": ["N07 capability context", "N10 exact target resolution", "N11 Responses handler", "native shared slot/profit admission"],
+      "deletion_effect": "Removing the exact selector or one of the alternate-path exclusions can route to a different account through retries, sticky hit, load-awareness, prior response binding or post-slot reassignment.",
+      "recommendation": "Retain conditionally if exact targeting is kept. The rule set is broad but touches distinct selector paths; only remove a hook after proving that path is unreachable for a directed request in v0.2.16.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N13",
+      "category": "cancellation-billing",
+      "title": "Propagate evaluation cancellation and preserve partial native usage, including WebSocket reads",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointers": ["/Rules/50", "/Rules/51", "/Rules/54", "/Rules/55", "/Rules/56", "/Rules/57", "/Rules/58", "/Rules/59", "/Rules/60", "/Rules/67", "/Rules/68", "/Rules/69", "/Rules/70"]},
+        {"file": "adapter/rules.json", "declarations": ["/Declarations/internal/service/gateway_usage_billing.go/0", "/Declarations/internal/service/gateway_usage_billing.go/1", "/Declarations/internal/service/openai_gateway_forward.go/0", "/Declarations/internal/service/openai_gateway_passthrough.go/0"]}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/service/gateway_forward_as_chat_completions.go", "lines": "29-140", "symbols": ["GatewayService.ForwardAsChatCompletions detached streaming context"]},
+        {"file": "backend/internal/service/gateway_forward_as_responses.go", "lines": "31-151", "symbols": ["GatewayService.ForwardAsResponses detached streaming context"]},
+        {"file": "backend/internal/service/gateway_usage_billing.go", "lines": "574-595,1180-1218", "symbols": ["detached context helpers and API-key usage billing"]},
+        {"file": "backend/internal/service/openai_gateway_cc_pipeline.go", "lines": "187-260", "symbols": ["sendCCUpstreamRequest"]},
+        {"file": "backend/internal/service/openai_gateway_forward.go", "lines": "21-180", "symbols": ["Forward and stream partial result handling"]},
+        {"file": "backend/internal/service/openai_gateway_passthrough.go", "lines": "126-260", "symbols": ["forwardOpenAIPassthrough and partial result paths"]},
+        {"file": "backend/internal/service/openai_ws_forwarder_v2.go", "lines": "20-45,390-415,526-605", "symbols": ["forwardOpenAIWSV2 read detach/cancel path"]}
+      ],
+      "affected_host_symbols": ["upstreamRequestContext", "streamUpstreamRequestContext", "ForwardAsChatCompletions", "ForwardAsResponses", "sendCCUpstreamRequest", "OpenAIGatewayService.Forward", "forwardOpenAIPassthrough", "forwardOpenAIWSV2", "usage submission"],
+      "current_behavior": "For evaluation-directed requests, the adapter retains request cancellation for upstream work instead of using native detached contexts; it constructs partial result/usage records for selected stream failure branches and makes directed WebSocket upstream reads cancel with the evaluation context. Ordinary requests retain the host's existing detached-stream behavior.",
+      "requirement_provenance": {
+        "current": "No current keep/drop approval; the audit must separate this from race history.",
+        "historical": "Earlier product R3/R5 and archived design required cancellable evaluation runs while retaining normal usage billing and shared slots."
+      },
+      "native_api_availability_or_redundancy": "The native host deliberately detaches some upstream contexts so billing/stream processing can outlive a client disconnect. The evaluator needs explicit directed-only behavior because its run manager owns cancellation. Native usage submission already exists and is reused.",
+      "dependencies": ["N03 run-manager drain", "N05 pipe transport", "N07 directed context", "N11 handler usage submission"],
+      "deletion_effect": "Removing directed cancellation may leave upstream work running after a run is cancelled or the process is stopping. Removing partial-result handling may drop usage/terminal details for completed portions of failed stream responses. WebSocket rules affect directed requests only but must be kept aligned with host read-detach behavior.",
+      "recommendation": "Retain conditionally if cancel, stop and shutdown semantics remain required. Keep the ordinary host path unchanged; review partial usage, detached request context and WebSocket pool behavior as separate subdecisions before removing any subset.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N14",
+      "category": "maintenance-socket",
+      "title": "Private Unix-socket status/deactivation protocol with peer and deployment checks",
+      "adapter_refs": [
+        {"file": "adapter/runtime/backend/internal/service/eval_maintenance.go.in", "lines": "17-206"},
+        {"file": "adapter/runtime/backend/internal/service/eval_maintenance_linux.go.in", "lines": "1-22"},
+        {"file": "adapter/runtime/backend/internal/service/eval_maintenance_other.go.in", "lines": "1-7"},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "240-270", "symbols": ["Deactivate"]},
+        {"file": "adapter/runtime/backend/internal/service/eval_key_runtime.go.in", "lines": "540-589", "symbols": ["RevokeOwnedKey"]}
+      ],
+      "host_refs": [
+        {"file": "install.py", "lines": "813-834,1039-1070", "symbols": ["maintenance", "rollback/uninstall"]}
+      ],
+      "affected_host_symbols": ["EvalHostRuntime.ServeMaintenance", "maintenance", "EvalMaintenanceClient", "evalMaintenancePeerAllowed", "EvalHostRuntime.Deactivate"],
+      "current_behavior": "The live server owns a mode-0600 Unix socket under protected data storage. Requests are bounded and schema-checked, peer credentials are checked on Linux, the deployment ID must match protected facts, and deactivate drains before exact owned-Key revocation and private-state removal. Non-Linux builds compile but deny peers.",
+      "requirement_provenance": {
+        "current": "Current task B10-B12 is an inventory and individual review only.",
+        "historical": "Earlier product R10 and archived design required status/rollback/uninstall with live drain and exact revocation; these remain historical rationale."
+      },
+      "native_api_availability_or_redundancy": "No native control socket exists. The container-local Docker exec client can reach the same-UID runtime without publishing an HTTP endpoint or passing the private identity in argv/environment.",
+      "dependencies": ["N01 CLI client", "N02 maintenance worker startup", "N03 runtime drain", "N08 exact revoke", "N18 deployment ID"],
+      "deletion_effect": "Installer status cannot observe live runtime state, and rollback/uninstall cannot prove that evaluation work stopped and the exact accounting row was revoked before binary restoration.",
+      "recommendation": "Retain conditionally if maintenance-backed rollback/uninstall remains required. Review the returned version/source/hash fields separately; the current installer validates schema, state, deployment ID, drained and revoked flags, not those provenance fields.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N15",
+      "category": "menu-conflict-guard",
+      "title": "Fail closed on reserved administrator menu collisions without adopting or mutating a menu",
+      "adapter_refs": [
+        {"file": "adapter/runtime/backend/internal/service/eval_menu.go.in", "lines": "11-99"},
+        {"file": "adapter/runtime/backend/internal/service/eval_host_runtime.go.in", "lines": "104-121,151-185,240-255"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/service/setting_service.go", "lines": "99-102", "symbols": ["SettingRepository.GetValue"]},
+        {"file": "adapter/runtime/frontend/src/utils/codex-eval-menu.ts", "lines": "3-25", "symbols": ["reserved ID and exact menu tuple"]}
+      ],
+      "affected_host_symbols": ["SettingRepository.GetValue", "EvalHostRuntime.Ready", "Activate", "Deactivate", "checkMenu"],
+      "current_behavior": "Reads custom_menu_items for the reserved codex-eval ID, accepts only the exact reviewed tuple/path shape, reports duplicates or drift as conflict, and never writes/adopts a database menu. Cleanup refuses unverifiable legacy ownership.",
+      "requirement_provenance": {
+        "current": "No current retention decision; inventory only.",
+        "historical": "Earlier menu requirements called for admin-only navigation and no overwriting of user custom menus; the current version specifically avoids menu mutation."
+      },
+      "native_api_availability_or_redundancy": "Native SettingService can read the setting and native custom menu items already exist. There is no native reserved-ID ownership marker for this built-in item.",
+      "dependencies": ["N06 admin UI/API", "N16 frontend reserved menu item", "N18 protected installation journal for legacy cleanup state"],
+      "deletion_effect": "Evaluation may activate while a user-defined page occupies the reserved ID/path; the UI fallback could hide or route a conflicting item, and cleanup may incorrectly infer ownership.",
+      "recommendation": "Retain conditionally if the built-in menu remains. The guard is read-only; remove it only if the menu is removed or the user approves another conflict contract.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N16",
+      "category": "frontend-menu",
+      "title": "Built-in admin sidebar item and safe custom-page fallback",
+      "adapter_refs": [
+        {"file": "adapter/ui-rules.json", "edits": {"frontend/src/components/layout/AppSidebar.vue": 3, "frontend/src/views/user/CustomPageView.vue": 4}},
+        {"file": "adapter/runtime/frontend/src/utils/codex-eval-menu.ts", "lines": "1-26"}
+      ],
+      "host_refs": [
+        {"file": "frontend/src/components/layout/AppSidebar.vue", "lines": "762-800", "symbols": ["custom menu projection and built-in admin menu array"]},
+        {"file": "frontend/src/views/user/CustomPageView.vue", "lines": "222-247", "symbols": ["custom menu route lookup and iframe URL"]}
+      ],
+      "affected_host_symbols": ["AppSidebar admin menu items", "CustomPageView menuItem resolution", "isOwnedCodexEvalMenu", "codexEvalMenuConflict", "builtInCodexEvalMenu"],
+      "current_behavior": "Adds one admin-only sidebar path, suppresses only an exact owned custom-menu duplicate, reports collisions, and resolves the reserved path to a same-origin evaluation shell without creating a database menu.",
+      "requirement_provenance": {
+        "current": "No current approval; B11 requires one decision at a time.",
+        "historical": "Earlier product R7 and R16 called for first activation from the existing administrator panel and no manual menu setup."
+      },
+      "native_api_availability_or_redundancy": "Native sidebar, custom menu and CustomPageView exist. No native API adds a static built-in item backed by this embedded service route; native custom-menu storage could be used but would require data mutation/ownership rules.",
+      "dependencies": ["N06 UI shell route", "N15 backend collision check", "N17 embedded route bypass"],
+      "deletion_effect": "The current in-panel entry and fallback route disappear. A user could still navigate directly if the route is known, but no supported panel path remains.",
+      "recommendation": "Retain conditionally if in-panel first activation remains a product requirement. Treat sidebar insertion, duplicate suppression, conflict display and page fallback as separable review points; do not infer user approval from historical implementation.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N17",
+      "category": "embedded-frontend",
+      "title": "Route /codex-eval/ui past the SPA fallback and preserve same-origin embed URL behavior",
+      "adapter_refs": [
+        {"file": "adapter/rules.json", "pointer": "/Rules/72", "ordinal": 73},
+        {"file": "adapter/ui-rules.json", "edit": "frontend/src/utils/embedded-url.ts#1"}
+      ],
+      "host_refs": [
+        {"file": "backend/internal/web/embed_on.go", "lines": "355-375", "symbols": ["shouldBypassEmbeddedFrontend"]},
+        {"file": "frontend/src/utils/embedded-url.ts", "lines": "16-58", "symbols": ["buildEmbeddedUrl"]},
+        {"file": "frontend/src/views/user/CustomPageView.vue", "lines": "222-247", "symbols": ["buildEmbeddedUrl call"]},
+        {"file": "backend/internal/server/router.go", "lines": "73-95", "symbols": ["embedded frontend middleware and route registration"]}
+      ],
+      "affected_host_symbols": ["shouldBypassEmbeddedFrontend", "ServeEmbeddedFrontend", "buildEmbeddedUrl", "CustomPageView iframe URL"],
+      "current_behavior": "The exact /codex-eval/ui path bypasses catch-all embedded SPA serving so the explicit Gin handler can serve the evaluation shell. Same-origin shell URLs receive theme/language query parameters after clearing stale query/hash values.",
+      "requirement_provenance": {
+        "current": "No current approval; this is an adapter/UI inventory item.",
+        "historical": "Earlier product R7/R13 required an embedded admin page with native theme behavior."
+      },
+      "native_api_availability_or_redundancy": "The host already has an embedded SPA middleware and a generic URL helper. No exact evaluation route exception exists in pristine source.",
+      "dependencies": ["N06 static UI route", "N16 sidebar/custom-page entry"],
+      "deletion_effect": "The SPA catch-all may return Sub2API's index for the evaluation shell request instead of invoking the static shell handler. Removing URL special handling may drop theme/language propagation or preserve attacker/user-provided query/hash values.",
+      "recommendation": "Retain conditionally with the UI route. The bypass is a one-path exception; the embedded URL edit can be reviewed separately from menu/API behavior.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N18",
+      "category": "runtime-facts",
+      "title": "Protected deployment ID facts plus returned build provenance",
+      "adapter_refs": [
+        {"file": "adapter/runtime/backend/internal/service/eval_runtime_ports.go.in", "lines": "8-62"},
+        {"file": "adapter/runtime/backend/internal/handler/admin_codex_eval.go.in", "lines": "48-59"},
+        {"file": "adapter/runtime/backend/internal/service/eval_maintenance.go.in", "lines": "26-37,46-79"},
+        {"file": "adapter/build.py", "lines": "53-68"}
+      ],
+      "host_refs": [
+        {"file": "install.py", "lines": "813-834,919-965", "symbols": ["maintenance response validation and installation facts"]},
+        {"file": "backend/cmd/server/main.go", "lines": "134-153", "symbols": ["BuildInfo creation and application startup"]}
+      ],
+      "affected_host_symbols": ["EvalRuntimeFactsProvider.CurrentEvalDeploymentFacts", "EvalMaintenanceResult", "AdminCodexEvalHandler.Status", "build facts init"],
+      "current_behavior": "Runtime readiness validates protected facts schema 3 and the deployment ID; installer checks that ID and response state. Build version/source revision/runtime patch hash are returned as informational API/maintenance fields and are compiled into the runtime, but current installer maintenance validation does not compare them.",
+      "requirement_provenance": {
+        "current": "The current task rejects prior binary/source matching gates as current requirements; informational fields have no current explicit approval.",
+        "historical": "Earlier product R11 and archived designs required preserving available version information while removing binary identity gates."
+      },
+      "native_api_availability_or_redundancy": "Native BuildInfo supplies version/build type. Protected deployment ID is needed to bind maintenance requests. Current installer ignores returned source_revision and runtime_patch_sha256; source-build facts are also present in installer journal.",
+      "dependencies": ["N01 maintenance CLI", "N14 maintenance protocol", "N06 status API", "N19 selected data-dir build fact"],
+      "deletion_effect": "Removing deployment ID validation would allow a socket response from another installation to be accepted. Removing only source/hash response fields does not change current installer ownership checks; it removes status provenance output and compiled stamps.",
+      "recommendation": "Retain protected deployment ID validation conditionally. Treat version/source/hash output and ldflag stamps as optional informational scope; current installer does not rely on them, so ask for a separate decision before keeping them solely for display/provenance.",
+      "approval_status": "pending"
+    },
+    {
+      "id": "N19",
+      "category": "build-orchestration",
+      "title": "Source adaptation, runtime-template installation and Linux server build orchestration",
+      "adapter_refs": [
+        {"file": "adapter/build.py", "lines": "14-51", "symbols": ["adapt"]},
+        {"file": "adapter/build.py", "lines": "53-104", "symbols": ["build"]},
+        {"file": "scripts/universal_payload.py", "line": 5, "symbols": ["SOURCES allowlist"]}
+      ],
+      "host_refs": [
+        {"file": "backend/go.mod", "symbols": ["selected host Go module and dependencies"]},
+        {"file": "frontend/package.json", "symbols": ["locked package manager and frontend scripts"]},
+        {"file": "backend/internal/web/embed_on.go", "lines": "355-375", "symbols": ["embedded frontend target"]}
+      ],
+      "affected_host_symbols": ["native-adapter apply/types", "Wire/AST mutation", "runtime template copy", "frontend build and embed", "Linux server compile"],
+      "current_behavior": "Validates exact source revision/archive provenance, applies rules.json, copies all runtime templates and core files, applies guarded UI edits, injects selected data-directory facts, installs frozen frontend dependencies, builds the frontend, runs native type-contract checks, compiles a static Linux server, verifies dependency-lock hashes, and writes build facts. The universal payload allowlists every template/rule/build file.",
+      "requirement_provenance": {
+        "current": "Current task B10 explicitly requires distinguishing current build inputs from historical patch files; B11 requires source anchors and deletion effects.",
+        "historical": "Earlier product R11/R18 and archived design specified source-driven adaptation and one universal installer package. These requirements are no longer blanket retention approval."
+      },
+      "native_api_availability_or_redundancy": "Pristine upstream has its own frontend build, Wire generation and Go server build. The evaluator additions are not upstream native features. Wire generation is a candidate replacement for part of the hand-authored generated graph edits, while source selection, template copying, UI hooks and Linux artifact production remain plugin-specific.",
+      "dependencies": ["all individually retained N items", "install.py source resolution and build invocation", "universal_payload.py functional allowlist"],
+      "deletion_effect": "Removing this file stops the current source-build/install workflow. Removing a template/rule from the allowlist without changing build.py causes package/build inconsistency; removing a rule alone may leave unresolved host symbols or behavior.",
+      "recommendation": "Retain only while source-build installation remains selected. Keep this inventory separate from feature approval; simplify the pipeline only after the individual native behaviors and their replacement/removal effects are decided.",
+      "approval_status": "pending"
+    }
+  ],
+  "related_specs": [
+    ".trellis/spec/backend/host-target-adapter.md",
+    ".trellis/spec/backend/patch-native-installation.md",
+    ".trellis/spec/backend/runtime-installation.md",
+    ".trellis/spec/backend/evaluation-core.md",
+    ".trellis/tasks/10-11-sub2api-runtime-patch/prd.md",
+    ".trellis/tasks/10-11-sub2api-runtime-patch/design.md"
+  ],
+  "external_references": [],
+  "caveats": [
+    "Recommendations describe technical consequences and conditional scope, not user decisions. Every item remains pending.",
+    "Rule ordinals are one-based for display; adapter_refs use zero-based JSON Pointers into Rules.",
+    "The pristine host tree was read-only evidence and was not built or modified during this inventory.",
+    "No product edits, tests, package generation, deployment, paid requests, or cleanup were performed. One read-only git status query was inadvertently run while checking output scope; no Git mutation occurred."
+  ]
+}

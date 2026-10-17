@@ -1,0 +1,6 @@
+feat(sub2api): add native administrator account evaluation
+
+Port four evaluations to the native administrator account-test sender.
+Add native sidebar/iframe and unmapped raw model discovery.
+Skip model lookup for disabled accounts.
+Ship amd64 replacement with /tmp backups and readiness rollback.

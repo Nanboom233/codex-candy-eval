@@ -1,0 +1,600 @@
+{
+  "reviewer": "root; checker final turn unavailable after two model transport HTTP 503 failures",
+  "task_status": "planning",
+  "archive_sha256": "eef7e0519b05b8254c981efbab7bfe74c5d89897c67053e81380987366daae89",
+  "source_trees": {
+    "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/extracted/sub2api-01842576b3d5c1e2545b5a99ad555d36e28ed306": {
+      "archive_files_checked": 4322,
+      "missing_or_modified": []
+    },
+    "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/linux-source": {
+      "archive_files_checked": 4322,
+      "missing_or_modified": []
+    }
+  },
+  "product_missing_or_changed": [],
+  "artifact_sha256": "9bc90c95a5d8811e1e93aff55175ab0be7d999740fd4e5cb632d48d586a5a2bf",
+  "gate_record_and_logs": {
+    "backend-unit": {
+      "matches_run_record": true,
+      "exit_code": 2,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 9148720,
+          "sha256": "3a93d45ff09ba44192b3d51c1f2791e78acddd67dcecd95f375b5d33a36ef1bb"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 30,
+          "sha256": "90bbed612e30b9364bd179186f8a903431405a619beeea6a9dd92f8a3c839067"
+        }
+      }
+    },
+    "backend-unit-clean-env": {
+      "matches_run_record": true,
+      "exit_code": 2,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 9140947,
+          "sha256": "49339c776f0897ed5e1770557a6f8d39f354b8ecca3104d1016e6d77b0e723f1"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 30,
+          "sha256": "90bbed612e30b9364bd179186f8a903431405a619beeea6a9dd92f8a3c839067"
+        }
+      }
+    },
+    "backend-unit-dns-recovered": {
+      "matches_run_record": true,
+      "exit_code": 2,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 9140707,
+          "sha256": "eb2d5a9ede86be5e768927c5b91bec9482157973b91375505ded0dca4997a277"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 30,
+          "sha256": "90bbed612e30b9364bd179186f8a903431405a619beeea6a9dd92f8a3c839067"
+        }
+      }
+    },
+    "backend-integration": {
+      "matches_run_record": true,
+      "exit_code": 2,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 5282257,
+          "sha256": "e67f30c8d7b87bd37218dfb15e8263e870ec42c370ef05a85f47f648f352bbae"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 37,
+          "sha256": "64f4de742b0a1a047b2bf64c1b0e2f6522c0f2bf6ebcc89de46c2eac507dafb2"
+        }
+      }
+    },
+    "backend-integration-clean-env": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 5273596,
+          "sha256": "5323e4eec60db927cedd1070f10fa6114b361e7fd907173ca4cbbc39ac46723c"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "linux-unit-full": {
+      "matches_run_record": true,
+      "exit_code": 1,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 8970759,
+          "sha256": "1be0baea68eb6fcfc7afcdf32fc87561d784dd79330695ae1ff5aac96656abe8"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "linux-unit-writable-all-dns": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 8962790,
+          "sha256": "20f4bcaecda350c141f16fc33da23f6af0dd9e820d8a8a8c111031c43d5a1d39"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "frontend-required": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 3526,
+          "sha256": "6da54eda4c14caa75c39722d222a6af6c8eb788684c1c0192e7a35d5a75462de"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 18793,
+          "sha256": "2a3f3c097a62e6b9b9c1af9806491957d885b6193d78dc3b0563f009a5598aad"
+        }
+      }
+    },
+    "frontend-full": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 34187,
+          "sha256": "a472e07ec60e33ca2ef91b8e556d4706035fe310529723b2aaa630a1c5f9c053"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 125869,
+          "sha256": "7aaab1678b9bf58bb1040d08c7b9a60f2c062987c3550ac9b9fe4245fecaee0d"
+        }
+      }
+    },
+    "frontend-build": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 26206,
+          "sha256": "be7a3d3864d22284cd386ad1cc8b69c2c9a144740c14c3fa0f200c4a89ec18c7"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 31715,
+          "sha256": "adf75addeba7b0a6b1bd5b95dd410ae81d67c2ba21ad5c9df63bb69c7a8eaceb"
+        }
+      }
+    },
+    "backend-vet-clean-env": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "backend-lint-clean-env": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 10,
+          "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "backend-race-clean-env": {
+      "matches_run_record": true,
+      "exit_code": 1,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 34107037,
+          "sha256": "3cbc30f26909b03c967f4021c96cc0a67f95d7d7060210e8845bdf70cabd9140"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "release-helper-tests": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 109,
+          "sha256": "5d3bda1f43094e7c897d8734a9d52a1f40ded41f3e793d83256e309b5f30f540"
+        }
+      }
+    },
+    "linux-amd64-build": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 34450,
+          "sha256": "bc5bc1c139c7e20eca7280287757cc8a0e0f4fb6eccef29a38ac224f6e3dfc5c"
+        }
+      }
+    },
+    "linux-amd64-loaded-version-arm64-base": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 198,
+          "sha256": "3b840138b413e05e46781f2c851e28edb7c23036fb42741f34058c4a9526b606"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "go-mod-verify": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 21,
+          "sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-1": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-2": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 3406,
+          "sha256": "9845057cf2debcd9273194dd56ee2c1f59c8e0aa60f1e7e48eedd038991a5040"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-3": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 36,
+          "sha256": "924b47d7b8fe8dd92d3bc8d0308c3d558552ae918be938bc04f855f64ad2c2d0"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-4": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 47,
+          "sha256": "b67a99c648c65db09ad6b14fb13fb236d608513c07ba96c1b0a3e099340f4600"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-5": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 37,
+          "sha256": "6c11e637dfdc3d816e424faa9452d77a9e5afa5200a4ea771375c4bade729e0f"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-6": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 81,
+          "sha256": "0ab30616f907a0e9ac1bc64f596f22b5334a88fd8b37fa0104511f2117a9acec"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-7": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 51,
+          "sha256": "a969f9d3585fb59f7886daada19de13656d6c2b83e36a4fda2e66601cee9bceb"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    "upstream-shell-8": {
+      "matches_run_record": true,
+      "exit_code": 0,
+      "logs": {
+        "stdout": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "exists": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    }
+  },
+  "raw_test_counts": {
+    "linux-unit-writable-all-dns": {
+      "all": {
+        "PASS": 22907,
+        "FAIL": 0,
+        "SKIP": 18
+      },
+      "top": {
+        "PASS": 11806,
+        "FAIL": 0,
+        "SKIP": 18
+      },
+      "matches_report": true
+    },
+    "backend-integration-clean-env": {
+      "all": {
+        "PASS": 14061,
+        "FAIL": 0,
+        "SKIP": 16
+      },
+      "top": {
+        "PASS": 7127,
+        "FAIL": 0,
+        "SKIP": 15
+      },
+      "matches_report": true
+    },
+    "race": {
+      "all": {
+        "pass": 22757,
+        "fail": 149,
+        "skip": 18
+      },
+      "top": {
+        "pass": 11665,
+        "fail": 140,
+        "skip": 18
+      },
+      "warning_blocks": 28
+    }
+  },
+  "product_files_checked": 165,
+  "canonical_artifacts": {
+    "dist/build/sub2api-codex-eval.tar.gz": "39c876d274a6499479bf0fbcbcf8d93c46c52053b01b2dbbc6ee3b497554f6fc",
+    "dist/build/sub2api-codex-eval": "eed01f71c39048eef1a15fbf13652b5c44d9915fff1e34c59f3d58abf1c6c9e1"
+  },
+  "smoke_steps": [
+    {
+      "step": "network",
+      "exit_code": 0
+    },
+    {
+      "step": "run-pristine-ifVBya-wizard",
+      "exit_code": 0
+    },
+    {
+      "step": "http--setup-status-1",
+      "exit_code": 1
+    },
+    {
+      "step": "http--setup-status-2",
+      "exit_code": 0
+    },
+    {
+      "step": "http---1",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-owned-93c2cc5e1cac",
+      "exit_code": 0
+    },
+    {
+      "step": "logs-93c2cc5e1cac",
+      "exit_code": 0
+    },
+    {
+      "step": "stop-93c2cc5e1cac",
+      "exit_code": 0
+    },
+    {
+      "step": "remove-93c2cc5e1cac",
+      "exit_code": 0
+    },
+    {
+      "step": "run-pristine-ifVBya-postgres",
+      "exit_code": 0
+    },
+    {
+      "step": "run-pristine-ifVBya-redis",
+      "exit_code": 0
+    },
+    {
+      "step": "run-pristine-ifVBya-normal",
+      "exit_code": 0
+    },
+    {
+      "step": "http--health-1",
+      "exit_code": 1
+    },
+    {
+      "step": "http--health-2",
+      "exit_code": 1
+    },
+    {
+      "step": "http--health-3",
+      "exit_code": 1
+    },
+    {
+      "step": "http--health-4",
+      "exit_code": 1
+    },
+    {
+      "step": "http--health-5",
+      "exit_code": 0
+    },
+    {
+      "step": "http--setup-status-1",
+      "exit_code": 0
+    },
+    {
+      "step": "http---1",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-owned-29ba23b0ad88",
+      "exit_code": 0
+    },
+    {
+      "step": "logs-29ba23b0ad88",
+      "exit_code": 0
+    },
+    {
+      "step": "stop-29ba23b0ad88",
+      "exit_code": 0
+    },
+    {
+      "step": "remove-29ba23b0ad88",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-owned-c34afc063671",
+      "exit_code": 0
+    },
+    {
+      "step": "logs-c34afc063671",
+      "exit_code": 0
+    },
+    {
+      "step": "stop-c34afc063671",
+      "exit_code": 0
+    },
+    {
+      "step": "remove-c34afc063671",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-owned-c338303566c3",
+      "exit_code": 0
+    },
+    {
+      "step": "logs-c338303566c3",
+      "exit_code": 0
+    },
+    {
+      "step": "stop-c338303566c3",
+      "exit_code": 0
+    },
+    {
+      "step": "remove-c338303566c3",
+      "exit_code": 0
+    },
+    {
+      "step": "network-inspect",
+      "exit_code": 0
+    },
+    {
+      "step": "network-remove",
+      "exit_code": 0
+    }
+  ],
+  "checks_passed": true
+}

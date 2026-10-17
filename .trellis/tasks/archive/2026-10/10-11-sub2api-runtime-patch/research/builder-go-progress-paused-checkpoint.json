@@ -1,0 +1,60 @@
+{
+  "status": "paused_implementation_user_replaced_architecture",
+  "time_utc": "2026-10-13T19:45:47.608513+00:00",
+  "reason": "User explicitly rejected full host recompilation and requested another architecture. Root owns new reviewed design. No more implementation/build/tests/promotion/cleanup authorized in this branch.",
+  "workroot": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/codexeval-go-progress-8iek7wdx",
+  "own_pending_processes": [],
+  "candidate_unpromoted": {
+    "path": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/codexeval-go-progress-8iek7wdx/sub2api-codex-eval-universal.tar.gz",
+    "bytes": 520385,
+    "sha256": "53fae1c3a2339cee3ae6b54944864ff17281b667958bc797ae8519e65a5ef538"
+  },
+  "canonical_unchanged": {
+    "path": "/Users/minami/Code/C/cpa-plugin-codex-candy-eval/dist/sub2api-build/universal-20261013/sub2api-codex-eval-universal.tar.gz",
+    "bytes": 519831,
+    "sha256": "773d9bfe3963e21f31b041992f1438fd1d9b5e1219ebfc13cf507374b0253a95"
+  },
+  "historical_unchanged": {
+    "path": "/Users/minami/Code/C/cpa-plugin-codex-candy-eval/dist/sub2api-build/minimal-python-20261013/sub2api-codex-eval.tar.gz",
+    "bytes": 73379445,
+    "sha256": "560cd57d30074ef9f3fbbe73640583fcc01dca024bf0fe92fc1e3dacd76d9eb8"
+  },
+  "maintained_edits": {
+    "install.py": "86aba94c08cd243672b351c45932d35b9eb9f307e8930263dd20809f057ff704",
+    "adapter/build.py": "e6146d97dfbc8839e0688ba677902fe4e46a26e17ad141452e89cad4ab9635f2",
+    "adapter/typecheck.go": "5fab7e829a2905b18cef9ed209c62ef8945668c1241d73a1b4f652d726be652f",
+    "adapter/typecheck_progress_test.go": "3d2610d88afd9a777f3be7dac980bb67839aa070c40c71282722e85c9b8ce5c0",
+    "tests/installer/test_builder_progress.py": "775b975c29703d25b873b0f5c4f226942cb224c2be9ac8bbe6900b5e4f63525b",
+    "tests/installer/test_universal.py": "9d5aaccd1942719f097e7133d80d6b6d18e6d5e92fb717b3c166632443e5c489",
+    "scripts/test-sub2api.sh": "c20094a7cb46941de7a17b36245f713b7c40efe0696fd11df90fd2e17b88c586",
+    "docs/sub2api-operations.md": "b258d8263298e0c88e5deef1caec3be5dfabb7744fef681ee2f2d7305f29f325"
+  },
+  "candidate_facts": {
+    "candidate": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/codexeval-go-progress-8iek7wdx/sub2api-codex-eval-universal.tar.gz",
+    "canonical": "dist/sub2api-build/universal-20261013/sub2api-codex-eval-universal.tar.gz",
+    "bytes": 520385,
+    "files": 62,
+    "sha256": "53fae1c3a2339cee3ae6b54944864ff17281b667958bc797ae8519e65a5ef538",
+    "installer_sha256": "86aba94c08cd243672b351c45932d35b9eb9f307e8930263dd20809f057ff704",
+    "functional_sha256": "55fb59623daffabccd9a3a67f20c59e0b9a9a01b166bd11e1a76335341a2e615",
+    "core_tree_sha256": "dd6d6eeea1f2bde8a200b993728bf4a784952f1ec7a4e24bdc0f8dac03b9a5e9",
+    "historical_sha256": "560cd57d30074ef9f3fbbe73640583fcc01dca024bf0fe92fc1e3dacd76d9eb8"
+  },
+  "checks_already_completed": {
+    "source_root_check": "root-check-final.log exit0 after current product edits; Go vet/race/UI",
+    "archived_builder": "archive-builder.log 5/5 exit0 (actual archived adapter and deadline option)",
+    "source_universal": "archive-universal.log 8/8 exit0; suite ignores INSTALLER_TEST_PATH and exercised source, not archive",
+    "source_transactions": "archive-transactions.log 50/50 exit0; suite ignores INSTALLER_TEST_PATH and exercised source, not archive",
+    "archived_boundary": "archive-boundary-isolated.log 14/14 exit0 after fresh independent extraction"
+  },
+  "initial_failure_limits": [
+    "Fresh compiled-adapter startup exceeded first timing window; synchronization barrier correction passed.",
+    "archive-boundary.log failed because shared archive-final files were absent during run. Cause not established. Prior suspicion transaction tamper caused it was not supported; transaction suite uses own temporary bundles. Fresh independent extracted boundary passed."
+  ],
+  "retained_generated_outputs": [
+    "System-temp workroot logs, candidate archive, package staging/extractions, temporary proof/test sources",
+    "Current Go build/test cache from required checks; no Docker work created by this narrow implementation",
+    "Shared archive-final has empty directories; preserve state as evidence"
+  ],
+  "cleanup": "none; preserve edits and evidence until revised design/review"
+}

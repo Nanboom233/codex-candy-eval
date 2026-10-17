@@ -1,0 +1,18 @@
+{
+  "archive": "dist/build/sub2api-codex-eval.tar.gz",
+  "binary": "dist/build/sub2api-codex-eval",
+  "archive_bytes": 39016368,
+  "archive_sha256": "aed87fa204d56075d3547c2225eb333950e201b985c8a5a05d983396635eab96",
+  "binary_sha256": "eed01f71c39048eef1a15fbf13652b5c44d9915fff1e34c59f3d58abf1c6c9e1",
+  "raw_regular_files": [
+    "LICENSE/CPA-MIT.txt",
+    "LICENSE/ModelTrace-MIT.txt",
+    "LICENSE/Renderers-MIT.txt",
+    "LICENSE/Sub2API-LGPL-3.0.txt",
+    "LICENSE/THIRD_PARTY_NOTICES.txt",
+    "cleanup.py",
+    "install.py",
+    "sub2api-v0.2.16-linux-amd64"
+  ],
+  "source_license_binary_parity": true
+}

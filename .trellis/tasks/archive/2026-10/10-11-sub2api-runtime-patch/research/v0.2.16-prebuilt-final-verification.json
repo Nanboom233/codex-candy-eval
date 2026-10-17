@@ -1,0 +1,26 @@
+{
+  "archive": "dist/sub2api-build/prebuilt-v0.2.16-amd64-20261014/sub2api-codex-eval-v0.2.16-linux-amd64.tar.gz",
+  "archive_bytes": 39016371,
+  "archive_sha256": "24f463eb70cb20a4127984bfbad84aeaf9eeab1ba5d06db7e6927d643d08cc01",
+  "binary_sha256": "eed01f71c39048eef1a15fbf13652b5c44d9915fff1e34c59f3d58abf1c6c9e1",
+  "regular_files": [
+    "LICENSE/CPA-MIT.txt",
+    "LICENSE/ModelTrace-MIT.txt",
+    "LICENSE/Renderers-MIT.txt",
+    "LICENSE/Sub2API-LGPL-3.0.txt",
+    "LICENSE/THIRD_PARTY_NOTICES.txt",
+    "cleanup.py",
+    "install.py",
+    "sub2api-v0.2.16-linux-amd64"
+  ],
+  "package_source_license_parity": true,
+  "artifact_architecture": "ELF64 Linux amd64",
+  "functional_sha256": "b8b91f8b54086d8cd00280925956063e29bd10acd704706820e7c9960b9c91d4",
+  "phase": "root final post-cleanup read-only verification",
+  "raw_tarfile_members_verified": true,
+  "no_appledouble_pax_links_duplicates": true,
+  "maintained_files_verified": 113,
+  "preserved_archives_verified": 3,
+  "absent_owned_roots_verified": 8,
+  "binary_preserved": true
+}

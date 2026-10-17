@@ -1,0 +1,9 @@
+{
+  "workroot": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/codexeval-prebuilt-v0216-_itow36k",
+  "retained_research_workroot": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/builder-go-timeout.GseZIC/workroot",
+  "source_archive": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/builder-go-timeout.GseZIC/workroot/source.tar.gz",
+  "source_archive_sha256": "eef7e0519b05b8254c981efbab7bfe74c5d89897c67053e81380987366daae89",
+  "source_revision": "01842576b3d5c1e2545b5a99ad555d36e28ed306",
+  "functional_sha256": "b8b91f8b54086d8cd00280925956063e29bd10acd704706820e7c9960b9c91d4",
+  "status": "actual patched frontend/backend build started; no cleanup"
+}

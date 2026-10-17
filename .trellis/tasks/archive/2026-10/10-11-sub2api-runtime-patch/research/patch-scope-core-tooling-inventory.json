@@ -1,0 +1,2917 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-14",
+  "task": ".trellis/tasks/10-11-sub2api-runtime-patch",
+  "purpose": "Read-only C/T inventory for one-at-a-time current user approval. No product changes are authorized by recommendations.",
+  "approval_policy": {
+    "default": "pending_current_individual_approval",
+    "one_item_at_a_time": true,
+    "history_is_not_approval": true,
+    "race_gate": "Removed by the user; main owns active gate/spec changes. Preserved race diagnostics are historical only."
+  },
+  "boundaries": {
+    "owned": "Evaluation core/UI comparisons and installer/build/package tooling. Native rule/runtime behavior belongs to the parallel native inventory.",
+    "product_actions": "No edits, builds, tests, runtime/resource mutations, cleanup, task start, deployment, paid requests, commits or publication in this audit.",
+    "canonical_artifacts": "Existing dist/build binary/archive were not opened for rebuild or rewritten. Source-path inventory does not claim new artifact verification."
+  },
+  "provenance_note": "Historical PRD requirement records are secondary attribution, not the original user transcript and not current approval. Exact mechanics with no user-specific evidence are marked absent. Current approval request supersedes past implementation authorization.",
+  "current_path": {
+    "build": [
+      "scripts/prebuilt_dev.py",
+      "scripts/universal_payload.py:SOURCES",
+      "adapter/build.py",
+      "adapter/main.go + adapter/typecheck.go",
+      "adapter/rules.json",
+      "adapter/ui-rules.json",
+      "adapter/runtime/*",
+      "allowlisted internal/eval/*"
+    ],
+    "package": [
+      "scripts/package-sub2api.py",
+      "scripts/sub2api_build.py:_sha256_file/parse_release_facts/validate_installer_facts",
+      "scripts/universal_payload.py:LICENSE map/functional_hash"
+    ],
+    "deployed_payload": [
+      "install.py",
+      "cleanup.py",
+      "sub2api-v0.2.16-linux-amd64",
+      "LICENSE/CPA-MIT.txt",
+      "LICENSE/Sub2API-LGPL-3.0.txt",
+      "LICENSE/ModelTrace-MIT.txt",
+      "LICENSE/Renderers-MIT.txt",
+      "LICENSE/THIRD_PARTY_NOTICES.txt"
+    ],
+    "current_test_inputs": [
+      "scripts/prebuilt_test.py",
+      "scripts/universal_dev.py",
+      "patches/sub2api/v0.2.15/test-overlay/*.patch",
+      "tests/overlays/codexeval/*",
+      "tests/installer/current_suite.py"
+    ],
+    "historical_not_runtime": [
+      "patches/sub2api/v0.2.15/*.patch",
+      "patches/sub2api/v0.2.15/production/*.patch",
+      "compatibility/sub2api-v0.2.15.json",
+      "unused sub2api_build source/patch/workspace/provenance helpers"
+    ]
+  },
+  "comparison_evidence": {
+    "method": "Read numbered source; diff original CPA counterparts; rg call/reference paths. No test/build commands.",
+    "observations": [
+      "All internal/eval/data files compare byte-identical to internal/plugin/data.",
+      "fingerprint_algorithm.go and modeltrace_algorithm.go differ only package declaration.",
+      "codex.go preserves wire construction; changes package/import/comment and removes old askCodex; native askCodex is now in model.go.",
+      "internal/eval/web/fingerprint.js and vendor tree compare byte-identical to original.",
+      "style.css differs by one removed CPA all:revert rule.",
+      "Root scripts/test-ui.cjs reads internal/plugin/web; its success cannot prove native UI."
+    ],
+    "limitation": "This audit identifies source behavior/dependencies and recommendations. It does not reproduce the user's unusable installed evaluation or attribute a runtime failure."
+  },
+  "counts": {
+    "core_ui": 34,
+    "tooling": 31,
+    "total": 65
+  },
+  "items": [
+    {
+      "id": "C01",
+      "title": "Host-neutral evaluation API and CPA separation",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/eval.go",
+          "start": 13,
+          "end": 57
+        },
+        {
+          "path": "internal/eval/model.go",
+          "start": 20,
+          "end": 30
+        },
+        {
+          "path": "internal/plugin/model.go",
+          "start": 90,
+          "end": 110
+        }
+      ],
+      "current_behavior": "Introduces positive numeric group/account targets, display-only account metadata and a ModelExecutor interface. CPA credential enumeration, host callbacks, C ABI and inspection scheduler are absent from the copied core.",
+      "original_comparison": "Original plugin used auth.ID/provider and host.model.execute_stream; internal/plugin remains separate legacy source.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native runtime executor and resolver templates; all four core evaluators; T17 source allowlist."
+      ],
+      "deletion_effect": "Deleting the interface/types breaks all native evaluators and runtime imports. Returning to original CPA executeModel requires unavailable CPA host callbacks.",
+      "recommendation": "Retain the required host boundary, subject to individual approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C02",
+      "title": "Requested/effective identity and outcome fields",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/eval.go",
+          "start": 59,
+          "end": 79
+        },
+        {
+          "path": "internal/eval/eval.go",
+          "start": 133,
+          "end": 136
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 351,
+          "end": 370
+        }
+      ],
+      "current_behavior": "Adds group/account/run identity, display name, requested and effective model/effort, and status to every result; synthetic failures carry the same metadata.",
+      "original_comparison": "CPA result structs stored model/effort and credential-keyed history, without ResultInfo.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "C03 model normalization; C19 history schema; UI state adapters."
+      ],
+      "deletion_effect": "Removing fields requires coordinated native/manager/history/UI consumers; historical account-only result maps cannot distinguish selected groups without the result field.",
+      "recommendation": "Retain routing/result identity; review requested/effective duplication separately if simplification is desired.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C03",
+      "title": "Model suffix normalization and supported effort changes",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/eval.go",
+          "start": 223,
+          "end": 267
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 6,
+          "end": 9
+        },
+        {
+          "path": "internal/plugin/web/app.js",
+          "start": 6,
+          "end": 9
+        },
+        {
+          "path": "internal/plugin/model.go",
+          "start": 24,
+          "end": 27
+        }
+      ],
+      "current_behavior": "Parses known parenthesized suffixes; rejects parentheses otherwise, unknown suffixes and explicit conflicts; accepts none/minimal/low/medium/high/xhigh and omits none on wire. UI removes original max choice while keeping its five other choices.",
+      "original_comparison": "Original validModelName allowed arbitrary parentheses when requested; CPA owned suffix translation and UI offered max.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C02 effective metadata; C04 validation; GatewayExecutor body checks; state validator."
+      ],
+      "deletion_effect": "Deleting normalization leaves model suffixes on native wire and breaks validation callers; relaxing/removing max rejection changes selection semantics.",
+      "recommendation": "Retain plain-wire normalization; submit the max-removal/restricted effort list as a concrete behavior choice, since no specific user request for dropping max was found.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C04",
+      "title": "Evaluation-specific option validation",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/eval.go",
+          "start": 95,
+          "end": 132
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 141,
+          "end": 199
+        }
+      ],
+      "current_behavior": "Validates type, modes and sample concurrency both for single and managed runs. Fingerprint forces low and rejects explicit none/non-low suffixes. ModelTrace rejects nondefault effort; only Candy accepts batches. Candy/Pelican reject negative concurrency in managed admission.",
+      "original_comparison": "CPA handlers validated modes and concurrency, Fingerprint had no effort field; native adds shared validation and explicit effort restrictions.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C03; Fingerprint/ModelTrace collectors; C18 managed batching."
+      ],
+      "deletion_effect": "Removing constraints can invoke invalid mode slices or run unsupported batch/effort combinations; duplicate validation can be reviewed without deleting behavior.",
+      "recommendation": "Retain inherited mode/concurrency rules; explicit suffix conflict/none rules and duplicate entry validation are implementation additions requiring individual review.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C05",
+      "title": "Canonical in-process Responses HTTP executor",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/http.go",
+          "start": 21,
+          "end": 70
+        }
+      ],
+      "current_behavior": "Wraps runtime-owned RoundTripper, POSTs to fixed codex-eval.internal/v1/responses, checks target/body/model/stream/effort consistency and passes only fixed Codex headers. No credential or directed target HTTP header is added; redirects are rejected.",
+      "original_comparison": "Replaces CPA host bridge and earlier loopback-token executor; there is no current NewHTTPExecutor constructor.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native runtime transport binds target via private context capability; C03; C07 SSE reader."
+      ],
+      "deletion_effect": "Deleting the executor breaks native dispatch transport; removing individual redundant body/header checks changes admission but does not itself remove native authorization.",
+      "recommendation": "Retain the canonical executor; individual validation checks have no separate user-level authorization beyond native dispatch.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C06",
+      "title": "Safe errors, panic recovery and cancellation answer suppression",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/model.go",
+          "start": 32,
+          "end": 43
+        },
+        {
+          "path": "internal/eval/model.go",
+          "start": 136,
+          "end": 149
+        },
+        {
+          "path": "internal/eval/http.go",
+          "start": 70,
+          "end": 100
+        }
+      ],
+      "current_behavior": "Returns status/code errors without upstream bodies/URLs; keeps parsed error-response usage, closes body on cancellation/success and suppresses answers after cancellation. Executor panic becomes retryable status-zero executor_panic; String/GoString hide internals.",
+      "original_comparison": "CPA recovered panic with raw panic value and exposed detailed host/SSE bodies.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Retry logic C10; SSE usage C09; result errors; native runtime."
+      ],
+      "deletion_effect": "Removing safe error codes can expose provider/private data; removing panic-to-status-zero changes retries. Deleting cosmetic String methods only changes diagnostic formatting.",
+      "recommendation": "Retain body ownership and safe errors; review panic retry behavior and formatting helpers individually if removing extras.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C07",
+      "title": "Incremental SSE terminal and item handling",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/sse.go",
+          "start": 52,
+          "end": 151
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 167,
+          "end": 215
+        },
+        {
+          "path": "internal/plugin/model.go",
+          "start": 186,
+          "end": 249
+        }
+      ],
+      "current_behavior": "Dispatches complete blank-line SSE events, supports multiline data/event-name fallback, requires response.completed, rejects malformed/error/incomplete/failed events and DONE-without-terminal. Reconstructs empty terminal output from completed items, replacing equal item IDs; excludes tool arguments and rejects empty/tool-only answers.",
+      "original_comparison": "Original buffered entire host stream, ignored malformed JSON lines, appended done items and then checked terminal status.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "GatewayExecutor; responseItem/responseBody; four evaluators."
+      ],
+      "deletion_effect": "Deleting parser prevents Responses output consumption. Relaxing malformed-event/blank-line checks could accept partial streams; item-ID replacement specifically prevents duplicated text.",
+      "recommendation": "Retain terminal/text semantics inherited from CPA; explicitly review stricter malformed-event rejection and ID replacement as additions.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C08",
+      "title": "SSE and request/header size bounds",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/http.go",
+          "start": 12,
+          "end": 19
+        },
+        {
+          "path": "internal/eval/http.go",
+          "start": 35,
+          "end": 36
+        },
+        {
+          "path": "internal/eval/http.go",
+          "start": 61,
+          "end": 63
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 65,
+          "end": 68
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 96,
+          "end": 100
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 134,
+          "end": 135
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 158,
+          "end": 162
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 205,
+          "end": 206
+        }
+      ],
+      "current_behavior": "Adds 1 MiB request/line/event bounds, 64 KiB per allowed header value, 4 MiB item/output accumulation, 16 MiB total stream and 65,536 dispatched events.",
+      "original_comparison": "CPA response reader had no equivalent cumulative/event/line bounds.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "C05 executor and C07 parser; observed usage retained on bound failures."
+      ],
+      "deletion_effect": "Deleting bounds removes new rejection cases and allows unbounded buffers; deleting just one constant breaks its references.",
+      "recommendation": "Review each bound with the user; recommend keeping bounded streaming but do not infer approval of these exact values.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C09",
+      "title": "Observed-only token accounting through failed attempts",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/sse.go",
+          "start": 20,
+          "end": 50
+        },
+        {
+          "path": "internal/eval/sse.go",
+          "start": 81,
+          "end": 84
+        },
+        {
+          "path": "internal/eval/http.go",
+          "start": 80,
+          "end": 90
+        },
+        {
+          "path": "internal/eval/model.go",
+          "start": 108,
+          "end": 112
+        }
+      ],
+      "current_behavior": "Uses pointer usage fields and UsageObserved; records nonnegative values seen in response/events even on failure and sums attempts. Missing usage contributes zero, not inferred tokens.",
+      "original_comparison": "Original used terminal numeric usage fields and could lose observed usage when stream parsing failed.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native billing still owns actual charges; result token fields and retry aggregation."
+      ],
+      "deletion_effect": "Removing preservation loses displayed failed/cancelled usage; it does not disable native gateway accounting. Removing UsageObserved needs callers adjusted.",
+      "recommendation": "Retain observed usage preservation; distinguish display accounting from native billing.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C10",
+      "title": "Immutable retries and caller-owned timeout/backoff",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/model.go",
+          "start": 47,
+          "end": 134
+        },
+        {
+          "path": "internal/eval/eval.go",
+          "start": 289,
+          "end": 292
+        },
+        {
+          "path": "internal/plugin/codex.go",
+          "start": 183,
+          "end": 194
+        },
+        {
+          "path": "internal/plugin/model.go",
+          "start": 44,
+          "end": 85
+        }
+      ],
+      "current_behavior": "Clones body/headers for each probe attempt, retains exact target, retries status 0/429/500–599 three attempts after 2s/4s, and derives 3-minute probes/10-minute answers from caller context. Slots release before backoff; nil slots allowed for exported ExecuteProbe.",
+      "original_comparison": "CPA had same attempts/time limits but host body encoding on each call and askCodex created context.Background; >=500 retry lacked 599 upper bound.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C06 error statuses; per-type global semaphores; manager lifetime."
+      ],
+      "deletion_effect": "Deleting retries changes existing evaluation robustness/usage; removing child context propagation makes cancellation ineffective. Cloning and nil-slot API support are independent extras.",
+      "recommendation": "Retain inherited retry counts/timing and timeout limits; retain parent cancellation needed by native runs; review clone/nil-slot convenience separately.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C11",
+      "title": "Copied Codex client fingerprint and embedded context",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/codex.go",
+          "start": 16,
+          "end": 55
+        },
+        {
+          "path": "internal/eval/codex.go",
+          "start": 130,
+          "end": 200
+        },
+        {
+          "path": "internal/eval/eval.go",
+          "start": 276,
+          "end": 278
+        },
+        {
+          "path": "internal/plugin/codex.go",
+          "start": 16,
+          "end": 55
+        }
+      ],
+      "current_behavior": "Copies tools/base instructions/context, UUID/item construction, User-Agent and protocol headers. Stable installation namespace now derives from sub2api-account:<AccountID>, while each evaluation turn creates fresh thread/turn IDs.",
+      "original_comparison": "codex.go differs only package/import/comment and removal of CPA askCodex; data/codex_context.json is byte-identical.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "Candy, ModelTrace, Pelican request generation; core/data/codex_context.json in T17 allowlist."
+      ],
+      "deletion_effect": "Deleting context/client construction changes preserved prompt/wire fingerprint and breaks turn evaluators. Namespace helper removal needs request callers changed.",
+      "recommendation": "Retain preserved Codex wire content; approve the account-based namespace explicitly as the native identity adaptation.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C12",
+      "title": "Candy scoring and result behavior",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/candy.go",
+          "start": 8,
+          "end": 54
+        },
+        {
+          "path": "internal/plugin/candy.go",
+          "start": 100,
+          "end": 123
+        }
+      ],
+      "current_behavior": "Preserves prompt, standalone-21 scoring, 4000-rune saved answer and token/duration fields. Wrong answer remains completed/ok=false; errors now also carry failed/cancelled status and returned error.",
+      "original_comparison": "Prompt and hasStandalone21 bytes are unchanged apart from shifted lines.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C02; C10; C18 Candy batch manager; original Markdown answer UI."
+      ],
+      "deletion_effect": "Deleting scoring/prompt removes Candy functionality; removing returned error/status changes manager outcome handling.",
+      "recommendation": "Retain inherited Candy semantics and required outcome integration.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C13",
+      "title": "Fingerprint collector and pure attribution resources",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/fingerprint.go",
+          "start": 13,
+          "end": 27
+        },
+        {
+          "path": "internal/eval/fingerprint.go",
+          "start": 61,
+          "end": 86
+        },
+        {
+          "path": "internal/eval/fingerprint.go",
+          "start": 101,
+          "end": 172
+        },
+        {
+          "path": "internal/eval/fingerprint_algorithm.go",
+          "start": 1,
+          "end": 424
+        },
+        {
+          "path": "internal/plugin/fingerprint.go",
+          "start": 128,
+          "end": 231
+        }
+      ],
+      "current_behavior": "Preserves quick/standard/strict sizes, randomized probes, low effort, 2-default/6-max workers, six global slots, stop after eight consecutive request errors, cancellation drain and pure attribution. Adds exported modes/summary, parent cancellation result/error and synchronous progress publication; attributes using effective plain model.",
+      "original_comparison": "Algorithms differ solely package declaration; all data byte-identical. Threshold and global limits predate native migration.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C04/C10; data/fingerprint_probes.json and baselines; callbacks C16."
+      ],
+      "deletion_effect": "Deleting collector removes Fingerprint. Removing new progress/parent status affects manager/UI; algorithms/data need no behavioral simplification.",
+      "recommendation": "Retain inherited collection/scoring/data; review added public helpers and error-return plumbing against actual UI needs.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C14",
+      "title": "ModelTrace collector, partial outcomes and golden-bank preservation",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/modeltrace.go",
+          "start": 12,
+          "end": 44
+        },
+        {
+          "path": "internal/eval/modeltrace.go",
+          "start": 56,
+          "end": 111
+        },
+        {
+          "path": "internal/eval/modeltrace.go",
+          "start": 113,
+          "end": 196
+        },
+        {
+          "path": "internal/eval/modeltrace_algorithm.go",
+          "start": 1,
+          "end": 319
+        }
+      ],
+      "current_behavior": "Preserves three distinct randomized 292–332-number challenges, default effort, 1–3 workers, six global slots, 64000-byte accepted answer bound, sample order and scoring/bank revision. Adds Done/Total/Valid/Errors, parent deadline-aware cancellation counts, partial/failure returned outcome, and exported Summary.",
+      "original_comparison": "modeltrace_algorithm.go differs solely package; data/modeltrace tree byte-identical.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C04/C10; ModelTrace bank/license; detail UI; C16 callbacks."
+      ],
+      "deletion_effect": "Deleting collection/scoring removes ModelTrace. Dropping counters changes progress JSON consumers; deleting bank/license breaks embed.",
+      "recommendation": "Retain inherited prompts/bank/scoring; review extra progress/return plumbing only as native API additions.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C15",
+      "title": "Pelican generation, extraction and detail summaries",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/pelican.go",
+          "start": 12,
+          "end": 81
+        },
+        {
+          "path": "internal/plugin/pelican.go",
+          "start": 75,
+          "end": 124
+        }
+      ],
+      "current_behavior": "Preserves no-tools prompt, HTML code-block/bare-markup extraction, 256 KiB HTML bound and duration/tokens. Adds failed/cancelled ResultInfo/error returns and Summary method omitting HTML for list responses.",
+      "original_comparison": "Extraction and prompt unchanged; original handlers already loaded full HTML separately.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C10; native list/detail handler; C31 preview."
+      ],
+      "deletion_effect": "Deleting prompt/extraction removes Pelican; removing summary enlarges list payload unless handler revised, not an algorithm change.",
+      "recommendation": "Retain inherited generation/extraction and bound; approve summary/explicit outcome additions for native list/detail integration.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C16",
+      "title": "Copied progress callback boundary",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/eval.go",
+          "start": 33,
+          "end": 47
+        },
+        {
+          "path": "internal/eval/eval.go",
+          "start": 137,
+          "end": 200
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 428,
+          "end": 447
+        }
+      ],
+      "current_behavior": "Adds JSON-excluded OnProgress callback with copied serial snapshots, initial/final states and post-worker final counters; manager stores progress under stateMu. Candy folds batch counters into a total snapshot.",
+      "original_comparison": "CPA mutated package-global progress under mu directly.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 35,
+            "end": 35
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 38
+          }
+        ],
+        "text": "Historical R13/R16 records preservation of four tabs/controls, native theme and first activation using existing web login. Exact implementation details remain unapproved individually."
+      },
+      "dependencies": [
+        "Collectors C13/C14; manager/UI polling; callbacks must return promptly and not panic/wait."
+      ],
+      "deletion_effect": "Deleting callbacks removes live sample progress while final results can still exist; requires manager and UI contract edits.",
+      "recommendation": "Retain user-visible progress if required; callback shape and constraints are implementation choices pending approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C17",
+      "title": "Managed target admission and account exclusion",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/runs.go",
+          "start": 14,
+          "end": 55
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 201,
+          "end": 299
+        },
+        {
+          "path": "internal/plugin/runs.go",
+          "start": 9,
+          "end": 57
+        }
+      ],
+      "current_behavior": "Resolves display metadata for exact target, rejects nonpositive IDs, deduplicates/excludes by AccountID across groups/types, separates busy and unavailable arrays, and creates failed records for unavailable targets. No client model catalog skips or All wildcard.",
+      "original_comparison": "CPA operated selectedCredentials and caller model catalog; native resolver is external and cannot substitute.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native TargetResolver; C19 state; C28 UI catalog translation."
+      ],
+      "deletion_effect": "Deleting manager admission breaks starts and per-account exclusion. Restoring client model filtering would add a removed behavioral path.",
+      "recommendation": "Retain exact-target admission/exclusion; explicitly approve unavailable-history versus legacy skipped results.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C18",
+      "title": "Candy batches, execution settlement and result persistence",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/runs.go",
+          "start": 141,
+          "end": 162
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 412,
+          "end": 503
+        }
+      ],
+      "current_behavior": "Runs Candy up to ten times serially per account, different targets concurrently; creates per-iteration run IDs, persists each result and completed count, stops on cancellation/storage failure and releases busy ownership only after work exits.",
+      "original_comparison": "CPA saved each Candy result but had no durable active/completed intent.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "C17 start; C19 durable intents; C16 progress; StateStore."
+      ],
+      "deletion_effect": "Deleting worker disables all evaluations; removing cap/serial ordering changes original Candy semantics. Completed-count persistence is independently new.",
+      "recommendation": "Retain inherited batch cap/order and settlement; durable per-iteration bookkeeping remains a pending design choice.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C19",
+      "title": "Persisted active intents and restart recovery",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/state.go",
+          "start": 14,
+          "end": 38
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 100,
+          "end": 138
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 268,
+          "end": 331
+        }
+      ],
+      "current_behavior": "Adds schema_version=1 and ActiveIntent; saves complete start intent before acknowledging/spawning model workers; restarts append synthetic interrupted records and remove active intents atomically, with protected load/recovery failures.",
+      "original_comparison": "CPA persisted only completed history and did not recover in-flight runs.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 30,
+            "end": 30
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 228,
+            "end": 228
+          }
+        ],
+        "text": "Historical R8 records latest-20 history, selected group and refresh/restart persistence; the later delivery record mentions cancellation/history. It does not establish user approval of every durability mechanism."
+      },
+      "dependencies": [
+        "C17/C18; StateStore; C20 validators; native history.json location."
+      ],
+      "deletion_effect": "Deleting active intent/recovery loses interrupted-run records and pre-ack persistence, but finished-history preservation can remain. Must revise manager/state consumers jointly.",
+      "recommendation": "Submit active-intent/recovery as its own approval item; historical history requirement does not authorize this full mechanism automatically.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C20",
+      "title": "Strict history/active schema validation and retention",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/state.go",
+          "start": 159,
+          "end": 287
+        },
+        {
+          "path": "internal/plugin/state.go",
+          "start": 27,
+          "end": 79
+        }
+      ],
+      "current_behavior": "Validates schema, positive matching account/group, run IDs, model requests, outcome enum, collection counters and active-account uniqueness/options; normalizes empty maps and trims latest 20 per account/type. Invalid data blocks manager start/clear without overwrite.",
+      "original_comparison": "Original protected unreadable/null JSON and retained20, without versioned/native identity/counter checks.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 30,
+            "end": 30
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 228,
+            "end": 228
+          }
+        ],
+        "text": "Historical R8 records latest-20 history, selected group and refresh/restart persistence; the later delivery record mentions cancellation/history. It does not establish user approval of every durability mechanism."
+      },
+      "dependencies": [
+        "C02/C03/C19; file Load/Save; admission storage latch."
+      ],
+      "deletion_effect": "Removing schema/identity validators allows previously blocked data; dropping retention changes inherited history size; changing schema without migration can make current history unreadable.",
+      "recommendation": "Retain latest-20 preservation; review individual validation rules/protected blocking rather than assuming all are requested.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C21",
+      "title": "Private atomic file store and no-symlink path checks",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/state.go",
+          "start": 46,
+          "end": 157
+        },
+        {
+          "path": "internal/plugin/state.go",
+          "start": 86,
+          "end": 107
+        }
+      ],
+      "current_behavior": "Checks every path component for symlink/non-directory/nonregular targets, creates/chmods parent0700, writes a uniquely named0600 temp, rechecks paths, renames atomically. Does not fsync or coordinate processes.",
+      "original_comparison": "Original used statePath+'.tmp'0600 then rename, without component checks or private directory creation.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 30,
+            "end": 30
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 228,
+            "end": 228
+          }
+        ],
+        "text": "Historical R8 records latest-20 history, selected group and refresh/restart persistence; the later delivery record mentions cancellation/history. It does not establish user approval of every durability mechanism."
+      },
+      "dependencies": [
+        "Native runtime creates store under owned codex-eval directory; C20 schema."
+      ],
+      "deletion_effect": "Deleting storage loses restart history; deleting specific path/permission checks relaxes rejection and ownership handling. Direct rename alone preserves original atomic snapshot pattern.",
+      "recommendation": "Retain atomic persistence; approve extra path checks/parent chmod individually, including their failure effects.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C22",
+      "title": "Snapshot cloning, record retrieval, clear and flush",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/state.go",
+          "start": 289,
+          "end": 341
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 505,
+          "end": 636
+        },
+        {
+          "path": "internal/plugin/state.go",
+          "start": 109,
+          "end": 159
+        }
+      ],
+      "current_behavior": "Deep-copies pointer/slice-rich results and snapshots; serves account/run-ID record lookup including Candy; clear supports one/all types and commits only after Save; Flush can clear nonprotected storage error. State shows storage error/quiescing/recovery_blocked intents.",
+      "original_comparison": "CPA held one mu and returned/cleared global histories; native adds read-safe snapshots and explicit blocked recovery.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 30,
+            "end": 30
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 228,
+            "end": 228
+          }
+        ],
+        "text": "Historical R8 records latest-20 history, selected group and refresh/restart persistence; the later delivery record mentions cancellation/history. It does not establish user approval of every durability mechanism."
+      },
+      "dependencies": [
+        "C20/C21; native admin state/records/clear APIs; runtime deactivation."
+      ],
+      "deletion_effect": "Deleting cloning exposes shared mutable state; deleting record/clear removes existing user controls. Flush is used by maintenance, not an extra standalone feature.",
+      "recommendation": "Retain requested history/detail/clear behavior; review cloning/storage-latch/Flush mechanism as needed for the active consumers.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C23",
+      "title": "Manager-wide cancellation and shutdown/drain",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/runs.go",
+          "start": 638,
+          "end": 688
+        },
+        {
+          "path": "internal/eval/runs.go",
+          "start": 77,
+          "end": 96
+        },
+        {
+          "path": "internal/plugin/runs.go",
+          "start": 60,
+          "end": 95
+        }
+      ],
+      "current_behavior": "Cancels by run ID across all evaluation kinds, marks cancelling, derives workers from manager lifetime and shutdown closes admission, cancels workers and waits for zero runs plus pending starts. Caller timeout can end wait while workers continue settling.",
+      "original_comparison": "Original user cancel only Fingerprint/ModelTrace; Candy/Pelican cancellation is newly supported in API although UI retains original buttons.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "C10 context propagation; C18 worker completion; native deactivate/maintenance."
+      ],
+      "deletion_effect": "Deleting cancels/drain can leave requests running during cleanup; removing pending-start accounting changes acknowledgment race behavior.",
+      "recommendation": "Retain cancellation/lifecycle behavior; exact pending-start/drain mechanism requires separate approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C24",
+      "title": "Embedded static UI shell and footer version",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/ui.go",
+          "start": 10,
+          "end": 36
+        },
+        {
+          "path": "internal/eval/web/ui.html",
+          "start": 148,
+          "end": 165
+        },
+        {
+          "path": "internal/plugin/plugin.go",
+          "start": 79,
+          "end": 102
+        }
+      ],
+      "current_behavior": "Caches embedded page/vendor/style/script shell, injects evaluation config/prompts/license and escapes caller nonce. Footer substitutes literal version1 instead of CPA pluginVersion; reports Sub2API title/branding.",
+      "original_comparison": "Original same shell substitution used actual pluginVersion and no nonce.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 35,
+            "end": 35
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 38
+          }
+        ],
+        "text": "Historical R13/R16 records preservation of four tabs/controls, native theme and first activation using existing web login. Exact implementation details remain unapproved individually."
+      },
+      "dependencies": [
+        "Native UI handler CSP nonce; T17 resource mapping; C30/C31."
+      ],
+      "deletion_effect": "Deleting embed/shell removes page. Deleting literal footer version only changes display and is independent of functional UI.",
+      "recommendation": "Retain embedded UI capability; recommend removing misleading literal version display unless user requests it.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C25",
+      "title": "Native session auth and legacy-shaped API translation",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 25,
+          "end": 70
+        },
+        {
+          "path": "internal/eval/web/ui.html",
+          "start": 16,
+          "end": 18
+        }
+      ],
+      "current_behavior": "Reads auth_token on every call, rejects absent/401/403 session, no separate management-key input. Translates old run/cancel/DELETE/record paths to native start/cancel/clear/records and native code/data envelope; rejects redirects and keeps30s requests.",
+      "original_comparison": "CPA decoded management key from obfuscated panel storage and allowed manually entered session key.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native admin API/auth; C26 activation; C27 target state; legacy four-tab handlers."
+      ],
+      "deletion_effect": "Deleting auth or translation breaks page operations. Removing legacy adapter layer requires all callers revised; hidden disabled login form is not functional auth.",
+      "recommendation": "Retain native session reuse/API contract; review compatibility translation as an implementation convenience and hidden login controls separately.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C26",
+      "title": "First activation controls and readiness gating",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/ui.html",
+          "start": 33,
+          "end": 34
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 148,
+          "end": 156
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 328,
+          "end": 328
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 440,
+          "end": 446
+        }
+      ],
+      "current_behavior": "Shows activation state/button, invokes native activate, refreshes targets/status afterward and blocks model-run buttons until ready; repair_required disables activation.",
+      "original_comparison": "New native initialization UX; original CPA had no separate activate step.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 35,
+            "end": 35
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 38
+          }
+        ],
+        "text": "Historical R13/R16 records preservation of four tabs/controls, native theme and first activation using existing web login. Exact implementation details remain unapproved individually."
+      },
+      "dependencies": [
+        "Native status/activate and owned identity; C28 refreshCatalog."
+      ],
+      "deletion_effect": "Deleting controls removes requested first-web-activation entry and readiness feedback; native API stays separately callable.",
+      "recommendation": "Retain explicit first activation flow; individual states/error copy remain implementation details.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C27",
+      "title": "Group selection and native account/history state adapter",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 31,
+          "end": 32
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 175,
+          "end": 189
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 508,
+          "end": 513
+        }
+      ],
+      "current_behavior": "Persists selected group, renders group accounts with native active/schedulable flags, maps account-keyed histories and active progress to legacy row fields; group change clears selections/catalog and refreshes. History map is account-wide even when selected group differs.",
+      "original_comparison": "CPA credential rows did not require explicit native group IDs.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Native targets/state endpoints; C02 group metadata; C17 busy account scope."
+      ],
+      "deletion_effect": "Deleting target selector removes explicit group selection; deleting state adapter prevents result/progress rows. Group filtering of history is not currently performed.",
+      "recommendation": "Retain numeric group/account selection and state mapping; explicitly review account-wide history visibility.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C28",
+      "title": "Native model catalog aggregation and cache",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/catalog.js",
+          "start": 3,
+          "end": 61
+        },
+        {
+          "path": "internal/eval/web/catalog.js",
+          "start": 94,
+          "end": 137
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 78,
+          "end": 84
+        }
+      ],
+      "current_behavior": "Reads target/status then requests models for every selected-group account, unions IDs and hides image models. Per-account model cache retains inherited identity signature, TTL, dedup/retry handling; refresh failures (except auth) contribute empty lists. No /v1/models or CPA credential sync.",
+      "original_comparison": "Replaces CPA config/keys inventory and global public models endpoint; exact native aggregation has no explicit separate user request.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 23,
+            "end": 24
+          }
+        ],
+        "text": "Historical PRD R1–R2 attributes the request to port all four tests and preserve their semantics. No original user transcript is contained in that artifact; this is requirement provenance, not current approval."
+      },
+      "dependencies": [
+        "Native account models API; C27; sha256Hex for session-bound cache."
+      ],
+      "deletion_effect": "Deleting discovery can leave all model selectors empty. Cache removal changes network volume/prefs but not native model authorization.",
+      "recommendation": "Retain required native model discovery; approve inherited cache complexity and all-account aggregation separately.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C29",
+      "title": "Unused pre-start per-account catalog request",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 249,
+          "end": 255
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 39,
+          "end": 43
+        },
+        {
+          "path": "internal/eval/web/catalog.js",
+          "start": 111,
+          "end": 157
+        }
+      ],
+      "current_behavior": "Before start, verifies global model list then fetches per-account catalogs with six parallel workers and writes body.model_catalog; api immediately deletes model_catalog before sending. Native manager never receives those support facts.",
+      "original_comparison": "CPA sent this catalog to startRuns for skip behavior; native migration discards it.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "C28 model cache; inherited modelCatalog helpers; API run translation."
+      ],
+      "deletion_effect": "Removing the extra modelCatalog call eliminates ignored native-account lookups without changing the transmitted start body; helpers/cache usage should be reviewed separately.",
+      "recommendation": "Recommend removing the ignored per-account pre-start request as one concrete simplification item; keep global model discovery pending C28.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C30",
+      "title": "Readonly account switch and obsolete credential machinery",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/components.js",
+          "start": 145,
+          "end": 154
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 23,
+          "end": 23
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 210,
+          "end": 210
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 341,
+          "end": 341
+        },
+        {
+          "path": "internal/eval/web/credentials.js",
+          "start": 60,
+          "end": 64
+        }
+      ],
+      "current_behavior": "Always disables account enable switches with native-account-management hint, leaves switching map/merge/read branches and stub click handler, and retains unused previewCredential after CPA configuredCredentials removal.",
+      "original_comparison": "CPA actually toggled auth-files/config keys and synthesized hashed credentials; native does neither.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 35,
+            "end": 35
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 38
+          }
+        ],
+        "text": "Historical R13/R16 records preservation of four tabs/controls, native theme and first activation using existing web login. Exact implementation details remain unapproved individually."
+      },
+      "dependencies": [
+        "Row display retains status; original checkbox listeners; C27 native accounts."
+      ],
+      "deletion_effect": "Removing dead map/preview helper does not change native account mutation because no code fills switching. Removing switch display changes existing UI control appearance.",
+      "recommendation": "Retain native account status ownership; recommend separately removing unused switch bookkeeping/preview helper. No new account toggle implementation is proposed.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C31",
+      "title": "Nonce stylesheet conversion for renderer output",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/components.js",
+          "start": 3,
+          "end": 32
+        },
+        {
+          "path": "internal/eval/web/candy.js",
+          "start": 18,
+          "end": 21
+        },
+        {
+          "path": "internal/eval/web/modeltrace.js",
+          "start": 54,
+          "end": 61
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 142,
+          "end": 145
+        }
+      ],
+      "current_behavior": "Converts generated style attributes into deduplicated CSS classes/rules in a nonce style sheet before rows/Markdown/math/rank insertion, avoiding inline-style permission.",
+      "original_comparison": "CPA permitted unsafe-inline script/style and inserted markup directly.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "Native UI handler nonce CSP; ui.go token replacement; inherited Temml and ModelTrace bars."
+      ],
+      "deletion_effect": "Deleting converter while keeping native nonce CSP can lose math layout/ranking style. Deleting only map/dedup changes rule count, not required nonce behavior.",
+      "recommendation": "Review this added CSP-driven conversion explicitly; retain only if retaining native CSP behavior, with native inventory dependencies.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C32",
+      "title": "Pelican HTML rewriting under nonce CSP",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/pelican.js",
+          "start": 27,
+          "end": 62
+        },
+        {
+          "path": "internal/plugin/web/pelican.js",
+          "start": 27,
+          "end": 30
+        }
+      ],
+      "current_behavior": "Regex-rewrites opening attributes without altering comments/script raw text, replaces model nonce, moves inline CSS to nonce styles, injects nonce into script/style and serializes DOMParser output into inherited allow-scripts sandbox iframe. Freeze script still stops list animations.",
+      "original_comparison": "Original srcdoc escaped original HTML directly; sandbox/freeze predated migration.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "C15 stored HTML; native nonce CSP; previews/details; DOMParser."
+      ],
+      "deletion_effect": "Removing rewriting preserves original HTML but can block model scripts/styles under present CSP; removing sandbox itself would change inherited isolation.",
+      "recommendation": "Submit generated-document rewrite as its own approval item; retain required Pelican preview behavior without assuming this implementation is mandated.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C33",
+      "title": "Native light/dark colors and removal of CPA host styles",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/theme.css",
+          "start": 1,
+          "end": 36
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 26,
+          "end": 29
+        },
+        {
+          "path": "internal/eval/web/style.css",
+          "start": 9,
+          "end": 15
+        }
+      ],
+      "current_behavior": "Uses native light/dark query/storage/system theme with teal/slate tokens, removes CPAMC/CPAMP backgrounds/blob animation/white theme and removes all:revert descendant reset. Page layout/control stylesheet otherwise unchanged.",
+      "original_comparison": "style.css differs only one removed reset line; themes replace CPA host blocks rather than redesign tabs.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 35,
+            "end": 35
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 38
+          }
+        ],
+        "text": "Historical R13/R16 records preservation of four tabs/controls, native theme and first activation using existing web login. Exact implementation details remain unapproved individually."
+      },
+      "dependencies": [
+        "Native iframe parent theme query in researcher inventory; copied UI components."
+      ],
+      "deletion_effect": "Deleting theme file breaks CSS variable appearance; restoring old host themes regresses requested adaptation. Removing query/storage behavior independently affects native theme sync.",
+      "recommendation": "Retain native theme adaptation; precise token values/design inference remain pending item approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "C34",
+      "title": "Stranded CPA subscription-plan controls",
+      "category": "evaluation_core_or_ui",
+      "path_role": "current_embedded_runtime_source",
+      "sources": [
+        {
+          "path": "internal/eval/web/components.js",
+          "start": 101,
+          "end": 123
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 387,
+          "end": 399
+        },
+        {
+          "path": "internal/eval/web/app.js",
+          "start": 179,
+          "end": 180
+        }
+      ],
+      "current_behavior": "Retains CPA plan taxonomy/rank/filter UI, but credentialPlan requires source=auth_files/provider=codex while native state rows always source=accounts; no plan_type is populated. Filters stay hidden and ranks neutral.",
+      "original_comparison": "Copied CPA feature now unreachable after target adapter change.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "Inherited plan badges/filters and preference controls; native accounts mapping."
+      ],
+      "deletion_effect": "Removing unreachable taxonomy/filter helpers needs hidden DOM/render calls adjusted, with no current native plan output lost.",
+      "recommendation": "Recommend reviewing removal of unreachable CPA plan controls as an individual simplification; do not add a native plan feature.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T01",
+      "title": "Prebuilt-only installation payload and release constants",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 26,
+          "end": 35
+        },
+        {
+          "path": "install.py",
+          "start": 794,
+          "end": 807
+        },
+        {
+          "path": "install.py",
+          "start": 896,
+          "end": 914
+        }
+      ],
+      "current_behavior": "Selects versioned v0.2.16 amd64 candidate and exact eight-file payload; default installation uses local complete bundle or downloads fixed release archive. No Git/source/Go/frontend build function exists in current installer.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T02 acquisition; T08 compatibility; T16 packaging; TOOL_FACTS used by maintenance/idempotence."
+      ],
+      "deletion_effect": "Deleting binary-loading path disables installation. Deleting historical resolver/build files cannot simplify this live installer because it does not call them.",
+      "recommendation": "Retain user-requested prepared binary replacement; do not describe historical on-host source build as current runtime.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T02",
+      "title": "Local/HTTPS release lookup and bounded allowlisted extraction",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 148,
+          "end": 225
+        },
+        {
+          "path": "install.py",
+          "start": 901,
+          "end": 914
+        }
+      ],
+      "current_behavior": "Recognizes only a complete local bundle; otherwise downloads pinned plugin release-tag archive with environment proxies disabled and HTTPS-only redirects. Bounds compressed/uncompressed bytes; checks unique exact member names/types/directories; writes exclusive private extracted files.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T01 names/allowlist; T16 archive format; online GitHub asset path."
+      ],
+      "deletion_effect": "Removing online path loses one-command bootstrap; removing exact/size/type checks admits other files. Proxy disabling and size thresholds are implementation-added choices.",
+      "recommendation": "Retain required local/online acquisition and minimal payload; review exact extraction/proxy bounds individually without inventing new binary attestation.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T03",
+      "title": "Explicit Docker target choice and immutable selection",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 347,
+          "end": 390
+        },
+        {
+          "path": "install.py",
+          "start": 1082,
+          "end": 1093
+        }
+      ],
+      "current_behavior": "Lists all Docker containers via quiet full IDs/JSON inspect, then requires explicit --container or numbered terminal choice even with one candidate. /dev/tty read/write handles piped bootstrap; selection uses immutable ID and rechecks name/ref before effects.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 39
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 241,
+            "end": 243
+          }
+        ],
+        "text": "Historical PRD attributes explicit container selection, single Python entry and concise complete raw diagnostics; later recorded user failure requires Docker formatting compatibility. Exact helper/validation mechanisms remain pending."
+      },
+      "dependencies": [
+        "Docker CLI/Python3.9; T04 inspect; all restart/replace effects."
+      ],
+      "deletion_effect": "Deleting selection/rechecks risks wrong container mutation; removing quiet-ID compatibility reintroduces reported --format failures.",
+      "recommendation": "Retain explicit user choice and compatible enumeration; separately review recheck frequency if simplifying.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T04",
+      "title": "Native container layout/identity preflight",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 399,
+          "end": 447
+        },
+        {
+          "path": "install.py",
+          "start": 647,
+          "end": 675
+        }
+      ],
+      "current_behavior": "Requires running Linux/container writable rootfs, normal billing mode, writable persistent data mount, safe unmapped executable; derives uid/gid from PID1, resolves executable from proc/startup hints, reads optional -version/image labels and checks safe path ancestors. Initial inspect permits amd64/arm64; fixed candidate later requires amd64.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T05/T07 functional probe; T08 fixed layout/version check; journal/backups rely on runtime uid/gid."
+      ],
+      "deletion_effect": "Removing path/ownership discovery can make backup/replacement target or permissions wrong. Removing version hints does not alter native dispatch but affects known-version conflict detection.",
+      "recommendation": "Retain facts necessary for requested replacement; each additional fail-closed check and PID1 identity assumption remains a concrete pending review.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T05",
+      "title": "Owned clientless probe image acquisition/cache",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 60,
+          "end": 66
+        },
+        {
+          "path": "install.py",
+          "start": 276,
+          "end": 342
+        }
+      ],
+      "current_behavior": "Uses alpine/git2.49.1 solely for nc; probes cached inspected Linux image in named no-network temporary helper, cleans exact helper, pulls/retries transient failures once if absent/unusable and pins subsequent use to inspected image ID. Successful selected image remains available for later probes.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 39
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 241,
+            "end": 243
+          }
+        ],
+        "text": "Historical PRD attributes explicit container selection, single Python entry and concise complete raw diagnostics; later recorded user failure requires Docker formatting compatibility. Exact helper/validation mechanisms remain pending."
+      },
+      "dependencies": [
+        "T06 nc transport; Docker pull/cache; cleanup retains probe image."
+      ],
+      "deletion_effect": "Deleting helper acquisition breaks images lacking curl/wget/nc; deleting transient classifier changes only pull retry behavior, not Sub2API source selection.",
+      "recommendation": "Retain clientless probing due recorded missing nc failure; review use of this image/cache probe/retry mechanism rather than assuming all are user mandated.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T06",
+      "title": "Custom nc HTTP framing and helper teardown",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 69,
+          "end": 127
+        },
+        {
+          "path": "install.py",
+          "start": 449,
+          "end": 546
+        }
+      ],
+      "current_behavior": "Runs exact named nc helper in selected container network namespace and sends only /health or /setup/status. Keeps stdin open, parses bounded HTTP status/encoding/content-length/chunk framing through HTTPResponse plus manual chunk terminator checks, uses selectors/deadline and strict process/helper cleanup preserving raw output.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 39
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 241,
+            "end": 243
+          }
+        ],
+        "text": "Historical PRD attributes explicit container selection, single Python entry and concise complete raw diagnostics; later recorded user failure requires Docker formatting compatibility. Exact helper/validation mechanisms remain pending."
+      },
+      "dependencies": [
+        "T05 probe image; T07 endpoint discovery; T10 startup verification."
+      ],
+      "deletion_effect": "Deleting framing helper prevents current clientless readiness; removing manual trailer/size handling alters incomplete/oversize acceptance. Teardown changes can leave owned helper resources.",
+      "recommendation": "Retain working clientless probes; submit parser/bounds/teardown complexity as concrete approval choices, with no replacement transport proposal.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T07",
+      "title": "Owned listener discovery, hint fallback and functional readiness",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 547,
+          "end": 645
+        }
+      ],
+      "current_behavior": "Walks PID1 children at most3 depths/32 processes, matches executable socket inodes to proc TCP/TCP6 listeners, decodes addresses and prioritizes configured port. Private network fallback uses env/exposed port hints; host/shared namespaces require owned sockets. Up to8 endpoints/48s must return exact native health and completed setup fields.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 39
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 241,
+            "end": 243
+          }
+        ],
+        "text": "Historical PRD attributes explicit container selection, single Python entry and concise complete raw diagnostics; later recorded user failure requires Docker formatting compatibility. Exact helper/validation mechanisms remain pending."
+      },
+      "dependencies": [
+        "T04 executable; T06 HTTP; health_host/port stored in facts."
+      ],
+      "deletion_effect": "Deleting owned discovery can probe wrong shared-network listener or miss nondefault binding; removing exact setup checks broadens accepted applications. Limits/hint fallbacks are assistant-selected.",
+      "recommendation": "Retain endpoint discovery needed by reported port/client failure; explicitly review bounded proc scanning and exact response conditions.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T08",
+      "title": "Fixed amd64, /app/data and known-version conflict checks",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 794,
+          "end": 807
+        },
+        {
+          "path": "install.py",
+          "start": 916,
+          "end": 920
+        }
+      ],
+      "current_behavior": "Requires amd64 and exactly/app/data; rejects only known semver differing0.2.16 while allowing unknown version. Candidate checked for nonempty ordinary payload file; no installed checksum/ELF/build-metadata/image allowlist is reinstated.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T04 hints; T01 release-specific candidate; native build data_dir fact."
+      ],
+      "deletion_effect": "Removing architecture/layout restrictions can run wrong artifact/storage path; removing known-version check permits silent downgrade. These checks are distinct from removed binary fingerprint gates.",
+      "recommendation": "Retain requested release/layout compatibility; present version-conflict policy separately from binary identity checks.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T09",
+      "title": "Protected journal, private root and original backup",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 392,
+          "end": 397
+        },
+        {
+          "path": "install.py",
+          "start": 677,
+          "end": 716
+        },
+        {
+          "path": "install.py",
+          "start": 936,
+          "end": 953
+        }
+      ],
+      "current_behavior": "Creates owned0700 codex-eval directory, schema3 installation journal0600 and original-sub2api backup0500; checks no-symlink ancestors, exact runtime ownership/modes and supported phase/deployment/path fields. Writes journal/facts via unique stage, chown/chmod/sync/rename.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 31,
+            "end": 32
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 227,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records reversible container-local replacement, original backups, restart/recovery and install/status/rollback/uninstall. No direct transcript or individual approval of every phase/check is available here."
+      },
+      "dependencies": [
+        "T04 uid/gid and paths; T10 phases; native installation ownership templates."
+      ],
+      "deletion_effect": "Deleting backup loses reversible replacement; deleting journal or schema/permission checks affects crash/reapply and native identity ownership. Changing state requires explicit treatment of existing files.",
+      "recommendation": "Retain original backup and needed ownership record; review strict modes/schema/phase validation as additional complexity.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T10",
+      "title": "Atomic replacement, restart checks and failure restoration",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 809,
+          "end": 812
+        },
+        {
+          "path": "install.py",
+          "start": 836,
+          "end": 894
+        },
+        {
+          "path": "install.py",
+          "start": 954,
+          "end": 993
+        }
+      ],
+      "current_behavior": "Stages candidate beside executable, writes installer facts, renames/restarts only selected container, polls Docker health/native health/maintenance status. On post-replace exception restores original, starts stopped container via protected copied backup or renames live backup, verifies health and keeps failure journal; cleans exact stage.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 31,
+            "end": 32
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 227,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records reversible container-local replacement, original backups, restart/recovery and install/status/rollback/uninstall. No direct transcript or individual approval of every phase/check is available here."
+      },
+      "dependencies": [
+        "T09 backup/journal; T06 probes; T12 safe maintenance; native runtime status."
+      ],
+      "deletion_effect": "Deleting compensation leaves failed patched binary; dropping stage/restart checks changes atomicity/readiness; replacement flag deliberately set before potentially failing mv to ensure restoration attempt.",
+      "recommendation": "Retain required replacement/recovery behavior; each phase/check remains pending individual implementation approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T11",
+      "title": "Patch digest facts and reinstall short circuit",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer_and_build_metadata",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 26,
+          "end": 29
+        },
+        {
+          "path": "install.py",
+          "start": 921,
+          "end": 933
+        },
+        {
+          "path": "install.py",
+          "start": 947,
+          "end": 965
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 96,
+          "end": 104
+        }
+      ],
+      "current_behavior": "Stores source revision/plugin source digest in installer facts/journal; matching installed journal digest plus safe maintenance/backup/running checks skips replacement. Build injects source/digest into runtime and writes development build-facts.json. Never compares installed binary bytes.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T17 functional_hash defines digest; native runtime facts consumer; T09 private records."
+      ],
+      "deletion_effect": "Removing digest-based short circuit may reinstall each time; dropping specific source/digest facts requires runtime ownership/status contracts adjusted. Deleting build-facts output only affects development provenance consumers.",
+      "recommendation": "Review metadata/idempotence necessity; do not conflate plugin digest matching with removed host binary attestation.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T12",
+      "title": "Safe maintenance status, rollback and uninstall",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 813,
+          "end": 834
+        },
+        {
+          "path": "install.py",
+          "start": 995,
+          "end": 1079
+        },
+        {
+          "path": "install.py",
+          "start": 1082,
+          "end": 1099
+        }
+      ],
+      "current_behavior": "Checks capability flag before maintenance subcommand; requires bounded machine JSON with exact deployment ID/schema/known state. Deactivate must confirm drained and owned-key revocation before original restoration; phase-resumable rollback/uninstall retain history/backup/journal. status/inspect print actual installed versus active state.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_requirement_record",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 31,
+            "end": 32
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 227,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records reversible container-local replacement, original backups, restart/recovery and install/status/rollback/uninstall. No direct transcript or individual approval of every phase/check is available here."
+      },
+      "dependencies": [
+        "Native maintenance CLI/socket/runtime ownership and Key revoke; T09/T10."
+      ],
+      "deletion_effect": "Deleting capability/schema checks can invoke unsupported original binaries or restore before owned cleanup. Removing rollback/uninstall loses requested reversible operation.",
+      "recommendation": "Retain requested status/rollback/uninstall and exact owned cleanup; review inspect alias/response/phase machinery as implementation details.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T13",
+      "title": "Raw diagnostics and live subprocess supervision",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_installer",
+      "sources": [
+        {
+          "path": "install.py",
+          "start": 130,
+          "end": 145
+        },
+        {
+          "path": "install.py",
+          "start": 245,
+          "end": 274
+        },
+        {
+          "path": "install.py",
+          "start": 720,
+          "end": 792
+        },
+        {
+          "path": "install.py",
+          "start": 1100,
+          "end": 1102
+        }
+      ],
+      "current_behavior": "Relays complete failed Docker stdout/stderr, retains exception chains/traceback; live pulls stream both pipes with30s liveness notice,120s timeout and process-group termination/drain. live_process accepts logfile but the current call graph supplies none.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 38,
+            "end": 39
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 241,
+            "end": 243
+          }
+        ],
+        "text": "Historical PRD attributes explicit container selection, single Python entry and concise complete raw diagnostics; later recorded user failure requires Docker formatting compatibility. Exact helper/validation mechanisms remain pending."
+      },
+      "dependencies": [
+        "T05 image pulls; T06 own transport diagnostics; no current builder invocation."
+      ],
+      "deletion_effect": "Deleting raw diagnostics violates recorded failure-reporting request; deleting unused logfile branches changes no current installer call; supervision teardown remains needed for pulls.",
+      "recommendation": "Retain raw error reporting; recommend removing the unused logfile option/branches as a separate narrow simplification.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T14",
+      "title": "Independent cleanup of attributable stopped helpers/workspaces",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_cleanup",
+      "sources": [
+        {
+          "path": "cleanup.py",
+          "start": 14,
+          "end": 18
+        },
+        {
+          "path": "cleanup.py",
+          "start": 46,
+          "end": 106
+        },
+        {
+          "path": "cleanup.py",
+          "start": 109,
+          "end": 130
+        },
+        {
+          "path": "cleanup.py",
+          "start": 138,
+          "end": 173
+        },
+        {
+          "path": "cleanup.py",
+          "start": 176,
+          "end": 208
+        }
+      ],
+      "current_behavior": "Inventories exact owned helper/buildx/temp prefixes; only inactive unmounted/stopped helpers and attributable owner-held nonsymlink standard-temp workspaces eligible. Optional Buildx detected via root help and conservative plain-table header/driver parsing; active/unknown retained. Exact selected IDs/dry-run, refreshed inventory per removal and symlink-safe rmtree.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 234,
+            "end": 234
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 170,
+            "end": 170
+          }
+        ],
+        "text": "Historical latest delivery records an explicit independent cleanup.py for old build leftovers, preservation of business resources/probe helper and no global prune. Earlier artifact cleanup approval explicitly retained maintained test sources."
+      },
+      "dependencies": [
+        "Docker/proc process inspection; old naming conventions; T05 helper retention; T15 image candidates."
+      ],
+      "deletion_effect": "Deleting cleanup violates separately requested utility; deleting ownership/current-use checks broadens removals; no resource is auto-selected without explicit input.",
+      "recommendation": "Retain requested selective cleanup; exact process/table/ancestry mechanisms remain independently reviewable.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T15",
+      "title": "Unowned Go/Node image and anonymous tool candidate cleanup",
+      "category": "build_or_install_tooling",
+      "path_role": "packaged_cleanup",
+      "sources": [
+        {
+          "path": "cleanup.py",
+          "start": 121,
+          "end": 137
+        },
+        {
+          "path": "cleanup.py",
+          "start": 151,
+          "end": 164
+        },
+        {
+          "path": "cleanup.py",
+          "start": 187,
+          "end": 203
+        }
+      ],
+      "current_behavior": "Offers unused unmounted tool-container candidates based on inspected Go/Node tags (including digest-started images) and unreferenced Go/Node images; requires exact selection and refreshed reference/eligibility checks. Other tags/shared/reference ambiguity retained; Alpine probe image is not a tool candidate.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 234,
+            "end": 234
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 170,
+            "end": 170
+          }
+        ],
+        "text": "Historical latest delivery records an explicit independent cleanup.py for old build leftovers, preservation of business resources/probe helper and no global prune. Earlier artifact cleanup approval explicitly retained maintained test sources."
+      },
+      "dependencies": [
+        "T14 inventory/process checks; image JSON inspection; user exact selection."
+      ],
+      "deletion_effect": "Deleting generic candidates keeps those older unlabeled build leftovers; deleting reference checks could remove shared resources. This utility never deletes volumes or global prunes.",
+      "recommendation": "Retain only the explicitly requested old-build candidate scope and refreshed checks, pending item approval.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T16",
+      "title": "Eight-file packaging, fixed outputs and atomic deterministic archive",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_packager_current_ci",
+      "sources": [
+        {
+          "path": "scripts/package-sub2api.py",
+          "start": 15,
+          "end": 35
+        },
+        {
+          "path": "scripts/package-sub2api.py",
+          "start": 45,
+          "end": 126
+        },
+        {
+          "path": "scripts/package-sub2api.py",
+          "start": 129,
+          "end": 143
+        }
+      ],
+      "current_behavior": "Packages install/cleanup/binary/five license texts, checks source/binary parity; fixed canonical raw/archive defaults, automatic system-temp stage or explicit overrides. Writes normalized USTAR/gzip(no timestamp/name/PAX) from exact paths, validates raw member bytes/types and atomically replaces archive.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T17 license/source map and facts helper; T18 binary build; T25 workflow fixed paths."
+      ],
+      "deletion_effect": "Deleting package path loses requested artifact; removing parity/tar metadata validation may reintroduce unexpected source/AppleDouble payload. Optional stage/override controls are developer conveniences.",
+      "recommendation": "Retain exact minimal payload/fixed outputs; review overrides and normalization/parity checks separately if reducing developer tooling.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T17",
+      "title": "Functional build source allowlist and package-hash coupling",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_build_and_package_current",
+      "sources": [
+        {
+          "path": "scripts/universal_payload.py",
+          "start": 1,
+          "end": 12
+        },
+        {
+          "path": "scripts/prebuilt_dev.py",
+          "start": 44,
+          "end": 51
+        },
+        {
+          "path": "scripts/package-sub2api.py",
+          "start": 12,
+          "end": 18
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 648,
+          "end": 686
+        }
+      ],
+      "current_behavior": "Explicit SOURCES selects core/adapter/runtime resources for developer builds; package only uses its LICENSE entries. functional_hash includes adapter Dockerfile and all functional resources except installer/non-ModelTrace licenses, omits cleanup.py and tests. Package parses bounded single literal TOOL_FACTS via old sub2api_build and requires hash match.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "All C items/native inventory; T11 source digest; T16 packaging; historical helper imports T26."
+      ],
+      "deletion_effect": "Deleting entire universal_payload or sub2api_build breaks current package/build even though most older machinery is unused. Changing source hashes requires updating facts together; Dockerfile is hash-active despite not build-executed.",
+      "recommendation": "Retain actual source allowlist; review source-hash/facts coupling as an implementation addition. Do not remove whole historical modules before addressing live consumers.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T18",
+      "title": "Developer v0.2.16 source acquisition and build profile",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_build_current_ci",
+      "sources": [
+        {
+          "path": "scripts/prebuilt_dev.py",
+          "start": 14,
+          "end": 60
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "start": 24,
+          "end": 32
+        }
+      ],
+      "current_behavior": "Verifies peeled annotated tag equals fixed revision, downloads codeload archive, checks safe archive paths/types and records observed archive SHA; copies SOURCES and builds profile amd64,/app/data,version0.2.16. Profile describes local-go1.27.2/local-node24 but Python does not probe those executables; CI sets Go1.27.2/Node24.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T17 source map/hash; T19 actual builder; upstream revision/network; repository developer README."
+      ],
+      "deletion_effect": "Deleting loses currently documented release build; tag/archive/profile checks are developer provenance, not installer compatibility. Removing profile tool labels changes facts only; changing Node requires existing upstream contract review.",
+      "recommendation": "Retain actual user-requested build from official0.2.16; profile metadata/tool selection extras remain pending. Pristine baseline used upstream Node20 and must not be misrepresented as this builder.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T19",
+      "title": "Actual frontend/backend builder and generated data-path facts",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_build_current_ci",
+      "sources": [
+        {
+          "path": "adapter/build.py",
+          "start": 14,
+          "end": 51
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 53,
+          "end": 107
+        }
+      ],
+      "current_behavior": "Verifies selected source revision/archive provenance, hashes locks, runs native AST rules/runtime copies/UI edits, copies staged core/ModelTrace license, emits EvalDataDir/control.sock init. Frozen pnpm build is embedded, compiler type check runs, static embed Linux target built with release/source/digest ldflags, lock hashes compared and build facts written.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T18 source/profile; T20 AST engine; T21 type-export extra; native structural inventory; T17 allowlist."
+      ],
+      "deletion_effect": "Deleting builder disables plugin-enabled compile; removing generated facts breaks/app/data runtime location; source/lock validation and build-facts output are additional decisions beyond compile.",
+      "recommendation": "Retain required actual frontend/core/native runtime compilation; review source/lock guard and generated build metadata individually.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T20",
+      "title": "AST structural edit engine and source transaction",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_build_current",
+      "sources": [
+        {
+          "path": "adapter/main.go",
+          "start": 45,
+          "end": 95
+        },
+        {
+          "path": "adapter/main.go",
+          "start": 173,
+          "end": 258
+        },
+        {
+          "path": "adapter/main.go",
+          "start": 260,
+          "end": 349
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 17,
+          "end": 26
+        }
+      ],
+      "current_behavior": "Matches exact declaration/scoped canonical AST sequences with neighboring anchors, fails missing/ambiguous/overlapping hooks, stages formatted Go then writes all required edit files. Operates on current rules.json, not historical *.patch files; engine compiled from main.go/typecheck.go only.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "Researcher inventory owns exact individual native rules; T19 invokes engine; added imports/declarations in recipe."
+      ],
+      "deletion_effect": "Deleting engine prevents applying current native source hooks. Removing strict matching changes source acceptance; it does not remove a specific runtime behavior by itself.",
+      "recommendation": "Retain only because current build requires this application mechanism, pending approval; judge actual runtime rules separately and do not retain universal compatibility guards merely by prior spec.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T21",
+      "title": "Separate native compiler-export contract gate",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_build_current",
+      "sources": [
+        {
+          "path": "adapter/typecheck.go",
+          "start": 15,
+          "end": 95
+        },
+        {
+          "path": "adapter/typecheck.go",
+          "start": 99,
+          "end": 189
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 92,
+          "end": 93
+        }
+      ],
+      "current_behavior": "Before final build, go list -deps -export compiles graph, loads go/types exports and requires a large named method/field map including receiver identity and internal native types. This duplicates some final compiler compatibility checks while asserting extra expected type shapes.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T20 types operation; native service recipe/runtime; requires compiled dependency graph."
+      ],
+      "deletion_effect": "Removing this invocation/map leaves final Go compilation but loses explicit named API/field-shape gate and its failures; historical type-contract tests may need consumer adjustment.",
+      "recommendation": "Recommend separate review of removing this additional gate; no specific user request for compiler-export map was found. Do not add a substitute acceptance gate.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T22",
+      "title": "Development-only AST recipe exporter",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_unused_current_build",
+      "sources": [
+        {
+          "path": "adapter/export_dev.go",
+          "start": 136,
+          "end": 194
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 23,
+          "end": 25
+        }
+      ],
+      "current_behavior": "Optional extract operation derives rules by comparing before/after Go ASTs and serializes recipe. build.py compiles only main.go/typecheck.go, so export_dev.go is absent from current build engine and SOURCES.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "Manual developer command may compile exporter with engine; current rules remain ordinary files."
+      ],
+      "deletion_effect": "Deleting exporter does not change current binary/package/install path; removes maintenance regeneration tool only.",
+      "recommendation": "Recommend removing unused exporter only through its own approval; no runtime justification exists.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T23",
+      "title": "Test materialization overlays and source parity",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_test_current_ci",
+      "sources": [
+        {
+          "path": "scripts/prebuilt_test.py",
+          "start": 13,
+          "end": 36
+        },
+        {
+          "path": "scripts/universal_dev.py",
+          "start": 19,
+          "end": 39
+        },
+        {
+          "path": "tests/go.mod",
+          "start": 1,
+          "end": 4
+        },
+        {
+          "path": "scripts/export-sub2api-overlays.py",
+          "start": 7,
+          "end": 20
+        }
+      ],
+      "current_behavior": "Re-extracts verified original build archive into temp Git baseline, reapplies current structural adapters, copies v0.2.15-named test-overlay patches plus tests/overlays/codexeval, and checks existing backend/frontend bytes unchanged. Separate tests/go.mod hides raw host-dependent overlays from root Go discovery. Overlay exporter derives add-only test patches from tests/host-overlay.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 25,
+            "end": 29
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 228
+          }
+        ],
+        "text": "Historical PRD records native billing/concurrency, exact group/account routing and native administrator auth; its latest delivery section preserves those behaviors. No current individual retain decision exists."
+      },
+      "dependencies": [
+        "Current native/core regressions; test-overlay path is active despite versioned name; T20; T24 gates."
+      ],
+      "deletion_effect": "Deleting test overlays/materialization removes actual focused native/core regressions; deleting versioned production patches does not remove these tests. Exporter is dev-only but maintains active overlay files.",
+      "recommendation": "Retain necessary existing regression sources per user instruction; review materialization/export helpers individually, without treating old path name as an unused patch indication.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T24",
+      "title": "Current local gates, historical helper tests and legacy UI test owner",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_tests_current_ci",
+      "sources": [
+        {
+          "path": "scripts/test-sub2api.sh",
+          "start": 20,
+          "end": 41
+        },
+        {
+          "path": "scripts/universal_dev.py",
+          "start": 41,
+          "end": 47
+        },
+        {
+          "path": "tests/installer/current_suite.py",
+          "start": 1,
+          "end": 26
+        },
+        {
+          "path": "scripts/test_sub2api_build.py",
+          "start": 14,
+          "end": 21
+        },
+        {
+          "path": "scripts/test-ui.cjs",
+          "start": 7,
+          "end": 7
+        }
+      ],
+      "current_behavior": "Current check runs historical build-helper test module, selectively current installer suite, facts check, shell syntax, root vet/test and scripts/test-ui.cjs. That UI harness reads internal/plugin/web (CPA), not internal/eval/web. Native gates run vet/unit/integration in adapted workspace; race invocation already removed by main.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T17 hash helpers; T23 overlays; CPA root tests remain retained; tests/ui/sub2api-browser.js is separate actual native browser fixture."
+      ],
+      "deletion_effect": "Deleting whole check would remove required regression coverage; dropping historical helper tests changes only historical functionality evidence. Passing CPA UI harness cannot prove current native UI.",
+      "recommendation": "Review additional historical helper/shell/UI-gate inclusion separately; retain applicable upstream/current user-approved checks. No new gates or tests are proposed.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T25",
+      "title": "Sub2API CI/release delivery wiring",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_ci_release",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "start": 12,
+          "end": 61
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "start": 63,
+          "end": 77
+        }
+      ],
+      "current_behavior": "On tags/workflow dispatch verifies plugin tag, builds patched frontend/binary, runs frontend tests/local/native gates, packages fixed archive, runs owned disposable official-image lifecycle, uploads archive; tag job publishes only archive after delivery. Publication has not been run in this audit.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 223,
+            "end": 231
+          }
+        ],
+        "text": "Historical latest-delivery section explicitly attributes v0.2.16 Linux/amd64 binary replacement, /app/data layout, no on-host compilation and minimal payload to the user. This remains past requirement evidence, not current retention approval."
+      },
+      "dependencies": [
+        "T18/T16/T23/T24; Docker lifecycle fixture; TOOL_FACTS release tag."
+      ],
+      "deletion_effect": "Deleting workflow removes automated build/release route; deleting individual extra steps changes release requirements. No runtime/installer behavior changes until a later artifact build.",
+      "recommendation": "Retain requested release artifact wiring pending review of each extra check; do not infer current permission to publish from workflow contents.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T26",
+      "title": "Historical pinned-host manifest and unused source/patch machinery",
+      "category": "build_or_install_tooling",
+      "path_role": "historical_developer_code_partially_live_import",
+      "sources": [
+        {
+          "path": "compatibility/sub2api-v0.2.15.json",
+          "start": 1,
+          "end": 27
+        },
+        {
+          "path": "compatibility/sub2api-v0.2.15.json",
+          "start": 65,
+          "end": 114
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 77,
+          "end": 152
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 163,
+          "end": 224
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 266,
+          "end": 391
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 445,
+          "end": 645
+        },
+        {
+          "path": "scripts/sub2api_build.py",
+          "start": 689,
+          "end": 845
+        }
+      ],
+      "current_behavior": "Old manifest pins0.2.15 images/platforms/toolchain/core/production patches; old helpers verify source/tools, parse/validate patch paths, prepare/reuse/backup workspaces, apply production patches, stage core, materialize old tests and write provenance/CLI commands. Current prebuilt build/install do not call these functions. Active imports still use _sha256_file, parse_release_facts and validate_installer_facts.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T17/T16 live small helpers; scripts/pnpm and historical foundation tests still consume old manifest/CLI."
+      ],
+      "deletion_effect": "Deleting whole file immediately breaks current packaging/CI; deleting only unused helper families leaves current runtime unchanged but affects historical tests/pnpm CLI.",
+      "recommendation": "Recommend reviewing unused historical helper families individually after identifying live imports; no bulk module deletion.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T27",
+      "title": "Historical versioned production and combined patch trees",
+      "category": "build_or_install_tooling",
+      "path_role": "historical_not_current_runtime_input",
+      "sources": [
+        {
+          "path": "patches/sub2api/v0.2.15/production/001-codex-eval-auth.patch",
+          "start": 1,
+          "end": 14
+        },
+        {
+          "path": "patches/sub2api/v0.2.15/005-codex-eval-deployment-evidence.patch",
+          "start": 1,
+          "end": 2
+        },
+        {
+          "path": "compatibility/sub2api-v0.2.15.json",
+          "start": 65,
+          "end": 67
+        },
+        {
+          "path": "adapter/build.py",
+          "start": 17,
+          "end": 38
+        },
+        {
+          "path": "scripts/universal_dev.py",
+          "start": 30,
+          "end": 31
+        }
+      ],
+      "current_behavior": "Top-level001–006 combined patches and production001–004/007/008 represent earlier0.2.15 wiring/topology/loopback evidence. Current builder reads structural rules/current runtime/core, not these production/combined patches. Versioned test-overlay directory is separately live under T23.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "Old manifest/helper tests T26 reference production tree; pristine history retained separately."
+      ],
+      "deletion_effect": "Deleting historical production/combined files does not alter current build/runtime/install, but can break old manifest helper tests/evidence links. Deleting test-overlay instead would affect active regressions.",
+      "recommendation": "Recommend review of each obsolete historical patch family for removal; preserve evidence and current test-overlay distinction.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T28",
+      "title": "Retired wrappers and stale tool-shim contracts",
+      "category": "build_or_install_tooling",
+      "path_role": "historical_developer_entries",
+      "sources": [
+        {
+          "path": "scripts/build-sub2api.sh",
+          "start": 1,
+          "end": 10
+        },
+        {
+          "path": "scripts/export-sub2api-production.py",
+          "start": 1,
+          "end": 7
+        },
+        {
+          "path": "scripts/generate-wire.sh",
+          "start": 4,
+          "end": 26
+        },
+        {
+          "path": "scripts/pnpm",
+          "start": 4,
+          "end": 7
+        },
+        {
+          "path": "scripts/pnpm-support.sh",
+          "start": 1,
+          "end": 6
+        },
+        {
+          "path": "scripts/test-sub2api.sh",
+          "start": 25,
+          "end": 30
+        }
+      ],
+      "current_behavior": "build-sub2api.sh check still validates facts; normal invocation prints obsolete install-time-build instruction then exit2. Production exporter is explicit exit2 tombstone; Wire temp-mod helper and pnpm compatibility0.2.15 shim/support have no current adapter build caller, although shell syntax gate still reads them.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T26 historical manifest/CLI; test-sub2api shell syntax; current build uses corepack directly and existing wire_gen recipe."
+      ],
+      "deletion_effect": "Deleting wrappers/shims leaves current Python build/install/runtime unchanged except shell syntax/reference adjustments; deleting check alias loses a convenience facts command.",
+      "recommendation": "Recommend separate removal review for each retired/stale entry, especially misleading automatic-build output; do not invoke them.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T29",
+      "title": "Unused Docker build recipe still enters functional digest",
+      "category": "build_or_install_tooling",
+      "path_role": "developer_unexecuted_hash_input",
+      "sources": [
+        {
+          "path": "adapter/Dockerfile",
+          "start": 1,
+          "end": 14
+        },
+        {
+          "path": "scripts/universal_payload.py",
+          "start": 5,
+          "end": 12
+        },
+        {
+          "path": "scripts/prebuilt_dev.py",
+          "start": 49,
+          "end": 53
+        }
+      ],
+      "current_behavior": "Docker multi-stage recipe copies source/core/adapter/licenses and calls build.py with Go/Node image ARGs; current prebuilt_dev directly runs local Python builder and installer has no docker build. SOURCES still copies Dockerfile and functional_hash includes it.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T17 digest/facts; old on-host build history; no current CI Docker build."
+      ],
+      "deletion_effect": "Deleting Dockerfile alone changes functional hash and breaks facts validation even though executable runtime source is unchanged; must address map/facts together after approval.",
+      "recommendation": "Recommend removal review of this unexecuted hash input, preserving awareness of live digest dependency.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T30",
+      "title": "Obsolete two-release universal CI runner",
+      "category": "build_or_install_tooling",
+      "path_role": "historical_developer_unused",
+      "sources": [
+        {
+          "path": "tests/installer/universal_ci.py",
+          "start": 17,
+          "end": 44
+        }
+      ],
+      "current_behavior": "Packages current minimal prebuilt release then tries universal_dev.prepare using that release as a source package for two latest upstream tags; source package no longer contains adapter/core, so path is stale. Not referenced by current workflow/current_suite.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "no_specific_user_authorization_found",
+        "sources": [],
+        "text": "No direct user requirement authorizing this specific extra mechanism was found in the inspected task artifacts. An earlier spec or implementation is insufficient retention approval."
+      },
+      "dependencies": [
+        "T23 adapt needs source package; T16 now only emits eight files; historical universal deliverable superseded."
+      ],
+      "deletion_effect": "Deleting runner does not change current CI/runtime/install; loses historical entry only. No current execution/reproduction performed.",
+      "recommendation": "Recommend reviewing removal of stale runner; do not interpret it as current universal support or run it during planning.",
+      "approval_status": "pending_current_individual_approval"
+    },
+    {
+      "id": "T31",
+      "title": "Historical installer source-progress/build tests with live selective imports",
+      "category": "build_or_install_tooling",
+      "path_role": "historical_tests_mixed_with_current_suite",
+      "sources": [
+        {
+          "path": "tests/installer/current_suite.py",
+          "start": 3,
+          "end": 24
+        },
+        {
+          "path": "tests/installer/test_preflight.py",
+          "start": 1,
+          "end": 24
+        },
+        {
+          "path": "scripts/test_sub2api_build.py",
+          "start": 14,
+          "end": 21
+        }
+      ],
+      "current_behavior": "Old source-builder/progress/universal test files remain maintained. Current_suite selects transaction/clientless/prebuilt/cleanup/compat cases plus named preflight/discovery cases from old modules; foundation test module remains invoked by current local gate.",
+      "original_comparison": "New Sub2API tooling; original CPA installer/build/deployment is outside this audit unless explicitly referenced.",
+      "requirement_provenance": {
+        "kind": "historical_user_attribution",
+        "sources": [
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 234,
+            "end": 234
+          },
+          {
+            "path": ".trellis/tasks/10-11-sub2api-runtime-patch/history/before-pristine-baseline-planning-2026-10-14/prd.md",
+            "start": 170,
+            "end": 170
+          }
+        ],
+        "text": "Historical latest delivery records an explicit independent cleanup.py for old build leftovers, preservation of business resources/probe helper and no global prune. Earlier artifact cleanup approval explicitly retained maintained test sources."
+      },
+      "dependencies": [
+        "T24 selected tests; historical source/progress test modules; user earlier retained maintained tests."
+      ],
+      "deletion_effect": "Deleting all old-looking test files can break live imports/selected tests and discard deliberately retained sources. Dropping invocation of obsolete-only cases is different from deleting tests.",
+      "recommendation": "Retain test source unless explicitly approved individually; review gate membership separately. No test deletion or assertion weakening is authorized.",
+      "approval_status": "pending_current_individual_approval"
+    }
+  ]
+}

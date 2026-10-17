@@ -1,0 +1,286 @@
+{
+  "date": "2026-10-15",
+  "purpose": "Fresh rebuild inputs; migrated internal/eval/adapter/tooling excluded. Read-only origin verification, no build/tests.",
+  "plugin": {
+    "version": "0.3.14",
+    "commit": "6b46d4f1c85a49b661baca81340123e9348c156a",
+    "tree": "ea7880c8f22a499f5fbc577d2ea85aeacc2e774d",
+    "current_tracked_files_byte_equal": true,
+    "files": [
+      {
+        "path": "internal/plugin/candy.go",
+        "git_blob": "2c74324351501a6058891981c51dc9dd2f1ed7b8",
+        "sha256": "5154a0c5c9d8efcd9b270a74009ccaa501acdd4e92ce09059099b97e7914f6db",
+        "bytes": 4160
+      },
+      {
+        "path": "internal/plugin/codex.go",
+        "git_blob": "912ebbf3e96b3e3a2c00e581771e4379c44062e3",
+        "sha256": "1bfe991f7e4cf29760f619a8233d40b6c6d48433f6084ac964a41d39eec8fd35",
+        "bytes": 10433
+      },
+      {
+        "path": "internal/plugin/codex_test.go",
+        "git_blob": "42de220a529447fe833776218e22b73b3af01db1",
+        "sha256": "9a22e19013b3e60e2b81fe81b9087b25e1d0c25f1dd431079caa8270543a8bf8",
+        "bytes": 1339
+      },
+      {
+        "path": "internal/plugin/credentials.go",
+        "git_blob": "822995cccb8266c88fccbd1617e472d3d8c3e159",
+        "sha256": "3e49b8fd3144ce7194dfedf9eb90206dc46cbb032fc8f3b7b4bfb2ec75e57edb",
+        "bytes": 8960
+      },
+      {
+        "path": "internal/plugin/credentials_test.go",
+        "git_blob": "59315e0a9645736f21e3c851c64390b55d639210",
+        "sha256": "d810ed60da35c1f81a0d5f24cbad112d92b9340bcad175daf2452c992d00507c",
+        "bytes": 7704
+      },
+      {
+        "path": "internal/plugin/data/codex_context.json",
+        "git_blob": "6e1f46b4cd71e4a90bea27c08229c9b70119a90d",
+        "sha256": "57d6a582da9a1e3893581296ccaebe205eb4a433a0802bbafea3f3edd7fb992e",
+        "bytes": 72434
+      },
+      {
+        "path": "internal/plugin/data/fingerprint_baselines.json",
+        "git_blob": "51e154cd9367e8088a80a8467b00159e40e13167",
+        "sha256": "bf3a8f19be9206827a541489ea4e6542010aedd4d4f4c3b4b19438e2ae0a6161",
+        "bytes": 27869
+      },
+      {
+        "path": "internal/plugin/data/fingerprint_probes.json",
+        "git_blob": "abc97e41154c168493b2567b63ac65bc3f02f9c8",
+        "sha256": "b415f7eeb6f1d0edc574e4e55c6391389546c40e4c29fefaf6e0a3867db805ea",
+        "bytes": 5268
+      },
+      {
+        "path": "internal/plugin/data/modeltrace/LICENSE",
+        "git_blob": "ce5be481b5259e4df7a182d6df0b2f21661f21a6",
+        "sha256": "238afb57e498990742f84b9ce6167b4e256ac06104a9938ce953bc41c14bea51",
+        "bytes": 1064
+      },
+      {
+        "path": "internal/plugin/data/modeltrace/README.md",
+        "git_blob": "dabf4f794cdad8a64986137916d58103feca5889",
+        "sha256": "33de74f9cfc60a37792981c06f5b175c1a06b6ce6a68112b22dff17497c7bc29",
+        "bytes": 738
+      },
+      {
+        "path": "internal/plugin/data/modeltrace/unified_bank.json",
+        "git_blob": "6271c09e1a6b183dc00b67f23cbede942f1147cf",
+        "sha256": "a4e256c00444179b76f3855578660e66f30659df8c0122f1768dd05a8d705630",
+        "bytes": 882722
+      },
+      {
+        "path": "internal/plugin/fingerprint.go",
+        "git_blob": "ab0ce978903c4a36fac68b5da9bea89a1e53d964",
+        "sha256": "1774752cd0e72502eb4638a7be44d629482256353a353c224ece1fd2ec8c2ac3",
+        "bytes": 7694
+      },
+      {
+        "path": "internal/plugin/fingerprint_algorithm.go",
+        "git_blob": "bf5e377d70b934ec34ff2acbb6d3c9dc676e4bd8",
+        "sha256": "102a7aa17d4ff1c4246b66ef47e441e1cd166330628c6e571402764b66fe8059",
+        "bytes": 13051
+      },
+      {
+        "path": "internal/plugin/fingerprint_test.go",
+        "git_blob": "e663592519f9cc4fc9eb6c1169793845ad2d8f17",
+        "sha256": "4a05cfbb8860fb82ecbf93e0a960f39502365a1a06407d53d07ddd959bebf491",
+        "bytes": 12686
+      },
+      {
+        "path": "internal/plugin/inspection.go",
+        "git_blob": "214f9daae0a23eeff7c2ddfd1f2d0956858f442d",
+        "sha256": "7fb90366e24ce7b246988eba36975e0bebd5a42699ce140f14a1da6649df5f6c",
+        "bytes": 5286
+      },
+      {
+        "path": "internal/plugin/inspection_test.go",
+        "git_blob": "1068e255a28249cc0683f4638b73e68b544fd1f1",
+        "sha256": "aea67a43d1f3a2fe41dfa5e0265c0227f7539ade79fa2d2deb6ef2c17060ab4b",
+        "bytes": 2261
+      },
+      {
+        "path": "internal/plugin/model.go",
+        "git_blob": "09e86b6f258e3a2f30bd007261c2f410e2af4f96",
+        "sha256": "e6dbdfbeb6b4a5eef43a3187195f2ac84fedb430b7c1016e1055e16bf5cddf07",
+        "bytes": 8530
+      },
+      {
+        "path": "internal/plugin/model_test.go",
+        "git_blob": "d270332a52df3420ac8536f63be32e87d28851f2",
+        "sha256": "803df38cb03073ee3f881dc304e9308da14bef41f059df27893e408efa013cc8",
+        "bytes": 10003
+      },
+      {
+        "path": "internal/plugin/modeltrace.go",
+        "git_blob": "7ff52210412a0fa49b076e3614c20b0654fb4483",
+        "sha256": "aa39090a5f97d65ba71a5cbc9c0629b3e817dd66fb7f1390e918174547559ad4",
+        "bytes": 8949
+      },
+      {
+        "path": "internal/plugin/modeltrace_algorithm.go",
+        "git_blob": "79f3ab2f0bab7fe4af7712b3f48e55b0f96be683",
+        "sha256": "5b4f8b43330947ff95891d4b7b7ddbed03741cc67054d3b7116cf118c2ea3bcb",
+        "bytes": 8745
+      },
+      {
+        "path": "internal/plugin/modeltrace_test.go",
+        "git_blob": "88e8346ec6074b1d4b9a2d9e4c090d17e6107f73",
+        "sha256": "762e305794a1d896d574dac7cfac11e2ddc722ef7b109eb3700f9d865f215cdd",
+        "bytes": 11534
+      },
+      {
+        "path": "internal/plugin/pelican.go",
+        "git_blob": "e5575f4f62484878d3cc3417b808eb7f845d3052",
+        "sha256": "c560b0a606e49446d672947c9c3b281536cb403c4e568a7dc5dc1880cdf0142a",
+        "bytes": 4233
+      },
+      {
+        "path": "internal/plugin/pelican_test.go",
+        "git_blob": "12b4ed868535394a4ea07d47476e133051e79db9",
+        "sha256": "c79e6f0e11457326c89743b1e727763a5b5e2ba8f38e3a1ad61e2081bc231d22",
+        "bytes": 2580
+      },
+      {
+        "path": "internal/plugin/plugin.go",
+        "git_blob": "3567b3d3f9a4f6ff7f972a10f542ed1b4a5732d9",
+        "sha256": "1a0d973b0158fe306218bf1de6120b888bb4096e336aba1192610fbaf3b50b9a",
+        "bytes": 13922
+      },
+      {
+        "path": "internal/plugin/plugin_test.go",
+        "git_blob": "5167464ba38b1bf93ebcaaf693b14e2395f24bb4",
+        "sha256": "551eea38ec5d0af19ede4eaa56d904338ef9fbc7f38112dec8b4f8048b74197c",
+        "bytes": 14023
+      },
+      {
+        "path": "internal/plugin/runs.go",
+        "git_blob": "c326d19a19eeffd6b279f9a40eec19ee5066e900",
+        "sha256": "78e8c4247733ede18b021113446a8b1fd55e8da42bf6ba8b5c8605cfde264580",
+        "bytes": 2639
+      },
+      {
+        "path": "internal/plugin/state.go",
+        "git_blob": "697241896154b37c96f9b863449229b578224756",
+        "sha256": "3a00c43cdd9b3248a319622c6f9aca571d284cc8ce75adcfa5c46ff2745186a2",
+        "bytes": 4429
+      },
+      {
+        "path": "internal/plugin/testdata/modeltrace-golden.json",
+        "git_blob": "ca2a9beab57526603dd852ba56f1243dbe25ba24",
+        "sha256": "e1f22d86017c09c027a8558bc20984f1335aada73652426cc13ef73b2529fea2",
+        "bytes": 31011
+      },
+      {
+        "path": "internal/plugin/web/app.js",
+        "git_blob": "2f2bf5b226411edd9a5434f1ff27bb046882d4f4",
+        "sha256": "da8cc63a078b9119b898adf04e7d1114e7b8e1cb4b8004d6fd0a6ca6201d89d7",
+        "bytes": 24612
+      },
+      {
+        "path": "internal/plugin/web/candy.js",
+        "git_blob": "d07429e31a06275fe24436d74f6e30d1d8070dd3",
+        "sha256": "527f7300a5f31c8848cf8b181bde46f03beca9a6611a252a240f63c2aca71c3a",
+        "bytes": 6049
+      },
+      {
+        "path": "internal/plugin/web/catalog.js",
+        "git_blob": "b3f0274fae116ab3f75f6655a3fc5235a9a56143",
+        "sha256": "a80bcd330eb483a18144da083e25095b8f96f0f4d7d7cc1e3f935803a843e969",
+        "bytes": 7966
+      },
+      {
+        "path": "internal/plugin/web/components.js",
+        "git_blob": "899acead10532b8e645c6a6143a09f902af53f80",
+        "sha256": "2f62a592cff1c1481075ec29e08b2ae2eb5dec6fecb55d23c4dd189692080d55",
+        "bytes": 21450
+      },
+      {
+        "path": "internal/plugin/web/credentials.js",
+        "git_blob": "342c434c26cc96d53f2f6b569df55c46943fd984",
+        "sha256": "13121538eb2358823847c508a556957bbae52ccda7978ba2c0764fc4e441b8f4",
+        "bytes": 8170
+      },
+      {
+        "path": "internal/plugin/web/fingerprint.js",
+        "git_blob": "25449b872ddd712120a1fda5a6897ea34e1697e9",
+        "sha256": "252dbbb331c7709fa9b2dfe85c229301d09bae1dff8d87b9f6836b4f73b0d1cf",
+        "bytes": 8771
+      },
+      {
+        "path": "internal/plugin/web/modeltrace.js",
+        "git_blob": "2a11314f67bbc7e08a8cb9a4d438c13f5dc4e68b",
+        "sha256": "624a1b6393622b4980a567c3fcc4586d2813dfbef4763d228473042bd60089b1",
+        "bytes": 6549
+      },
+      {
+        "path": "internal/plugin/web/pelican.js",
+        "git_blob": "c2193404922013bd216f078deac4c88a3a99ada1",
+        "sha256": "77a311756458b3f7b4593ce9a289d2d3a6d0d3eb7260f5ceb34b7c6e330a7551",
+        "bytes": 5448
+      },
+      {
+        "path": "internal/plugin/web/style.css",
+        "git_blob": "f9dc94031b6a996a7747cf70b1ef7b0d0e361b34",
+        "sha256": "c77317f1730607f33c5ff9e49d02cec360ec22d823ef6d5761af95489e00e2cf",
+        "bytes": 33150
+      },
+      {
+        "path": "internal/plugin/web/theme.css",
+        "git_blob": "6c375e320ddc1cb07c12582c5fcea050c065ed8d",
+        "sha256": "268aea156a9a8857984b3441e37f2f18ec7cf73935ea3d20961a5fde04fe07aa",
+        "bytes": 9906
+      },
+      {
+        "path": "internal/plugin/web/ui.html",
+        "git_blob": "a4a91769ae4a67ea7024a6228567d34f3dd2d9ee",
+        "sha256": "2b11032a692b1b5b979a306535af45ab05907415ad3440a124a731ff6b93c090",
+        "bytes": 11564
+      },
+      {
+        "path": "internal/plugin/web/vendor/markdown-it-cjk-friendly.min.js",
+        "git_blob": "fb510c96bda3e593fc5725ef51ec8a52e5d73b40",
+        "sha256": "6fd5c46756b4d3bb9443c2586fa390a8eac05c796342256cb7ee872995749626",
+        "bytes": 5926
+      },
+      {
+        "path": "internal/plugin/web/vendor/markdown-it.min.js",
+        "git_blob": "15ef0b50ba03a0181d8760d419d6768acddc7792",
+        "sha256": "4e208769a1df5992c8d428527011664dd50ee1a02be6d7ff309c86b6417b027a",
+        "bytes": 115162
+      },
+      {
+        "path": "internal/plugin/web/vendor/temml.css",
+        "git_blob": "2a31acae8dac7905ddf31c3dfb4a183535571f5b",
+        "sha256": "4c8752298811c7661b420640217bfac358e741e770a3c05fccb79680d74a3403",
+        "bytes": 21634
+      },
+      {
+        "path": "internal/plugin/web/vendor/temml.min.js",
+        "git_blob": "354041d70b5c91245cdcd2ad96ab807ac46a269f",
+        "sha256": "465eec627af76e1e2510a933a3339d0172fde747a3e06709ca79d58114930cc2",
+        "bytes": 168273
+      },
+      {
+        "path": "internal/plugin/web/vendor/texmath.js",
+        "git_blob": "eb049d19209c92df554b3b9f4f06e36e9fbd37d3",
+        "sha256": "926e075a1745e1019813b8418b90183feea0c7b3782c85dceb4f246da999edc6",
+        "bytes": 14071
+      }
+    ]
+  },
+  "sub2api": {
+    "version": "0.2.16",
+    "commit": "01842576b3d5c1e2545b5a99ad555d36e28ed306",
+    "archive": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/source-v0.2.16.tar.gz",
+    "expected_sha256": "eef7e0519b05b8254c981efbab7bfe74c5d89897c67053e81380987366daae89",
+    "observed_sha256": "eef7e0519b05b8254c981efbab7bfe74c5d89897c67053e81380987366daae89",
+    "extracted_tree": "/var/folders/md/v0dh5x2n7t17w1j31yp4kkhh0000gn/T/pristine-sub2api-v0.2.16.ifVBya/extracted/sub2api-01842576b3d5c1e2545b5a99ad555d36e28ed306",
+    "extracted_tree_exists": true,
+    "completed_baseline": "research/pristine-v0.2.16-baseline.md"
+  }
+}
