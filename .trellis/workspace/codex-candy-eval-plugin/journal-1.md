@@ -107,3 +107,38 @@ Fixed refresh readiness and stale-priority inspection counts. Added persistent p
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Independent inspection verdict state
+<!-- trellis-session: v=2 fp=a2ff233e2213cfde -->
+
+**Date**: 2026-10-18
+**Task**: Independent inspection verdict state
+**Branch**: `fix/inspection-controls`
+
+### Summary
+
+Separate saved inspection verdicts from actual priority and retain the single reusable test container.
+
+### Main Changes
+
+- Default absent verdicts to normal. Save confirmed transitions before optional priority writes.
+- Keep stable rounds to one test without compatibility, synchronization, retries, or notification changes.
+- Retain sub2api-codex-eval-test and its fixture data after checks.
+- Resolve the archive pathspec failure with the generated archive message and actual archived-directory scope.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c22806` | fix(codex-eval)!: separate inspection verdicts from priority |
+| `aecf699` | docs: retain the reusable Sub2API test container |
+
+### Testing
+
+- [OK] The established build/check and final Trellis review passed. The adjustment-off lifecycle verified 3/1/3/1 sender calls.
+- [OK] Both work commits and the task archive commit passed signature verification.
+
+### Status
+
+[OK] **Completed**
