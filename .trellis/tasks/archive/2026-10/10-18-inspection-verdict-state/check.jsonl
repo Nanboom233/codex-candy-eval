@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index.md","reason":"Current patch and delivery owners."}
+{"file":".trellis/spec/backend/native-inspection.md","reason":"Review preserved scheduling, manual tests, participation, and cancellation against approved verdict changes."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify key-only Extra persistence and full-edit preservation."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review the bounded check table and reuse valid evidence without extra gates."}
+{"file":".trellis/spec/backend/minimal-linux-delivery.md","reason":"Verify final patch build and retained-container constraints."}
+{"file":".trellis/tasks/10-18-inspection-verdict-state/research/verdict-state-contract.md","reason":"Review the actual defect and storage boundaries. Approved task artifacts control final behavior and validation scope."}

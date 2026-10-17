@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index.md","reason":"Current patch delivery scope and existing build entry."}
+{"file":".trellis/spec/backend/native-inspection.md","reason":"Existing coordinator, confirmation, participation, and notification contracts. Approved task artifacts define the verdict changes."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Native account Extra merge and full-edit preservation."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Focused checks, evidence reuse, and work commit rules."}
+{"file":".trellis/spec/backend/minimal-linux-delivery.md","reason":"Original upstream source, fixed build outputs, and one retained test container."}
+{"file":".trellis/tasks/10-18-inspection-verdict-state/research/verdict-state-contract.md","reason":"Code-level defect, native persistence path, normal default, and transition-only priority writes. implement.md limits the check scope."}
