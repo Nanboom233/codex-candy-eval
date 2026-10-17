@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-10-11
+- **Total Sessions**: 2
+- **Last Active**: 2026-10-18
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~50 | Active |
+| `journal-1.md` | ~87 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-10-18 | Complete the native Sub2API v0.2.17 migration | `6cac3a2` | `feat/sub2api-runtime-patch` |
 | 1 | 2026-10-11 | Initialize Trellis and portable AI integration | `2e01ddb`, `f84347d` | `main` |
 <!-- @@@/auto:session-history -->
 
