@@ -80,7 +80,9 @@ Use native groups/accounts and evaluation-specific raw model suggestions directl
 Manual account inventories must contain only selected-group members on every page.
 Read `/api/v1/admin/accounts?platform=openai&group=<id>&lite=1&page=<n>&page_size=100` and its `group_ids` field.
 Refresh account membership on ordinary polls and reject obsolete group responses before updating the catalog.
-Block manual starts during an inventory refresh or after its failure. Keep the error visible until recovery.
+Keep the last valid same-group inventory usable during background refresh. Preserve unchanged row controls, selection, and expanded history.
+Block starts before the initial successful read, after a group/session change, or after an actual inventory failure.
+Keep an inventory error visible until recovery. Do not clear valid readiness merely because another request starts.
 Current inventory determines rows and targets even when the subsequent evaluation-state request fails.
 An evaluation-state failure must not restore accounts removed from the current inventory.
 Reuse raw model suggestions while enabled account IDs stay unchanged.
@@ -127,6 +129,7 @@ Use native light/dark theme variables.
 | Account `schedulable:false` | Show disabled and switch off; use native schedulable POST to toggle |
 | Disabled account would fail model lookup | Skip its discovery request and error notice; retain its row/control |
 | Enabled account model lookup fails | Show its actual error, including after subsequent polling |
+| Background inventory refresh has a valid same-group snapshot | Keep unchanged controls usable without a readiness flash |
 | Manual account inventory refresh fails | Block row and batch starts until a successful inventory refresh |
 | Inventory refresh succeeds but evaluation state fails | Keep the state error. Remove moved accounts from rows and targets. |
 | A saved preference changes before blur | A page reload restores the input value through the existing preference store |

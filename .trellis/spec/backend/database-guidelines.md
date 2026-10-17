@@ -9,6 +9,7 @@ Tasks, progress, inspection summaries, and the next run time stay in memory.
 ### 1. Scope / Trigger
 
 Use native settings persistence for Candy inspection configuration.
+Use native account `extra` for each account's inspection participation.
 Use the existing JSON store for evaluation history only.
 
 ### 2. Signatures
@@ -30,6 +31,10 @@ Empty secret updates preserve saved values.
 Change active coordinator settings only after the repository write succeeds.
 Initial-read failure must not allow inspection with default settings.
 Keep starts blocked until a successful native settings save configures the coordinator.
+
+Store account participation as Boolean `extra.codex_eval_inspection_enabled`. An absent value means enabled.
+Use `AdminService.UpdateAccountExtra` for a key-only atomic merge. Preserve that key during unrelated full account edits.
+Native account storage supplies cross-group and restart persistence. Keep it separate from global settings and evaluation history.
 
 Keep history keys `results`, `fingerprints`, `modeltraces`, and `pelicans`.
 Each map uses a native account ID as a decimal string.
@@ -71,7 +76,8 @@ Bad: a null history file must not become an empty snapshot after the next result
 
 Use existing native evaluation persistence tests for load protection, latest-20 retention, saves, and clear rollback.
 Use `tests/backend/internal/service/codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
-Use the disposable native fixture to check PostgreSQL rows and restart loading.
+Reuse existing persistence evidence. Add focused checks only for changed storage behavior without coverage.
+Account participation needs key-only-save and full-edit-preservation assertions, without a separate restart or copy test matrix.
 Tests use temporary files and synthetic data. Do not delete real history or settings.
 
 ### 7. Wrong vs Correct

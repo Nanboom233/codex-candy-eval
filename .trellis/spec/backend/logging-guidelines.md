@@ -24,12 +24,14 @@ Use the existing category that owns the failure:
 | Supplier HTTP or stream failure | Actual upstream status and error | Native account sender and `executeModel` |
 | Evaluation request failure | Result or sample `error` field | `candy.go`, `modeltrace.go` |
 | State read or save failure | `storageError` and `/state` response `storage_error` | `state.go`, `State` |
-| Inspection or notification failure | State `error`, account result `error`, or `notification_error` | Inspection coordinator and page |
+| Inspection or notification failure | Backend state `error`, account result `error`, or `notification_error` | Inspection coordinator |
 | Settings persistence failure | Native response message and form error | Native settings service and page |
 | Incorrect model answer | Evaluation score, validity, or attribution outcome | Evaluation and algorithm files |
 
 Do not describe an incorrect answer as an application crash.
 Transport success and answer correctness are separate outcomes.
+Keep inspection runtime and notification errors in backend state. Do not show their removed page prompts or a duplicate header summary.
+Keep original Candy request errors in result records. Settings and account-switch save failures retain their local UI errors.
 
 References: [administrator channel](../../../patches/0004-admin-channel.patch) and [evaluation UI](../../../patches/0006-evaluation-ui.patch).
 

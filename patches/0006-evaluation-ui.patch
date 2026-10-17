@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/web/app.js b/backend/internal/codexeval/
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
-@@ -0,0 +1,557 @@
+@@ -0,0 +1,586 @@
 +"use strict";
 +const BASE = "/api/v1/admin/codex-eval";
 +const PREF_STORE = "sub2api-codex-eval.prefs";
@@ -26,6 +26,8 @@ new file mode 100644
 +let clearScope = "candy";
 +// Enable changes in flight, by credential ID; reloads keep these requested states.
 +const switching = new Map();
++const inspectionSwitching = new Map();
++const inspectionSwitchErrors = new Map();
 +
 +function applyTheme() {
 + const selected = new URLSearchParams(location.search).get("theme") || localStorage.getItem("theme");
@@ -174,6 +176,7 @@ new file mode 100644
 +  const task = data.active.find((run) => run.target.account_id === account.id);
 +  const restrictions = accountRestrictions(account);
 +  const a = { ...account, id, account_id: account.id, disabled: account.schedulable === false,
++   autoInspectionEnabled: inspectionSwitching.has(id) ? inspectionSwitching.get(id) : account.extra?.codex_eval_inspection_enabled !== false,
 +   unavailable: restrictions.length > 0, restrictions,
 +   plan_type: account.credentials?.plan_type || account.parent_plan_type || "",
 +   results: data.candy[id] || [], fingerprints: data.fingerprint[id] || [],
@@ -229,7 +232,6 @@ new file mode 100644
 +  stopPolling();
 +  const controller = new AbortController();
 +  loadController = controller;
-+  accountListReady = false;
 +  render();
 +  try {
 +    try {
@@ -387,6 +389,32 @@ new file mode 100644
 +  render();
 +  // Refresh the native account after its status update.
 +  if (!$("app").hidden) await load({ refresh: true });
++}
++async function setAccountInspection(id, enabled) {
++  const a = credentials.find((entry) => entry.id === id);
++  if (!a || inspectionSwitching.has(id)) return;
++  const previous = a.autoInspectionEnabled;
++  inspectionSwitching.set(id, enabled);
++  inspectionSwitchErrors.delete(id);
++  a.autoInspectionEnabled = enabled;
++  renderCandy();
++  try {
++    const saved = await api(`/api/v1/admin/accounts/${Number(id)}/codex-eval-inspection`, { method: "PUT", body: { enabled } });
++    for (const account of accountList) if (String(account.id) === id) {
++      account.extra = { ...account.extra, codex_eval_inspection_enabled: saved.enabled };
++    }
++  } catch (err) {
++    if (err instanceof AuthError) return showLogin(err.message);
++    inspectionSwitchErrors.set(id, "保存失败：" + err.message);
++    for (const account of accountList) if (String(account.id) === id) {
++      account.extra = { ...account.extra, codex_eval_inspection_enabled: previous };
++    }
++  } finally {
++    inspectionSwitching.delete(id);
++    syncCredentials();
++    renderCandy();
++  }
++  if (!$('app').hidden) await load();
 +}
 +function renderSelection(prefix, selection, action) {
 +  const available = visibleCredentials(prefix).filter(availableCredential);
@@ -546,6 +574,7 @@ new file mode 100644
 +  });
 +  $(prefix + "rows").addEventListener("change", (e) => {
 +    if (e.target.dataset.enable) return setCredentialEnabled(e.target.dataset.enable, e.target.checked);
++    if (e.target.dataset.inspectionEnable) return setAccountInspection(e.target.dataset.inspectionEnable, e.target.checked);
 +    const id = e.target.getAttribute(`data-${type}-select`);
 +    if (!id) return;
 +    e.target.checked ? selection.add(id) : selection.delete(id);
@@ -684,7 +713,7 @@ diff --git a/backend/internal/codexeval/web/catalog.js b/backend/internal/codexe
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/web/catalog.js
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,129 @@
 +"use strict";
 +let groups = [];
 +let selectedGroup = 0;
@@ -741,12 +770,13 @@ new file mode 100644
 +async function refreshCatalog({ signal, force = false } = {}) {
 +  const reuseModels = catalogLoaded && catalogGroup === selectedGroup && !force;
 +  const previousModelAccounts = enabledAccountIDs(accountList);
-+  accountListReady = false;
++  accountListReady = manualCatalogReady();
 +  accountListError = "";
 +  catalogLoaded = false;
 +  const generation = ++catalogGeneration;
 +  const initialGroup = selectedGroup;
 +  const current = () => generation === catalogGeneration && !signal?.aborted;
++  let inventoryRead = false;
 +  try {
 +    const available = reuseModels ? groups : await api("/api/v1/admin/groups/all?platform=openai", { signal });
 +    if (!current() || selectedGroup !== initialGroup) return;
@@ -759,12 +789,14 @@ new file mode 100644
 +    syncGroupControls();
 +    if (!selectedGroup) { accountList = []; catalogCache.models = { ids: [] }; catalogLoaded = true; return; }
 +    const group = selectedGroup;
++    if (accountListGroup !== group) accountListReady = false;
 +    const inGroup = () => current() && selectedGroup === group;
 +    const accounts = await fetchNativeAccounts(group, signal, inGroup);
 +    if (!inGroup()) return;
 +    accountList = accounts.filter((account) => accountInGroup(account, group));
 +    accountListReady = true;
 +    accountListGroup = group;
++    inventoryRead = true;
 +    const { ids, errors } = reuseModels && previousModelAccounts === enabledAccountIDs(accountList)
 +      ? { ids: catalogCache.models.ids, errors: [] } : await discoverEvaluationModels(accountList, signal);
 +    if (!inGroup()) return;
@@ -774,7 +806,10 @@ new file mode 100644
 +    catalogLoaded = true;
 +    catalogGroup = group;
 +  } catch (err) {
-+    if (current() && !accountListReady) accountListError = err.message;
++    if (current() && !inventoryRead) {
++      accountListReady = false;
++      accountListError = err.message;
++    }
 +    throw err;
 +  }
 +}
@@ -812,7 +847,7 @@ diff --git a/backend/internal/codexeval/web/components.js b/backend/internal/cod
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/web/components.js
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,346 @@
 +"use strict";
 +
 +// Lucide icons (https://lucide.dev, ISC license).
@@ -969,11 +1004,16 @@ new file mode 100644
 +  return `<label class="switch"><input type="checkbox" role="switch" data-enable="${esc(a.id)}" aria-label="启用此账户" aria-busy="${switching.has(a.id)}" ${a.disabled ? "" : "checked"} ${switching.has(a.id) ? "disabled" : disabledFor(locked)}></label>`;
 +}
 +
++function accountInspectionSwitch(a) {
++  const error = inspectionSwitchErrors.get(a.id);
++  return `<div class="inspection-cell"><label class="switch"><input type="checkbox" role="switch" data-inspection-enable="${esc(a.id)}" aria-label="启用自动巡检" aria-busy="${inspectionSwitching.has(a.id)}" ${a.autoInspectionEnabled ? "checked" : ""} ${inspectionSwitching.has(a.id) ? "disabled" : ""}></label>${error ? `<span class="error" role="alert">${esc(error)}</span>` : ""}</div>`;
++}
++
 +// Row details are separate columns on wide screens and one footer line on narrow ones.
 +function credentialRow({ type, credential: a, selected, open, selectable, result, meta, tested, button, history }) {
 +  return `<div class="row ${open ? "open" : ""}"><div class="list-row row-main" data-row="${esc(a.id)}">
 +    <label class="select-cell"><input type="checkbox" data-${type}-select="${esc(a.id)}" aria-label="选择此账户" ${selected ? "checked" : ""} ${selectable ? "" : "disabled"}></label>
-+    ${credentialView(a, open)}<div class="latest">${result}</div><div class="row-meta ${tested ? "" : "untested"}">${meta}${enableSwitch(a)}</div>${button}</div>
++    ${credentialView(a, open)}<div class="latest">${result}</div><div class="row-meta ${tested ? "" : "untested"}">${meta}${enableSwitch(a)}${type === "candy" ? accountInspectionSwitch(a) : ""}</div>${button}</div>
 +    ${open ? historyPanel(history()) : ""}</div>`;
 +}
 +
@@ -1110,10 +1150,9 @@ new file mode 100644
 +function credentialCard(prefix, test, columns) {
 +  const clearLabel = `清空${test}记录`;
 +  const inspection = prefix ? "" : `<span id="inspection-status" class="inspection-status" aria-live="polite" hidden><span id="inspection-phase"></span><span id="inspection-next"></span><span id="inspection-progress"></span></span>`;
-+  const errors = prefix ? "" : `<span id="inspection-runtime-error" class="error" role="alert" hidden></span><span id="candy-settings-status" role="alert" hidden></span>`;
 +  return `<div class="section-head credential-head${prefix ? "" : " candy-head"}"><h2>账户</h2><label class="switch credential-enabled-filter"><input id="${prefix}enabled-only" type="checkbox" role="switch"><span>仅启用</span></label>${inspection}<div class="credential-filters"><span class="native-select credential-filter"><select id="${prefix}credential-type" aria-label="账户类型"><option value="all">全部账户</option></select></span><span id="${prefix}plan-filter" class="native-select credential-filter" hidden><select id="${prefix}credential-plan" aria-label="订阅类型"><option value="all">所有订阅类型</option></select></span></div>
-+    <div class="list-actions"><button id="${prefix}mask" class="btn ghost icon-button" type="button" aria-label="脱敏" data-tip></button><button id="${prefix}clear" class="btn ghost icon-button" type="button" aria-label="${clearLabel}" data-tip disabled>${icon("trash-2")}</button></div>${errors}</div>
-+    <div class="list-head"><input id="${prefix}select-all" type="checkbox" aria-label="选择全部可测试账户">${[...columns, "启用", ""].map((label) => `<div>${label}</div>`).join("")}</div>
++    <div class="list-actions"><button id="${prefix}mask" class="btn ghost icon-button" type="button" aria-label="脱敏" data-tip></button><button id="${prefix}clear" class="btn ghost icon-button" type="button" aria-label="${clearLabel}" data-tip disabled>${icon("trash-2")}</button></div></div>
++    <div class="list-head"><input id="${prefix}select-all" type="checkbox" aria-label="选择全部可测试账户">${[...columns, "启用", ...(!prefix ? ["启用自动巡检"] : []), ""].map((label) => `<div>${label}</div>`).join("")}</div>
 +    <div id="${prefix}rows"><div class="empty">正在加载…</div></div>`;
 +}
 +
@@ -1271,7 +1310,7 @@ diff --git a/backend/internal/codexeval/web/inspection.js b/backend/internal/cod
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,194 @@
 +"use strict";
 +const INSPECTION_SETTINGS = "/api/v1/admin/settings/codex-eval-inspection";
 +const CANDY_SELECTION_FIELDS = { group_id: "group", account_type: "credential-type", account_plan: "credential-plan", enabled_only: "enabled-only" };
@@ -1291,7 +1330,7 @@ new file mode 100644
 +function inspectionForm() { return document.getElementById("inspection-settings"); }
 +function inspectionField(name) { return CANDY_SELECTION_FIELDS[name] ? $(CANDY_SELECTION_FIELDS[name]) : inspectionForm().elements.namedItem(name); }
 +function inspectionMessage(message, error = false) {
-+  for (const id of ["inspection-save-status", "candy-settings-status"]) {
++  for (const id of ["inspection-save-status"]) {
 +    $(id).textContent = message;
 +    $(id).classList.toggle("error", error);
 +    $(id).hidden = !message;
@@ -1344,20 +1383,11 @@ new file mode 100644
 +}
 +function renderInspectionState(state) {
 +  inspectionState = state;
-+  const phase = state.cancelling ? "正在停止" : ({ idle: "", testing: "正在测试", recovery_wait: "等待恢复确认", completed: "", cancelled: "巡检已停止", failed: "巡检失败" })[state.phase] ?? state.phase;
++  const phase = state.cancelling ? "正在停止" : ({ testing: "正在测试", recovery_wait: "等待恢复确认", cancelled: "巡检已停止" })[state.phase] || "";
 +  document.getElementById("inspection-phase").textContent = phase;
 +  document.getElementById("inspection-next").textContent = state.next_run_at ? "下次巡检：" + fmtTime(state.next_run_at, false) : "";
 +  document.getElementById("inspection-progress").textContent = state.running && state.started_at ? `账户进度：${state.done}/${state.total}` : "";
 +  document.getElementById("inspection-status").hidden = !phase && !state.next_run_at && !document.getElementById("inspection-progress").textContent;
-+  const error = document.getElementById("inspection-runtime-error");
-+  const errors = [state.error || ""];
-+  for (const result of state.results || []) {
-+    const name = credentials.find((account) => account.id === String(result.account_id))?.name || result.account_name || result.account_id;
-+    if (result.error) errors.push(`${name}：${result.error}`);
-+    if (result.notification_error) errors.push(`${name}：通知：${result.notification_error}`);
-+  }
-+  error.textContent = errors.filter(Boolean).join("；");
-+  error.hidden = !error.textContent;
 +  document.getElementById("inspection-start").disabled = !inspectionSettingsLoaded || state.running || inspectionActionPending;
 +  document.getElementById("inspection-stop").disabled = !state.running || state.cancelling || inspectionActionPending;
 +  renderCandy();
@@ -1375,9 +1405,6 @@ new file mode 100644
 +  } catch (err) {
 +    if (signal.aborted) return;
 +    if (err instanceof AuthError) return showLogin(err.message);
-+    const error = document.getElementById("inspection-runtime-error");
-+    error.textContent = err.message;
-+    error.hidden = false;
 +  } finally {
 +    if (inspectionStateController === controller && !$("app").hidden && !sessionBlocked) {
 +      inspectionTimer = setTimeout(loadInspectionState, inspectionState.running ? 2500 : 20000);
@@ -1475,7 +1502,6 @@ new file mode 100644
 +    }
 +    catch (err) {
 +      if (err instanceof AuthError) return showLogin(err.message);
-+      inspectionMessage(err.message, true);
 +    } finally { inspectionActionPending = false; if (!sessionBlocked) await loadInspectionState(); }
 +  });
 +}
@@ -1674,7 +1700,7 @@ diff --git a/backend/internal/codexeval/web/style.css b/backend/internal/codexev
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/web/style.css
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,439 @@
 +/* Layout */
 +:root {
 +  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
@@ -1833,7 +1859,7 @@ new file mode 100644
 +/* Credential lists and history alignment */
 +/* Short columns are fixed. Credential, result and model tracks share the rest equally up to their caps;
 +   any remaining space is spread evenly across the gaps. */
-+#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
++#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) 104px var(--action-width); }
 +#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 190px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px 84px var(--switch-width) var(--action-width); }
 +#modeltrace-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
 +#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px minmax(0, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
@@ -1884,7 +1910,8 @@ new file mode 100644
 +.section-head h2 { margin: 0; font-size: var(--heading-size, 14px); font-weight: 600; }
 +.candy-head { flex-wrap: wrap; }
 +.inspection-status { display: flex; flex-wrap: wrap; gap: 4px 12px; min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-+.candy-head > .error { flex-basis: 100%; color: var(--danger-ink); overflow-wrap: anywhere; }
++.inspection-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
++.inspection-cell .error { color: var(--danger-ink); font-size: 12px; overflow-wrap: anywhere; }
 +.credential-enabled-filter { flex: none; white-space: nowrap; }
 +.credential-filters { display: flex; flex: 1; gap: 10px; min-width: 0; }
 +.credential-filter { flex: 0 1 160px; }
@@ -2075,9 +2102,11 @@ new file mode 100644
 +  .list-row > .latest { grid-area: latest; padding-left: var(--credential-indent); }
 +  .list-row > .btn { grid-area: action; }
 +  .row-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; padding-left: var(--credential-indent); }
-+  .row-meta.untested > :not(.switch) { display: none; }
++  .row-meta.untested > :not(.switch):not(.inspection-cell) { display: none; }
 +  .row-meta > .switch { align-self: flex-end; margin-left: auto; }
++  #candy-panel .row-meta > :is(.switch, .inspection-cell) { align-self: flex-start; }
 +  .row-meta > .switch::before { content: "启用"; }
++  .inspection-cell .switch::before { content: "启用自动巡检"; }
 +  .row-meta > .marks { flex: 1; }
 +  .credential-head { flex-wrap: wrap; row-gap: 10px; }
 +  .credential-enabled-filter { margin-right: auto; }

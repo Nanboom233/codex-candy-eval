@@ -33,7 +33,7 @@ function harness(preferences = {}) {
       updateModelPicker,renderInspectionState,validateInspectionFields,loadInspectionState,
       refreshCatalog,resetCatalogCache,stateCredentials,visibleCredentials,targetsFor,fillCredentialTypes,fillPlanFilter,renderCandyRow,renderList,render,
       batchCredentials,runCandy,runFingerprint,runModelTrace,runPelican,candyTip,showLogin,load,
-      setUpdate(fn){update=fn},
+      setAccountInspection, selectCandy(id){candySelected.add(id);render()}, setUpdate(fn){update=fn},
       setCredentials(data){credentials=stateCredentials(data)},
       setAPI(fn){api=fn}, setModels(ids){catalogCache.models={ids}}, setGroup(id){selectedGroup=id},
       saved(){return inspectionSettingsLoaded}, dirty(){return inspectionDirtyFields.size}};
@@ -263,7 +263,8 @@ function groupFixture() {
     const header = ctx.$("candy-credentials").querySelector(".credential-head");
     assert.equal(ctx.$("inspection-runtime"), null);
     assert.equal(ctx.$("inspection-status").parentElement, header);
-    assert.equal(ctx.$("inspection-runtime-error").parentElement, header);
+    assert.equal(ctx.$("inspection-runtime-error"), null);
+    assert.equal(ctx.$("candy-settings-status"), null);
     for (const prefix of ["fp-", "mt-", "pl-"]) assert.equal(ctx.$(prefix + "rows").parentElement.querySelector(".inspection-status"), null);
     ctx.h.renderInspectionState(idle);
     assert.equal(ctx.$("inspection-status").hidden, true);
@@ -275,9 +276,10 @@ function groupFixture() {
     ctx.h.renderInspectionState({ ...idle, running: true, phase: "testing", started_at: "2026-10-17T12:00:00Z", done: 1, total: 2 });
     assert.equal(ctx.$("inspection-phase").textContent, "正在测试");
     assert.equal(ctx.$("inspection-progress").textContent, "账户进度：1/2");
-    ctx.h.renderInspectionState({ ...idle, error: "actual fixture failure" });
-    assert.equal(ctx.$("inspection-runtime-error").hidden, false);
-    assert.equal(ctx.$("inspection-runtime-error").textContent, "actual fixture failure");
+    ctx.h.renderInspectionState({ ...idle, phase: "failed", error: "actual fixture failure" });
+    assert.equal(ctx.$("inspection-runtime-error"), null);
+    assert.equal(ctx.$("inspection-phase").textContent, "");
+    assert.equal(ctx.$("settings-panel").textContent.includes("actual fixture failure"), false);
     assert.equal(header.hidden, false);
     ctx.h.renderInspectionState({ ...idle, phase: "completed", started_at: "2026-10-17T12:00:00Z", done: 2, total: 2 });
     assert.equal(ctx.$("inspection-phase").textContent, "");
@@ -318,7 +320,7 @@ function groupFixture() {
       assert.ok(input.getAttribute("aria-label"));
       assert.equal(input.closest("label").textContent.trim(), "", "Header switches must have no visible captions");
     }
-    for (const [id, panel] of [["inspection-start", "settings"], ["inspection-stop", "settings"], ["inspection-status", "candy"], ["inspection-runtime-error", "candy"]]) {
+    for (const [id, panel] of [["inspection-start", "settings"], ["inspection-stop", "settings"], ["inspection-status", "candy"]]) {
       assert.equal(fields.contains(ctx.$(id)), false, id + " must remain outside collapsed configuration");
       assert.equal(ctx.$(panel + "-panel").contains(ctx.$(id)), true, id + " belongs to " + panel);
     }
@@ -490,9 +492,9 @@ function groupFixture() {
     const row = list.querySelector('[data-row="33"]').closest(".row");
     assert.equal(row.querySelector(".name").textContent, "shared", "Native identity must win over the result snapshot name");
     assert.equal(row.querySelector(".row-summary"), null);
-    assert.ok(ctx.$("inspection-runtime-error").textContent.includes("shared：evaluation error"));
-    assert.ok(ctx.$("inspection-runtime-error").textContent.includes("shared：通知：notification error"));
-    assert.equal(ctx.$("inspection-runtime-error").hidden, false);
+    assert.equal(ctx.$("inspection-runtime-error"), null);
+    assert.equal(ctx.$("candy-panel").textContent.includes("notification error"), false);
+    assert.equal(ctx.$("settings-panel").textContent.includes("notification error"), false);
     assert.ok(list.querySelector("[data-candy-run]"));
     assert.equal(ctx.$("inspection-clear"), null);
     assert.equal(ctx.$("inspection-select-all"), null);
@@ -514,6 +516,76 @@ function groupFixture() {
     ctx.h.showLogin("fixture session ended");
     assert.equal(ctx.$("inspection-results"), null);
     assert.equal(ctx.h.candyTip(mark), "", "Session reset must discard inspection records");
+  } finally { ctx.close(); }
+  ctx = harness();
+  try {
+    const fixture = groupFixture();
+    fixture.data.candy["33"] = [{ time: "2026-10-17T12:00:00Z", model: "saved/literal", error: "original test error" }];
+    const delayedInventory = deferred();
+    const save = deferred();
+    let delay = false, failSave = false;
+    const writes = [];
+    ctx.h.setGroup(101);
+    ctx.h.setAPI(async (url, options = {}) => {
+      if (url.endsWith("/codex-eval-inspection") && options.method === "PUT") {
+        writes.push(options.body);
+        if (failSave) throw new Error("fixture save failure");
+        await save.promise;
+        fixture.accounts.find((a) => a.id === 33).extra = { codex_eval_inspection_enabled: options.body.enabled };
+        return { account_id: 33, enabled: options.body.enabled };
+      }
+      if (delay && url.includes("/accounts?")) await delayedInventory.promise;
+      return fixture.api(url);
+    });
+    await ctx.h.load();
+    ctx.h.selectCandy("33");
+    ctx.$("rows").querySelector('[data-row="33"]').click();
+    const row = ctx.$("rows").querySelector('[data-row="33"]');
+    const button = row.querySelector("[data-candy-run]");
+    const before = button.outerHTML;
+    assert.equal(row.querySelector("[data-candy-select]").checked, true);
+    assert.ok(row.closest(".row").querySelector(".answer-content").textContent.includes("original test error"));
+    delay = true;
+    const refreshing = ctx.h.load();
+    await tick();
+    assert.equal(ctx.$("rows").querySelector('[data-row="33"]'), row);
+    assert.equal(row.querySelector("[data-candy-run]").outerHTML, before);
+    assert.equal(row.querySelector("[data-candy-select]").checked, true);
+    assert.ok(row.closest(".row").classList.contains("open"));
+    delay = false;
+    delayedInventory.resolve();
+    await refreshing;
+    assert.equal(ctx.$("rows").querySelector('[data-row="33"]'), row);
+    assert.equal(row.querySelector("[data-candy-run]").outerHTML, before);
+    assert.equal(row.querySelector("[data-candy-select]").checked, true);
+    assert.ok(row.closest(".row").classList.contains("open"));
+    assert.ok(ctx.$("candy-credentials").querySelector(".list-head").textContent.includes("启用自动巡检"));
+    for (const prefix of ["fp-", "mt-", "pl-"]) assert.equal(ctx.$(prefix + "rows").querySelector("[data-inspection-enable]"), null);
+    assert.equal(row.querySelector("[data-enable]").getAttribute("aria-label"), "启用此账户");
+    const saving = ctx.h.setAccountInspection("33", false);
+    await tick();
+    await ctx.h.load();
+    assert.equal(row.querySelector("[data-inspection-enable]").checked, false);
+    assert.equal(row.querySelector("[data-inspection-enable]").disabled, true);
+    assert.equal(row.querySelector("[data-enable]").checked, true);
+    assert.equal(ctx.$("rows").querySelector('[data-inspection-enable="11"]').checked, true);
+    assert.equal(ctx.$("inspection-enabled").checked, false);
+    save.resolve();
+    await saving;
+    assert.deepEqual(JSON.parse(JSON.stringify(writes)), [{ enabled: false }]);
+    assert.equal(row.querySelector("[data-inspection-enable]").checked, false);
+    assert.equal(row.querySelector("[data-inspection-enable]").disabled, false);
+    failSave = true;
+    await ctx.h.setAccountInspection("33", true);
+    assert.equal(row.querySelector("[data-inspection-enable]").checked, false);
+    assert.equal(row.querySelector("[data-inspection-enable]").disabled, false);
+    assert.ok(row.querySelector(".inspection-cell [role=alert]").textContent.includes("fixture save failure"));
+    assert.equal(ctx.$("inspection-save-status").textContent, "");
+    assert.equal(ctx.$("inspection-runtime-error"), null);
+    ctx.h.setAPI(async () => { throw new Error("hidden runtime read failure"); });
+    await ctx.h.loadInspectionState();
+    assert.equal(ctx.$("candy-panel").textContent.includes("hidden runtime read failure"), false);
+    assert.equal(ctx.$("settings-panel").textContent.includes("hidden runtime read failure"), false);
   } finally { ctx.close(); }
   ctx = harness();
   try {
@@ -657,7 +729,7 @@ function groupFixture() {
     assert.equal(writes[1].ntfy_topic, "newer");
     assert.equal(ctx.h.dirty(), 0);
     assert.equal(ctx.$("inspection-save-status").textContent, "");
-    assert.equal(ctx.$("candy-settings-status").textContent, "");
+    assert.equal(ctx.$("candy-settings-status"), null);
   } finally { ctx.close(); }
 
   ctx = harness();

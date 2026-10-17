@@ -36,6 +36,7 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		accounts[n].GroupIDs = []int64{101}
 		accounts[n].Type = "oauth"
 		accounts[n].Enabled = true
+		accounts[n].AutoInspectionEnabled = true
 		if accounts[n].PlanType == "" {
 			accounts[n].PlanType = "pro"
 		}
@@ -154,7 +155,7 @@ func TestCodexInspectionCancelAndSchedule(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}, func(context.Context, int64) (string, error) { return "fake", nil })
-	a := InspectionAccount{Target: Target{AccountID: 42}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true}
+	a := InspectionAccount{Target: Target{AccountID: 42}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true}
 	i := newInspector(InspectionHooks{List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
 		return []InspectionAccount{a}, nil
 	}, Get: func(context.Context, int64) (InspectionAccount, error) { return a, nil }, UpdatePriority: func(context.Context, int64, int) error { t.Error("cancelled run wrote account"); return nil }})
@@ -269,7 +270,7 @@ func TestCodexInspectionRestartSchedulesFreshWait(t *testing.T) {
 func TestCodexInspectionCandySelection(t *testing.T) {
 	s := DefaultInspectionSettings()
 	s.GroupID = 202
-	a := InspectionAccount{Target: Target{AccountID: 33}, GroupIDs: []int64{101, 202}, Type: "oauth", PlanType: "pro_lite", Available: true, Enabled: true}
+	a := InspectionAccount{Target: Target{AccountID: 33}, GroupIDs: []int64{101, 202}, Type: "oauth", PlanType: "pro_lite", Available: true, Enabled: true, AutoInspectionEnabled: true}
 	if !inspectionEligible(a, s) {
 		t.Fatal("shared group member was excluded")
 	}
@@ -307,5 +308,136 @@ func TestCodexInspectionCandySelection(t *testing.T) {
 	a.Available = false
 	if inspectionEligible(a, s) {
 		t.Fatal("an unavailable account matched")
+	}
+}
+
+func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
+	for _, adjust := range []bool{false, true} {
+		for _, listedPriority := range []int{99, 10} {
+			t.Run(fmt.Sprintf("adjust=%t/list=%d", adjust, listedPriority), func(t *testing.T) {
+				mu.Lock()
+				loaded, stateLoadError, storageError = false, nil, ""
+				candyResults = map[string][]candyResult{}
+				mu.Unlock()
+				calls := 0
+				Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
+					calls++
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
+				}, func(context.Context, int64) (string, error) { return "degraded", nil })
+				listed := InspectionAccount{Target: Target{AccountID: 91}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: listedPriority}
+				current := listed
+				current.Priority = 99
+				i := newInspector(InspectionHooks{
+					List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
+						return []InspectionAccount{listed}, nil
+					},
+					Get: func(context.Context, int64) (InspectionAccount, error) { return current, nil },
+					UpdatePriority: func(context.Context, int64, int) error {
+						t.Error("degraded wrong account priority changed")
+						return nil
+					},
+					Notify: func(context.Context, InspectionSettings, string, string) error {
+						t.Error("degraded wrong account notified")
+						return nil
+					},
+				})
+				defer i.cancel()
+				i.poll = time.Millisecond
+				s := DefaultInspectionSettings()
+				s.GroupID, s.AdjustPriority = 101, adjust
+				i.configure(s)
+				if err := i.start(); err != nil {
+					t.Fatal(err)
+				}
+				<-i.runDone
+				r := i.snapshot().Results[0]
+				if calls != 1 || r.Tests != 1 || len(candyResults["91"]) != 1 || r.Outcome != "unchanged" || r.TargetPriority != nil || r.Error != "" || current.Priority != 99 {
+					t.Fatalf("calls=%d result=%+v priority=%d", calls, r, current.Priority)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexInspectionParticipationStopsLaterSends(t *testing.T) {
+	mu.Lock()
+	loaded, stateLoadError, storageError = false, nil, ""
+	candyResults = map[string][]candyResult{}
+	mu.Unlock()
+	var lock sync.Mutex
+	a := InspectionAccount{Target: Target{GroupID: 101, AccountID: 92}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, Priority: 10}
+	calls := 0
+	confirmation := make(chan struct{})
+	release := make(chan struct{})
+	Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
+		calls++
+		if calls == 2 {
+			close(confirmation)
+			<-release
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
+	}, func(context.Context, int64) (string, error) { return "participation", nil })
+	i := newInspector(InspectionHooks{
+		List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
+			lock.Lock()
+			defer lock.Unlock()
+			return []InspectionAccount{a}, nil
+		},
+		Get: func(context.Context, int64) (InspectionAccount, error) {
+			lock.Lock()
+			defer lock.Unlock()
+			return a, nil
+		},
+		UpdatePriority: func(context.Context, int64, int) error { t.Error("opted-out account priority changed"); return nil },
+		Notify: func(context.Context, InspectionSettings, string, string) error {
+			t.Error("opted-out account notified")
+			return nil
+		},
+	})
+	defer i.cancel()
+	i.poll = time.Millisecond
+	s := DefaultInspectionSettings()
+	s.GroupID, s.AdjustPriority = 101, true
+	i.configure(s)
+	if err := i.start(); err != nil {
+		t.Fatal(err)
+	}
+	<-i.runDone
+	if calls != 0 || len(i.snapshot().Results) != 0 {
+		t.Fatal("opted-out account selected")
+	}
+	lock.Lock()
+	a.AutoInspectionEnabled = true
+	lock.Unlock()
+	if err := i.start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-confirmation:
+	case <-time.After(5 * time.Second):
+		t.Fatal("confirmation did not start")
+	}
+	lock.Lock()
+	a.AutoInspectionEnabled = false
+	lock.Unlock()
+	close(release)
+	<-i.runDone
+	r := i.snapshot().Results[0]
+	if calls != 2 || r.Tests != 2 || r.Outcome != "unchanged" || r.Error != "" || r.TargetPriority != nil || len(candyResults["92"]) != 2 {
+		t.Fatalf("opt-out calls=%d result=%+v", calls, r)
+	}
+	for _, result := range candyResults["92"] {
+		if result.Error != "" {
+			t.Fatal("opt-out created a test error")
+		}
+	}
+	// Manual fixed-count tests remain usable for this opted-out account.
+	_, err := Start(context.Background(), StartRequest{Type: "candy", Targets: []Target{a.Target}, Model: "fixture", Runs: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t)
+	if calls != 5 || len(candyResults["92"]) != 5 {
+		t.Fatalf("manual count changed: %d", calls)
 	}
 }

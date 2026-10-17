@@ -18,6 +18,21 @@ type codexInspectionSettingsRepo struct {
 	writes   int
 }
 
+func TestCodexInspectionParticipationSurvivesAccountEdit(t *testing.T) {
+	repo := &accountBillingSettingsAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		20: {ID: 20, Name: "before", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive,
+			Extra: map[string]any{"codex_eval_inspection_enabled": false}},
+	}}}
+	svc := &adminServiceImpl{accountRepo: repo}
+	updated, err := svc.UpdateAccount(context.Background(), 20, &UpdateAccountInput{Name: "after", Extra: map[string]any{"unrelated": "new value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Extra["codex_eval_inspection_enabled"] != false || updated.Extra["unrelated"] != "new value" {
+		t.Fatalf("full edit lost participation: %+v", updated.Extra)
+	}
+}
+
 func (r *codexInspectionSettingsRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
 	r.keys = append([]string{}, keys...)
 	if r.readFail {

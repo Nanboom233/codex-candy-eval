@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/candy.go b/backend/internal/codexeval/ca
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/candy.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,99 @@
 +package codexeval
 +
 +import (
@@ -48,6 +48,10 @@ new file mode 100644
 +
 +// Each credential runs serially; different credentials run in parallel.
 +func runCandy(auth credential, model, effort string, runs int) {
++	runCandyChecked(auth, model, effort, runs, nil)
++}
++
++func runCandyChecked(auth credential, model, effort string, runs int, check func() error) {
 +	id := auth.ID
 +	defer func() {
 +		mu.Lock()
@@ -59,6 +63,9 @@ new file mode 100644
 +		stopping := auth.ctx.Err() != nil
 +		mu.Unlock()
 +		if stopping {
++			return
++		}
++		if check != nil && check() != nil {
 +			return
 +		}
 +		r := evaluateCandy(auth, model, effort)
@@ -1885,7 +1892,7 @@ diff --git a/backend/internal/codexeval/runtime.go b/backend/internal/codexeval/
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/runtime.go
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,282 @@
 +package codexeval
 +
 +import (
@@ -1974,6 +1981,10 @@ new file mode 100644
 +}
 +
 +func start(ctx context.Context, req StartRequest, inspection bool) (StartSummary, error) {
++	return startChecked(ctx, req, inspection, nil)
++}
++
++func startChecked(ctx context.Context, req StartRequest, inspection bool, check func(context.Context, int64) error) (StartSummary, error) {
 +	summary := StartSummary{Started: []run{}, Busy: []Target{}, Unavailable: []unavailable{}}
 +	req.Model = strings.TrimSpace(req.Model)
 +	req.Effort = strings.TrimSpace(req.Effort)
@@ -2068,7 +2079,11 @@ new file mode 100644
 +			defer func() { cancel(); mu.Lock(); delete(active, id); mu.Unlock() }()
 +			switch req.Type {
 +			case "candy":
-+				runCandy(a, req.Model, req.Effort, req.Runs)
++				var beforeSend func() error
++				if check != nil {
++					beforeSend = func() error { return check(runCtx, target.AccountID) }
++				}
++				runCandyChecked(a, req.Model, req.Effort, req.Runs, beforeSend)
 +			case "pelican":
 +				runPelican(a, req.Model, req.Effort)
 +			case "fingerprint":

@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexev
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,643 @@
 +package codexeval
 +
 +import (
@@ -17,13 +17,14 @@ new file mode 100644
 +
 +type InspectionAccount struct {
 +	Target
-+	Name      string
-+	Priority  int
-+	Available bool
-+	GroupIDs  []int64
-+	Type      string
-+	PlanType  string
-+	Enabled   bool
++	Name                  string
++	Priority              int
++	Available             bool
++	GroupIDs              []int64
++	Type                  string
++	PlanType              string
++	Enabled               bool
++	AutoInspectionEnabled bool
 +}
 +
 +type InspectionHooks struct {
@@ -273,7 +274,7 @@ new file mode 100644
 +}
 +
 +func inspectionEligible(a InspectionAccount, s InspectionSettings) bool {
-+	if !a.Available || s.EnabledOnly && !a.Enabled || s.AccountType != "all" && a.Type != s.AccountType {
++	if !a.AutoInspectionEnabled || !a.Available || s.EnabledOnly && !a.Enabled || s.AccountType != "all" && a.Type != s.AccountType {
 +		return false
 +	}
 +	member := false
@@ -383,12 +384,13 @@ new file mode 100644
 +		i.state.Results = append(i.state.Results, InspectionResult{AccountID: a.AccountID, AccountName: a.Name, Priority: a.Priority, RunIDs: []string{}, Outcome: "testing"})
 +	}
 +	i.mu.Unlock()
-+	first := i.testPhase(ctx, s, eligible, 1)
++	first := i.testPhase(ctx, s, eligible, 1, false)
 +	if ctx.Err() != nil {
 +		return
 +	}
 +	groups := map[int][]InspectionAccount{s.DegradedPriority: {}, s.NormalPriority: {}}
 +	indexes := map[int64]int{}
++	baselines := map[int64]int{}
 +	for n, a := range eligible {
 +		indexes[a.AccountID] = n
 +		answers := first[a.AccountID]
@@ -396,6 +398,16 @@ new file mode 100644
 +			continue
 +		}
 +		i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged" })
++		current, err := i.hooks.Get(ctx, a.AccountID)
++		if err != nil {
++			i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++			continue
++		}
++		if !inspectionEligible(current, s) {
++			continue
++		}
++		a.Priority = current.Priority
++		baselines[a.AccountID] = current.Priority
 +		if a.Priority == s.NormalPriority && !answers[0] {
 +			groups[s.DegradedPriority] = append(groups[s.DegradedPriority], a)
 +		}
@@ -418,7 +430,7 @@ new file mode 100644
 +		confirmation := map[int64][]bool{}
 +		if s.MaxTestsPerAccount > 1 {
 +			i.phase("testing")
-+			confirmation = i.testPhase(ctx, s, group, s.MaxTestsPerAccount-1)
++			confirmation = i.testPhase(ctx, s, group, s.MaxTestsPerAccount-1, true)
 +		}
 +		if ctx.Err() != nil {
 +			return
@@ -451,7 +463,11 @@ new file mode 100644
 +		}
 +		target := *r.TargetPriority
 +		current, err := i.hooks.Get(ctx, a.AccountID)
-+		if err == nil && (!inspectionEligible(current, s) || current.Priority != a.Priority) {
++		if err == nil && !current.AutoInspectionEnabled {
++			i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
++			continue
++		}
++		if err == nil && (!inspectionEligible(current, s) || current.Priority != baselines[a.AccountID]) {
 +			err = fmt.Errorf("账户状态或优先级已改变")
 +		}
 +		mu.Lock()
@@ -512,7 +528,7 @@ new file mode 100644
 +	}
 +}
 +
-+func (i *inspector) testPhase(ctx context.Context, s InspectionSettings, accounts []InspectionAccount, runs int) map[int64][]bool {
++func (i *inspector) testPhase(ctx context.Context, s InspectionSettings, accounts []InspectionAccount, runs int, confirmation bool) map[int64][]bool {
 +	answers := map[int64][]bool{}
 +	tracked := map[int64]string{}
 +	index := map[int64]int{}
@@ -525,14 +541,22 @@ new file mode 100644
 +		if ctx.Err() != nil {
 +			break
 +		}
-+		current, err := i.hooks.Get(ctx, a.AccountID)
-+		if err == nil && !inspectionEligible(current, s) {
-+			err = fmt.Errorf("账户暂不可巡检")
++		check := func(checkCtx context.Context, id int64) error {
++			current, err := i.hooks.Get(checkCtx, id)
++			if err == nil && !current.AutoInspectionEnabled {
++				i.result(index[id], func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
++				return fmt.Errorf("inspection disabled")
++			}
++			if err == nil && (!inspectionEligible(current, s) || confirmation && current.Priority != a.Priority) {
++				err = fmt.Errorf("账户状态或优先级已改变")
++			}
++			if err != nil {
++				i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++			}
++			return err
 +		}
-+		var summary StartSummary
-+		if err == nil {
-+			summary, err = start(ctx, StartRequest{Type: "candy", Targets: []Target{a.Target}, Model: s.Model, Effort: s.Effort, Runs: runs}, true)
-+		}
++		i.result(index[a.AccountID], func(r *InspectionResult) { r.Outcome = "testing" })
++		summary, err := startChecked(ctx, StartRequest{Type: "candy", Targets: []Target{a.Target}, Model: s.Model, Effort: s.Effort, Runs: runs}, true, check)
 +		if err == nil && len(summary.Started) != 1 {
 +			err = fmt.Errorf("账户忙碌或不可测试")
 +			if len(summary.Unavailable) > 0 {
@@ -545,7 +569,7 @@ new file mode 100644
 +		}
 +		id := summary.Started[0].ID
 +		tracked[a.AccountID] = id
-+		i.result(index[a.AccountID], func(r *InspectionResult) { r.RunIDs = append(r.RunIDs, id); r.Outcome = "testing" })
++		i.result(index[a.AccountID], func(r *InspectionResult) { r.RunIDs = append(r.RunIDs, id) })
 +	}
 +	phaseCtx, cancel := context.WithTimeout(ctx, i.phaseLimit)
 +	defer cancel()
@@ -611,7 +635,7 @@ new file mode 100644
 +		}
 +		i.result(index[id], func(r *InspectionResult) {
 +			r.Tests += len(results)
-+			if !valid {
++			if !valid && r.Outcome == "testing" {
 +				r.Outcome = "error"
 +				r.Error = errorText
 +			}
@@ -770,12 +794,13 @@ diff --git a/backend/internal/handler/admin/codex_inspection_handler.go b/backen
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/handler/admin/codex_inspection_handler.go
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,145 @@
 +package admin
 +
 +import (
 +	"context"
 +	"net/http"
++	"strconv"
 +
 +	"github.com/Wei-Shaw/sub2api/internal/codexeval"
 +	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -784,9 +809,42 @@ new file mode 100644
 +)
 +
 +func inspectionAccount(a *service.Account) codexeval.InspectionAccount {
++	enabled, exists := a.Extra["codex_eval_inspection_enabled"].(bool)
++	if !exists {
++		enabled = true
++	}
 +	return codexeval.InspectionAccount{Target: codexeval.Target{AccountID: a.ID}, Name: a.Name,
 +		Priority: a.Priority, Available: a.IsSchedulable(), GroupIDs: a.GroupIDs, Type: a.Type,
-+		PlanType: a.GetCredential("plan_type"), Enabled: a.Schedulable}
++		PlanType: a.GetCredential("plan_type"), Enabled: a.Schedulable, AutoInspectionEnabled: enabled}
++}
++
++func (h *AccountHandler) UpdateCodexInspectionAccount(c *gin.Context) {
++	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
++	if err != nil || id <= 0 {
++		response.BadRequest(c, "Invalid account ID")
++		return
++	}
++	var req struct {
++		Enabled *bool `json:"enabled" binding:"required"`
++	}
++	if err := c.ShouldBindJSON(&req); err != nil {
++		response.BadRequest(c, err.Error())
++		return
++	}
++	a, err := h.adminService.GetAccount(c.Request.Context(), id)
++	if err != nil {
++		response.ErrorFrom(c, err)
++		return
++	}
++	if a.Platform != service.PlatformOpenAI || !(a.IsOAuth() || a.Type == service.AccountTypeAPIKey) {
++		response.BadRequest(c, "Account does not support Candy inspection")
++		return
++	}
++	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), id, map[string]any{"codex_eval_inspection_enabled": *req.Enabled}); err != nil {
++		response.ErrorFrom(c, err)
++		return
++	}
++	response.Success(c, gin.H{"account_id": id, "enabled": *req.Enabled})
 +}
 +
 +func (h *AccountHandler) inspectionAccounts(ctx context.Context, items []service.Account) []codexeval.InspectionAccount {

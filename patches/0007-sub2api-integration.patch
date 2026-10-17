@@ -29,12 +29,13 @@
  
  		// 公告管理
  		registerAnnouncementRoutes(admin, h)
-@@ -391,6 +400,8 @@
+@@ -391,6 +400,9 @@
  		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
  		accounts.DELETE("/:id", h.Admin.Account.Delete)
  		accounts.POST("/:id/test", h.Admin.Account.Test)
 +		accounts.POST("/:id/codex-eval", h.Admin.Account.CodexEval)
 +		accounts.GET("/:id/codex-eval/models", h.Admin.Account.CodexEvalModels)
++		accounts.PUT("/:id/codex-eval-inspection", h.Admin.Account.UpdateCodexInspectionAccount)
  		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
  		accounts.POST("/:id/refresh", h.Admin.Account.Refresh)
  		accounts.POST("/:id/apply-oauth-credentials", h.Admin.Account.ApplyOAuthCredentials)
@@ -95,3 +96,7 @@
 +++ b/frontend/src/i18n/locales/zh/common.ts
 @@ -184,0 +185 @@
 +    accountEvaluation: '账户评估',
+--- a/backend/internal/service/admin_account.go
++++ b/backend/internal/service/admin_account.go
+@@ -689,0 +690 @@
++			"codex_eval_inspection_enabled",
