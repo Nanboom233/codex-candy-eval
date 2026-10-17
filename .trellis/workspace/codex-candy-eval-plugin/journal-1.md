@@ -85,3 +85,25 @@ Commit the complete native evaluation migration, finish the approved patch-serie
 ### Next Steps
 
 - The historical context canceled report remains unresolved. Keep its evidence limits in the archived task. Local configuration changes remain outside these commits. No remote push ran.
+
+
+## Session 3: Fix account refresh and inspection controls
+<!-- trellis-session: v=2 fp=0eebcdd215c203e6 -->
+
+**Date**: 2026-10-18
+**Task**: Fix account refresh and inspection controls
+**Branch**: `fix/inspection-controls`
+
+### Summary
+
+Fixed refresh readiness and stale-priority inspection counts. Added persistent per-account inspection switches and per-send opt-out checks. Removed runtime and notification prompts while retaining the next inspection time. Corrected narrow Candy switch alignment after browser feedback. Existing build/check and affected layout checks passed. Browser acceptance and signed work commit completed. Finished the archive commit with its destination path after the native auto-commit referenced an untracked source path.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `75f5a3f` | fix(codex-eval): stabilize refresh and account inspection controls |
+
+### Status
+
+[OK] **Completed**
