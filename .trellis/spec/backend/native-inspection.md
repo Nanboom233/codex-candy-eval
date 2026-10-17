@@ -130,7 +130,7 @@ Restart reloads configuration and schedules a fresh wait without restoring an in
 State fields are `enabled`, `running`, `cancelling`, `phase`, `next_run_at`, `started_at`, `finished_at`, `total`, `done`, `error`, and `results`.
 Phases are `idle`, `testing`, `recovery_wait`, `completed`, `cancelled`, and `failed`.
 Results contain account identity, original priority, optional target priority, run IDs, test count, outcome, and separate evaluation/notification errors.
-State stays in memory. Candy records use the existing history file.
+Round state stays in memory. Candy records use the existing history file. Account verdicts use native account storage.
 Keep backend errors, authentication handling, and polling recovery after removing the page error prompts.
 
 ### Account participation
@@ -147,6 +147,17 @@ Intentional opt-out retains completed results and ends as `unchanged`, without a
 An incomplete confirmation batch cannot produce a recommendation, priority write, or notification.
 Keep per-account pending UI state during refresh. A failed save restores the saved value and shows a row-local error.
 
+### Account verdict
+
+Store `normal` or `degraded` in native `extra.codex_eval_inspection_verdict`.
+An account without a saved verdict starts as normal, regardless of its actual priority.
+Read the saved verdict for both scheduled and immediate rounds. Manual tests do not change it.
+Do not infer verdicts from old priorities or migrate priority-based state. This is an accepted breaking change.
+Use `InspectionAccount.Verdict` and `InspectionHooks.PersistVerdict(context.Context, int64, InspectionVerdict) error`.
+The handler saves only that Extra key through `AdminService.UpdateAccountExtra`. Preserve it during unrelated full account edits.
+Save a confirmed verdict transition before an optional priority update. Stable verdicts require no repeated writes.
+A failed verdict save prevents the priority write. A failed priority write retains the saved verdict and existing backend error.
+
 ### Account tests and priority changes
 
 Read current members of the saved native group and apply the shared Candy type and plan filters.
@@ -156,19 +167,25 @@ Apply native availability and the existing account busy state. Do not replace a 
 Pass the configured model literally through the existing native sender.
 
 Each eligible account gets one first test.
-After that test, reread current priority before selecting confirmations. Do not classify from the account-list snapshot.
-If the current priority is degraded and the answer remains wrong, stop after one test and keep priority unchanged.
-This rule applies with automatic priority adjustment on or off. Send no priority-change notification for that account.
-Keep the original result priority as historical data. Use the fresh classified priority as the confirmation/update baseline.
+After that test, reread the account verdict before selecting confirmations. Do not classify from actual priority or the account-list snapshot.
+If the verdict is degraded and the answer remains wrong, stop after one test.
+If the verdict is normal and the answer is correct, stop after one test.
+Both rules apply with automatic priority adjustment on or off.
+Keep the original result priority as historical data. Preserve the fresh actual-priority baseline for existing confirmation and update checks.
 Only a possible normal/degraded transition starts up to `max_tests_per_account - 1` confirmations.
 Recovery confirmation waits 240 seconds.
-Require the full configured count of valid, complete, matching outcomes before recommending or changing priority.
-Errors, cancellation, incomplete results, and mixed outcomes prevent changes.
+Require the full configured count of valid, complete, matching outcomes before changing the verdict.
+Errors, cancellation, incomplete results, mixed outcomes, or intentional opt-out prevent a verdict transition.
+Keep existing final priority and busy checks on the priority-update path. They do not add verdict-save conditions.
 
 Lower Sub2API priority values are preferred.
-Only accounts at the configured normal or degraded priority can change.
+Only a confirmed verdict transition can enter the optional priority-update path.
+If `adjust_priority` is off, save the verdict without changing actual priority.
+If enabled, use the new verdict's configured target priority. A custom current priority does not block that write.
 Recheck account availability, priority, and busy state before an update.
-With automatic changes off, show recommendations without updating accounts.
+An already matching actual priority needs no write.
+Stable verdicts never trigger priority synchronization, including after the switch becomes enabled.
+Do not add automatic priority-write retries.
 After successful updates, send configured ntfy/Bark notifications.
 Notification failures remain separate and do not reverse successful updates.
 
@@ -194,6 +211,8 @@ Notification failures remain separate and do not reverse successful updates.
 | Another round runs | Immediate start returns 409 |
 | Account is outside the saved group/filter, disabled, unavailable, or busy | Skip automatic selection |
 | Account state or priority changes before update | Retain the backend account error without changing priority |
+| Verdict save fails | Keep the previous verdict. Do not write priority or send a success notification. |
+| Priority update fails after a verdict save | Retain the saved verdict and backend error without automatic retry |
 | Account participation is false | Skip inspection selection and later sends. Keep manual tests and normal traffic usable. |
 | Account switch save fails | Keep the saved value and show the error beside that switch |
 | Account participation field is absent in the PUT body | Reject the request with 400 |
@@ -201,23 +220,24 @@ Notification failures remain separate and do not reverse successful updates.
 
 ## 5. Good / Base / Bad Cases
 
-Good: a normal-priority account returns three valid wrong answers. Enabled adjustment changes its priority from 10 to 99.
+Good: a normal-state account returns three valid wrong answers. Save degraded state, then change priority if adjustment is enabled.
 
-Base: a normal-priority account returns one correct answer. No confirmation or priority change follows.
+Base: a normal-state account returns one correct answer. No confirmation, state save, or priority change follows.
 
-Base: an already degraded account returns one wrong answer. The round records one test and leaves its priority unchanged.
+Base: a degraded-state account returns one wrong answer. The round records one test and leaves its state and priority unchanged.
 
-Bad: a wrong first answer has an incomplete confirmation. Do not change priority from that partial result.
+Bad: a wrong first answer has an incomplete confirmation. Do not change state or priority from that partial result.
 
 ## 6. Tests Required
 
 Use the existing build/check entry and focused inspection, runtime, admin, service, and UI tests.
-Assert one call/result for stable and stale-list degraded-wrong cases, with adjustment on and off.
-Cover participation defaults, Boolean false saves, metadata preservation, initial opt-out, and opt-out between confirmation sends.
-Retain manual fixed counts for opted-out accounts. Reuse existing confirmation, cancellation, scheduling, settings, and notification coverage.
-Use the UI harness for independent switches, pending saves, local errors, removed prompts, and the retained next inspection time.
-Use one browser pass for the added column, switch interaction, reload, and narrow layout in the retained native fixture.
-Reuse valid evidence for unchanged inputs. Add no separate restart, copy, DTO, custom-priority, or repeated-round matrices.
+Use one adjustment-off lifecycle for confirmed degradation, a stable wrong round, confirmed recovery, and a stable correct round.
+Extend existing transition, mixed-answer, provider-error, cancellation, and opt-out cases with verdict assertions.
+Check the new verdict-save and priority-write failure boundaries without repeating that lifecycle.
+Reuse native metadata fixtures for the normal default, key-only persistence, and full-edit preservation.
+Retain manual fixed counts for opted-out accounts. Reuse existing scheduling, settings, notification, and unchanged UI coverage.
+Follow the active task's bounded check table. Add no separate restart, copy, DTO, custom-priority, or browser matrices for backend-only changes.
+Reuse valid evidence for unchanged inputs.
 
 ## 7. Wrong vs Correct
 

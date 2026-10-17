@@ -22,14 +22,15 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 	var lock sync.Mutex
 	calls := map[int64]int{}
 	updates := map[int64]int{}
+	verdicts := map[int64]InspectionVerdict{}
 	accounts := []InspectionAccount{
 		{Target: Target{AccountID: 1}, Name: "codex-wrong", Available: true, Priority: 10},
 		{Target: Target{AccountID: 2}, Name: "codex-correct", Available: true, Priority: 10},
 		{Target: Target{AccountID: 3}, Name: "codex-mixed", Available: true, Priority: 10},
 		{Target: Target{AccountID: 4}, Name: "codex-disabled", Available: false},
 		{Target: Target{AccountID: 5}, Name: "codex-free", Available: true, PlanType: "free"},
-		{Target: Target{AccountID: 6}, Name: "outside-old-filter", Available: true},
-		{Target: Target{AccountID: 7}, Name: "codex-recovery", Available: true, Priority: 99},
+		{Target: Target{AccountID: 6}, Name: "outside-old-filter", Available: true, Verdict: InspectionVerdictDegraded},
+		{Target: Target{AccountID: 7}, Name: "codex-recovery", Available: true, Priority: 99, Verdict: InspectionVerdictDegraded},
 		{Target: Target{AccountID: 8}, Name: "codex-failed", Available: true, Priority: 10},
 	}
 	for n := range accounts {
@@ -72,7 +73,22 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 			}
 			panic("unexpected account")
 		},
-		UpdatePriority: func(_ context.Context, id int64, priority int) error { updates[id] = priority; return nil },
+		PersistVerdict: func(_ context.Context, id int64, verdict InspectionVerdict) error {
+			verdicts[id] = verdict
+			for n := range accounts {
+				if accounts[n].AccountID == id {
+					accounts[n].Verdict = verdict
+				}
+			}
+			return nil
+		},
+		UpdatePriority: func(_ context.Context, id int64, priority int) error {
+			if verdicts[id] == "" {
+				t.Error("priority write preceded verdict save")
+			}
+			updates[id] = priority
+			return nil
+		},
 		Notify: func(context.Context, InspectionSettings, string, string) error {
 			notified++
 			return fmt.Errorf("notification failed")
@@ -96,6 +112,9 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 	if len(updates) != 2 || updates[1] != 99 || updates[7] != 10 {
 		t.Fatalf("wrong priority updates: %v", updates)
 	}
+	if len(verdicts) != 2 || verdicts[1] != InspectionVerdictDegraded || verdicts[7] != InspectionVerdictNormal {
+		t.Fatalf("wrong verdict saves: %v", verdicts)
+	}
 	if notified != 2 {
 		t.Fatalf("notifications=%d", notified)
 	}
@@ -109,8 +128,9 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		}
 	}
 
-	// Default recommendation mode does not write priorities or send notifications.
+	// Adjustment off still saves verdicts without priority writes or notifications.
 	clear(updates)
+	clear(verdicts)
 	notified = 0
 	s.AdjustPriority = false
 	i.configure(s)
@@ -120,6 +140,9 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 	<-i.runDone
 	if len(updates) != 0 || notified != 0 {
 		t.Fatal("recommendations changed accounts")
+	}
+	if len(verdicts) != 1 || verdicts[3] != InspectionVerdictDegraded {
+		t.Fatalf("adjustment off lost verdict transition: %v", verdicts)
 	}
 }
 
@@ -158,7 +181,12 @@ func TestCodexInspectionCancelAndSchedule(t *testing.T) {
 	a := InspectionAccount{Target: Target{AccountID: 42}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true}
 	i := newInspector(InspectionHooks{List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
 		return []InspectionAccount{a}, nil
-	}, Get: func(context.Context, int64) (InspectionAccount, error) { return a, nil }, UpdatePriority: func(context.Context, int64, int) error { t.Error("cancelled run wrote account"); return nil }})
+	}, Get: func(context.Context, int64) (InspectionAccount, error) { return a, nil },
+		PersistVerdict: func(context.Context, int64, InspectionVerdict) error {
+			t.Error("cancelled run saved verdict")
+			return nil
+		},
+		UpdatePriority: func(context.Context, int64, int) error { t.Error("cancelled run wrote account"); return nil }})
 	defer i.cancel()
 	i.poll = time.Millisecond
 	s := DefaultInspectionSettings()
@@ -312,50 +340,123 @@ func TestCodexInspectionCandySelection(t *testing.T) {
 }
 
 func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
-	for _, adjust := range []bool{false, true} {
-		for _, listedPriority := range []int{99, 10} {
-			t.Run(fmt.Sprintf("adjust=%t/list=%d", adjust, listedPriority), func(t *testing.T) {
-				mu.Lock()
-				loaded, stateLoadError, storageError = false, nil, ""
-				candyResults = map[string][]candyResult{}
-				mu.Unlock()
-				calls := 0
-				Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
-					calls++
-					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
-				}, func(context.Context, int64) (string, error) { return "degraded", nil })
-				listed := InspectionAccount{Target: Target{AccountID: 91}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: listedPriority}
-				current := listed
-				current.Priority = 99
-				i := newInspector(InspectionHooks{
-					List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
-						return []InspectionAccount{listed}, nil
-					},
-					Get: func(context.Context, int64) (InspectionAccount, error) { return current, nil },
-					UpdatePriority: func(context.Context, int64, int) error {
-						t.Error("degraded wrong account priority changed")
-						return nil
-					},
-					Notify: func(context.Context, InspectionSettings, string, string) error {
-						t.Error("degraded wrong account notified")
-						return nil
-					},
-				})
-				defer i.cancel()
-				i.poll = time.Millisecond
-				s := DefaultInspectionSettings()
-				s.GroupID, s.AdjustPriority = 101, adjust
-				i.configure(s)
-				if err := i.start(); err != nil {
-					t.Fatal(err)
-				}
-				<-i.runDone
-				r := i.snapshot().Results[0]
-				if calls != 1 || r.Tests != 1 || len(candyResults["91"]) != 1 || r.Outcome != "unchanged" || r.TargetPriority != nil || r.Error != "" || current.Priority != 99 {
-					t.Fatalf("calls=%d result=%+v priority=%d", calls, r, current.Priority)
-				}
-			})
+	mu.Lock()
+	loaded, stateLoadError, storageError = false, nil, ""
+	candyResults = map[string][]candyResult{}
+	mu.Unlock()
+	calls, saves := 0, 0
+	answer := "20"
+	Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
+		calls++
+		body := fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", answer)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}, func(context.Context, int64) (string, error) { return "verdict lifecycle", nil })
+	listed := InspectionAccount{Target: Target{AccountID: 91}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 10}
+	current := listed
+	i := newInspector(InspectionHooks{
+		List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
+			return []InspectionAccount{listed}, nil
+		},
+		Get: func(context.Context, int64) (InspectionAccount, error) { return current, nil },
+		PersistVerdict: func(_ context.Context, _ int64, verdict InspectionVerdict) error {
+			saves++
+			current.Verdict = verdict
+			return nil
+		},
+		UpdatePriority: func(context.Context, int64, int) error { t.Error("adjustment off wrote priority"); return nil },
+		Notify: func(context.Context, InspectionSettings, string, string) error {
+			t.Error("adjustment off notified")
+			return nil
+		},
+	})
+	defer i.cancel()
+	i.poll, i.recovery = time.Millisecond, time.Millisecond
+	s := DefaultInspectionSettings()
+	s.GroupID = 101
+	i.configure(s)
+	for _, step := range []struct {
+		name    string
+		answer  string
+		tests   int
+		verdict InspectionVerdict
+		saves   int
+	}{
+		{"degradation", "20", 3, InspectionVerdictDegraded, 1},
+		{"stable wrong", "20", 1, InspectionVerdictDegraded, 1},
+		{"recovery", "21", 3, InspectionVerdictNormal, 2},
+		{"stable correct", "21", 1, InspectionVerdictNormal, 2},
+	} {
+		answer = step.answer
+		beforeCalls, beforeResults := calls, len(candyResults["91"])
+		if err := i.start(); err != nil {
+			t.Fatal(err)
 		}
+		<-i.runDone
+		r := i.snapshot().Results[0]
+		if calls-beforeCalls != step.tests || r.Tests != step.tests || len(candyResults["91"])-beforeResults != step.tests || current.Verdict != step.verdict || saves != step.saves || current.Priority != 10 || r.Error != "" {
+			t.Fatalf("%s: calls=%d result=%+v account=%+v saves=%d", step.name, calls-beforeCalls, r, current, saves)
+		}
+		if step.tests == 1 && (r.Outcome != "unchanged" || r.TargetPriority != nil) {
+			t.Fatalf("stable verdict changed: %+v", r)
+		}
+	}
+}
+
+func TestCodexInspectionWriteFailures(t *testing.T) {
+	for _, failedWrite := range []string{"verdict", "priority"} {
+		t.Run(failedWrite, func(t *testing.T) {
+			mu.Lock()
+			loaded, stateLoadError, storageError = false, nil, ""
+			candyResults = map[string][]candyResult{}
+			mu.Unlock()
+			Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
+			}, func(context.Context, int64) (string, error) { return "write failure", nil })
+			a := InspectionAccount{Target: Target{AccountID: 93}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 42, Verdict: InspectionVerdictNormal}
+			verdictWrites, priorityWrites := 0, 0
+			i := newInspector(InspectionHooks{
+				List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
+					return []InspectionAccount{a}, nil
+				},
+				Get: func(context.Context, int64) (InspectionAccount, error) { return a, nil },
+				PersistVerdict: func(_ context.Context, _ int64, verdict InspectionVerdict) error {
+					verdictWrites++
+					if failedWrite == "verdict" {
+						return fmt.Errorf("fixture verdict write failed")
+					}
+					a.Verdict = verdict
+					return nil
+				},
+				UpdatePriority: func(_ context.Context, _ int64, priority int) error {
+					priorityWrites++
+					if a.Verdict != InspectionVerdictDegraded || priority != 99 {
+						t.Error("priority write preceded verdict save or lost target")
+					}
+					return fmt.Errorf("fixture priority write failed")
+				},
+				Notify: func(context.Context, InspectionSettings, string, string) error {
+					t.Error("failed write notified")
+					return nil
+				},
+			})
+			defer i.cancel()
+			i.poll = time.Millisecond
+			s := DefaultInspectionSettings()
+			s.GroupID, s.AdjustPriority, s.MaxTestsPerAccount = 101, true, 1
+			i.configure(s)
+			if err := i.start(); err != nil {
+				t.Fatal(err)
+			}
+			<-i.runDone
+			r := i.snapshot().Results[0]
+			wantVerdict, wantPriorityWrites := InspectionVerdictNormal, 0
+			if failedWrite == "priority" {
+				wantVerdict, wantPriorityWrites = InspectionVerdictDegraded, 1
+			}
+			if verdictWrites != 1 || priorityWrites != wantPriorityWrites || a.Verdict != wantVerdict || a.Priority != 42 || r.Outcome != "error" || r.Error != "fixture "+failedWrite+" write failed" {
+				t.Fatalf("writes=%d/%d account=%+v result=%+v", verdictWrites, priorityWrites, a, r)
+			}
+		})
 	}
 }
 
@@ -387,6 +488,10 @@ func TestCodexInspectionParticipationStopsLaterSends(t *testing.T) {
 			lock.Lock()
 			defer lock.Unlock()
 			return a, nil
+		},
+		PersistVerdict: func(context.Context, int64, InspectionVerdict) error {
+			t.Error("opted-out account verdict changed")
+			return nil
 		},
 		UpdatePriority: func(context.Context, int64, int) error { t.Error("opted-out account priority changed"); return nil },
 		Notify: func(context.Context, InspectionSettings, string, string) error {

@@ -98,5 +98,6 @@
 +    accountEvaluation: '账户评估',
 --- a/backend/internal/service/admin_account.go
 +++ b/backend/internal/service/admin_account.go
-@@ -689,0 +690 @@
+@@ -689,0 +690,2 @@
 +			"codex_eval_inspection_enabled",
++			"codex_eval_inspection_verdict",

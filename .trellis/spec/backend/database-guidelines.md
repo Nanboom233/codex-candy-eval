@@ -9,7 +9,7 @@ Tasks, progress, inspection summaries, and the next run time stay in memory.
 ### 1. Scope / Trigger
 
 Use native settings persistence for Candy inspection configuration.
-Use native account `extra` for each account's inspection participation.
+Use native account `extra` for each account's inspection participation and verdict.
 Use the existing JSON store for evaluation history only.
 
 ### 2. Signatures
@@ -35,6 +35,13 @@ Keep starts blocked until a successful native settings save configures the coord
 Store account participation as Boolean `extra.codex_eval_inspection_enabled`. An absent value means enabled.
 Use `AdminService.UpdateAccountExtra` for a key-only atomic merge. Preserve that key during unrelated full account edits.
 Native account storage supplies cross-group and restart persistence. Keep it separate from global settings and evaluation history.
+
+Store account verdict as `normal` or `degraded` in `extra.codex_eval_inspection_verdict`. An absent verdict means normal.
+Actual priority does not initialize the verdict. Do not add old-priority inference or migration.
+Use the same key-only atomic merge and full-edit preservation for the verdict key.
+Save only confirmed transitions. A stable default normal state needs no initialization write.
+Persist the verdict before an optional actual-priority update. A failed priority write does not reverse the saved verdict.
+Keep verdicts out of the evaluation history snapshot and global settings.
 
 Keep history keys `results`, `fingerprints`, `modeltraces`, and `pelicans`.
 Each map uses a native account ID as a decimal string.
@@ -63,6 +70,7 @@ Restart reloads saved history/settings without restoring tasks or the previous i
 | Settings read fails | Return the repository error |
 | Settings validation fails | Reject before writing |
 | Settings write fails | Return the error without changing active settings |
+| Account verdict save fails | Keep the previous verdict and prevent the optional priority write |
 
 ### 5. Good / Base / Bad Cases
 
@@ -78,6 +86,8 @@ Use existing native evaluation persistence tests for load protection, latest-20 
 Use `tests/backend/internal/service/codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
 Reuse existing persistence evidence. Add focused checks only for changed storage behavior without coverage.
 Account participation needs key-only-save and full-edit-preservation assertions, without a separate restart or copy test matrix.
+Extend the same metadata fixtures for the verdict key and absent-state normal default.
+Use the focused coordinator tests for verdict-save failure. Do not repeat lifecycle checks in storage tests.
 Tests use temporary files and synthetic data. Do not delete real history or settings.
 
 ### 7. Wrong vs Correct

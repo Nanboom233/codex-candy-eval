@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/codexeval"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -75,7 +76,7 @@ func TestCodexInspectionAccountSwitch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	s := &inspectionAccountAdminService{stubAdminService: newStubAdminService(), account: &service.Account{
 		ID: 20, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
-		Extra: map[string]any{"unrelated": "preserve"}, Schedulable: true,
+		Extra: map[string]any{"unrelated": "preserve"}, Schedulable: true, Priority: 99,
 	}}
 	h := &AccountHandler{adminService: s}
 	router := gin.New()
@@ -92,11 +93,20 @@ func TestCodexInspectionAccountSwitch(t *testing.T) {
 	if !inspectionAccount(s.account).AutoInspectionEnabled {
 		t.Fatal("absent value must default to enabled")
 	}
+	if inspectionAccount(s.account).Verdict != codexeval.InspectionVerdictNormal {
+		t.Fatal("absent verdict must default to normal at a degraded actual priority")
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/accounts/20/codex-eval-inspection", bytes.NewBufferString(`{"enabled":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || len(s.updates) != 1 || s.updates["codex_eval_inspection_enabled"] != false || s.account.Extra["unrelated"] != "preserve" || !s.account.Schedulable || inspectionAccount(s.account).AutoInspectionEnabled {
 		t.Fatalf("switch save changed unrelated state: %d %s %+v", rec.Code, rec.Body, s.account)
+	}
+	if err := h.persistInspectionVerdict(context.Background(), 20, codexeval.InspectionVerdictDegraded); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updates) != 1 || s.updates["codex_eval_inspection_verdict"] != "degraded" || s.account.Extra["unrelated"] != "preserve" || s.account.Extra["codex_eval_inspection_enabled"] != false || inspectionAccount(s.account).Verdict != codexeval.InspectionVerdictDegraded {
+		t.Fatalf("verdict save changed unrelated metadata: %+v", s.account.Extra)
 	}
 }

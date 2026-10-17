@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexev
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
-@@ -0,0 +1,643 @@
+@@ -0,0 +1,672 @@
 +package codexeval
 +
 +import (
@@ -15,10 +15,18 @@ new file mode 100644
 +	"time"
 +)
 +
++type InspectionVerdict string
++
++const (
++	InspectionVerdictNormal   InspectionVerdict = "normal"
++	InspectionVerdictDegraded InspectionVerdict = "degraded"
++)
++
 +type InspectionAccount struct {
 +	Target
 +	Name                  string
 +	Priority              int
++	Verdict               InspectionVerdict
 +	Available             bool
 +	GroupIDs              []int64
 +	Type                  string
@@ -31,6 +39,7 @@ new file mode 100644
 +	Load           func(context.Context) (InspectionSettings, error)
 +	List           func(context.Context, InspectionSettings) ([]InspectionAccount, error)
 +	Get            func(context.Context, int64) (InspectionAccount, error)
++	PersistVerdict func(context.Context, int64, InspectionVerdict) error
 +	UpdatePriority func(context.Context, int64, int) error
 +	Notify         func(context.Context, InspectionSettings, string, string) error
 +}
@@ -408,10 +417,10 @@ new file mode 100644
 +		}
 +		a.Priority = current.Priority
 +		baselines[a.AccountID] = current.Priority
-+		if a.Priority == s.NormalPriority && !answers[0] {
++		if current.Verdict != InspectionVerdictDegraded && !answers[0] {
 +			groups[s.DegradedPriority] = append(groups[s.DegradedPriority], a)
 +		}
-+		if a.Priority == s.DegradedPriority && answers[0] {
++		if current.Verdict == InspectionVerdictDegraded && answers[0] {
 +			groups[s.NormalPriority] = append(groups[s.NormalPriority], a)
 +		}
 +	}
@@ -458,13 +467,30 @@ new file mode 100644
 +	}
 +	for n, a := range eligible {
 +		r := i.snapshot().Results[n]
-+		if r.Outcome != "recommended" || !s.AdjustPriority {
++		if r.Outcome != "recommended" {
 +			continue
 +		}
 +		target := *r.TargetPriority
 +		current, err := i.hooks.Get(ctx, a.AccountID)
 +		if err == nil && !current.AutoInspectionEnabled {
 +			i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
++			continue
++		}
++		if ctx.Err() != nil {
++			return
++		}
++		if err == nil {
++			verdict := InspectionVerdictDegraded
++			if target == s.NormalPriority {
++				verdict = InspectionVerdictNormal
++			}
++			err = i.hooks.PersistVerdict(ctx, a.AccountID, verdict)
++		}
++		if err != nil {
++			i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++			continue
++		}
++		if !s.AdjustPriority {
 +			continue
 +		}
 +		if err == nil && (!inspectionEligible(current, s) || current.Priority != baselines[a.AccountID]) {
@@ -475,6 +501,9 @@ new file mode 100644
 +		mu.Unlock()
 +		if err == nil && busy {
 +			err = fmt.Errorf("账户正在测试")
++		}
++		if err == nil && current.Priority == target {
++			continue
 +		}
 +		if err == nil && ctx.Err() == nil {
 +			err = i.hooks.UpdatePriority(ctx, a.AccountID, target)
@@ -794,7 +823,7 @@ diff --git a/backend/internal/handler/admin/codex_inspection_handler.go b/backen
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/handler/admin/codex_inspection_handler.go
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,154 @@
 +package admin
 +
 +import (
@@ -813,8 +842,12 @@ new file mode 100644
 +	if !exists {
 +		enabled = true
 +	}
++	verdict := codexeval.InspectionVerdictNormal
++	if a.Extra["codex_eval_inspection_verdict"] == string(codexeval.InspectionVerdictDegraded) {
++		verdict = codexeval.InspectionVerdictDegraded
++	}
 +	return codexeval.InspectionAccount{Target: codexeval.Target{AccountID: a.ID}, Name: a.Name,
-+		Priority: a.Priority, Available: a.IsSchedulable(), GroupIDs: a.GroupIDs, Type: a.Type,
++		Priority: a.Priority, Verdict: verdict, Available: a.IsSchedulable(), GroupIDs: a.GroupIDs, Type: a.Type,
 +		PlanType: a.GetCredential("plan_type"), Enabled: a.Schedulable, AutoInspectionEnabled: enabled}
 +}
 +
@@ -863,6 +896,10 @@ new file mode 100644
 +	return out
 +}
 +
++func (h *AccountHandler) persistInspectionVerdict(ctx context.Context, id int64, verdict codexeval.InspectionVerdict) error {
++	return h.adminService.UpdateAccountExtra(ctx, id, map[string]any{"codex_eval_inspection_verdict": string(verdict)})
++}
++
 +func (h *SettingHandler) InitializeCodexInspection(accounts *AccountHandler) {
 +	codexeval.InitializeInspection(codexeval.InspectionHooks{
 +		Load: h.settingService.GetCodexInspectionSettings,
@@ -893,6 +930,7 @@ new file mode 100644
 +			}
 +			return accounts.inspectionAccounts(ctx, []service.Account{*a})[0], nil
 +		},
++		PersistVerdict: accounts.persistInspectionVerdict,
 +		UpdatePriority: func(ctx context.Context, id int64, priority int) error {
 +			_, err := accounts.adminService.UpdateAccount(ctx, id, &service.UpdateAccountInput{Priority: &priority})
 +			return err
