@@ -1,9 +1,13 @@
 dist/
-.DS_store
+.DS_Store
 
 # Private environment and deployment settings.
 .env
 .env.*
-!.env.example
 .playwright-cli/
 .agents
+
+# Generated Python and browser files.
+__pycache__/
+*.py[cod]
+/output/

@@ -1,125 +1,42 @@
 # Quality Guidelines
 
-> Preserve host contracts, shared-state safety, and existing verification gates.
+## Current Sub2API scope
 
----
+Use [administrator evaluation](./runtime-installation.md), [native inspection](./native-inspection.md), and [binary delivery](./minimal-linux-delivery.md) for current contracts.
+The delivery targets Sub2API v0.2.17 on Linux/amd64.
+The installer also accepts v0.2.16 as an upgrade source.
+Use the original Sub2API source tree and this repository's native evaluation module.
+Active integration lives in numbered patches under `patches/`. All tests live under `tests/`.
+Use [Directory Structure](./directory-structure.md) for file ownership.
 
-## Overview
-
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-Follow adjacent Go code and the standard-library helpers already used here. Check `go.mod` before adding imports or dependencies.
-
-The module declares Go 1.24. The release workflow configures no separate backend lint framework or frontend package-manager build.
-
-Use `gofmt` on changed Go files. Update behavior tests when code behavior changes.
-
-Evidence: [repository checks](../../../AGENTS.md), [module metadata](../../../go.mod), and [release check job](../../../.github/workflows/release.yml).
-
----
-
-## Forbidden Patterns
-
-<!-- Patterns that should never be used and why -->
-
-- Do not call the host while holding the histories mutex. Host requests can block and interfere with result updates or shutdown.
-- Do not bypass `credentialBusyLocked` when starting evaluations. One credential cannot run multiple test types at once.
-- Do not start tracked workers without matching `tasks.Add` and `tasks.Done`.
-- Do not use `t.Parallel` in tests that replace package globals through `setupTest`.
-- Do not return a different management error shape from the one consumed by the browser.
-- Do not edit vendored renderers or add a framework as an unrelated cleanup.
-- Do not change ABI callbacks or C buffer ownership without checking the CPA host contract.
-- Do not expose secrets in tests, logs, fixtures, or deployment reports.
-
-Evidence: [stateResponse and Quiesce](../../../internal/plugin/plugin.go), [startRuns](../../../internal/plugin/runs.go), [test setup](../../../internal/plugin/plugin_test.go), and [C ABI bridge](../../../cmd/cpa-codex-candy-eval/cabi.go).
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-### Shared state and shutdown
-
-Protect result maps, progress, configured credentials, and shutdown state with `mu`. Read the locking contract of each helper before calling it.
-
-`startRuns` selects credentials before locking. Its callbacks run with `mu` held. A start callback launches a worker that eventually calls `tasks.Done`.
-
-`Quiesce` rejects new runs, cancels collection work, releases `mu`, and waits for tracked tasks. Do not wait for workers while holding their required lock.
-
-Evidence: [run callback contract](../../../internal/plugin/runs.go), [candy worker cleanup](../../../internal/plugin/candy.go), and `TestQuiesceDrainsBothTests` in [plugin tests](../../../internal/plugin/plugin_test.go).
-
-### Host and embedding contracts
-
-Keep JSON tags aligned across Go handlers, browser consumers, and persisted records. Register and handle each management route together.
-
-The C bridge uses the `cshared` build tag. Plugin response buffers use C allocation and the plugin free callback. Host response buffers use the host free callback.
-
-When changing embedded assets, check Go embed declarations, replacement markers, script order, and inline-script safety. The browser sources share one assembled page.
-
-Evidence: [C ownership](../../../cmd/cpa-codex-candy-eval/cabi.go), [UI assembly](../../../internal/plugin/plugin.go), and `TestScriptsInlineSafely` in [plugin tests](../../../internal/plugin/plugin_test.go).
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-Use `setupTest(t)` for tests that touch plugin globals. It assigns a temporary state path, installs a failing default host mock, and restores prior globals after workers finish.
-
-Use synthetic host responses rather than live model requests. `streamHost` and `mockModelResponse` demonstrate the streaming host contract.
-
-Use channels and bounded waits to verify concurrent runs and cancellation. Do not let asynchronous workers outlive test cleanup.
-
-Evidence: [plugin test setup](../../../internal/plugin/plugin_test.go), [model tests](../../../internal/plugin/model_test.go), and [fingerprint concurrency tests](../../../internal/plugin/fingerprint_test.go).
-
-For Go code changes, run:
+For native behavior changes, use the approved focused checks:
 
 ```sh
-go vet ./...
-go test -race ./...
+python3 scripts/build.py --source /path/to/original-sub2api --check
 ```
 
-For embedded UI changes, also run:
+Reuse completed baseline and unchanged integration evidence.
+Add only checks needed for changed behavior.
+Format changed Go files with `gofmt`.
+Check affected scripts, resources, and references.
+Directory and documentation changes do not require another product build.
+Report actual failures, skipped checks, and execution limits.
 
-```sh
-node scripts/test-ui.cjs
-```
+Use `tests/ui/sub2api-dropdowns.cjs` for existing native page assertions.
+Use `tests/installer/native_inspection_fixture.py` with the retained `sub2api-codex-eval-test` container for approved runtime checks.
+Its support files are `native_fixture_start.sh` and `native_fixture_supplier.py` in the same directory.
+Use `tests/installer/test_native_version.py` for installer version behavior.
+Do not create another suite for retired interfaces.
 
-The UI checks use Node built-ins and a mocked DOM through `node:vm`. They do not replace browser verification.
+Preserve native administrator authentication, account transport, cancellation, history errors, and settings storage.
+Keep tests synthetic. Do not expose credentials in fixtures, logs, or reports.
+Use existing result and error owners.
+Review handler, service, runtime, and page fields together when a contract changes.
+Keep generated output outside the user package and work commits.
 
-Plugin code, UI, build, or installer changes also require deployment and authenticated end-to-end verification under `AGENTS.md`. Documentation and local setup changes are exempt.
-
-Evidence: [release checks](../../../.github/workflows/release.yml), [UI harness](../../../scripts/test-ui.cjs), and [deployment requirements](../../../AGENTS.md).
-
----
-
-## Code Review Checklist
-
-<!-- What reviewers should check -->
-
-- [ ] The change stays within its approved scope and preserves unrelated work.
-- [ ] Existing helpers own repeated scheduling, model execution, history, and response behavior.
-- [ ] Host calls occur outside `mu`, and worker tracking permits shutdown to finish.
-- [ ] Persistence failures preserve the contracts in [JSON persistence guidelines](./database-guidelines.md).
-- [ ] Go JSON tags, management routes, UI consumers, and response errors agree.
-- [ ] Tests isolate package globals and cover changed success and failure behavior.
-- [ ] Embedded scripts cannot introduce an early HTML closing script tag.
-- [ ] Release tags match `pluginVersion`.
-- [ ] Linux builds retain the glibc 2.17 baseline when build work is in scope.
-- [ ] Checks appropriate to the changed files have completed, with blockers reported.
-
-Release evidence: [workflow](../../../.github/workflows/release.yml) and [macOS cross-build instructions](../../../AGENTS.md).
-
-Do not claim default Go tests cover the C bridge. Default Go checks exclude that file unless the `cshared` tag is present.
+The task removes compatibility profiles, legacy migrations, shims, and multi-version adapters.
+Gateway private keys, directed billing, activation, maintenance, and universal builders are retired mechanisms.
+Race, coverage, full-suite, architecture matrices, and source-resource parity are not current acceptance requirements.
 
 ## Commit and Finish Work
 

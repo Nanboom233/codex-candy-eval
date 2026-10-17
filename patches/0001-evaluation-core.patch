@@ -1,0 +1,2326 @@
+diff --git a/backend/internal/codexeval/candy.go b/backend/internal/codexeval/candy.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/candy.go
+@@ -0,0 +1,92 @@
++package codexeval
++
++import (
++	"time"
++)
++
++const candyMaxRuns = 10
++
++var (
++	candyResults = map[string][]candyResult{}
++	candyRunning = map[string]*candyProgress{}
++)
++
++const candyPrompt = `不使用任何外部工具回答以下问题：
++
++在一个黑色的袋子里放有三种口味的糖果，每种糖果有两种不同的形状（圆形和五角星形，不同的形状靠手感可以分辨）。现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目，那么，最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖？（同时手中有圆形苹果味匹配五角星桃子味糖果，或者有圆形桃子味匹配五角星苹果味糖果都满足要求）
++
++        苹果味  桃子味  西瓜味
++圆形       7      9      8
++五角星形   7      6      4
++`
++
++type candyResult struct {
++	Info
++	Status          string    `json:"status"`
++	Skipped         bool      `json:"skipped,omitempty"`
++	Time            time.Time `json:"time"`
++	Model           string    `json:"model"`
++	Effort          string    `json:"effort"`
++	OK              bool      `json:"ok"`
++	Answer          string    `json:"answer,omitempty"`
++	Error           string    `json:"error,omitempty"`
++	InputTokens     int64     `json:"input_tokens"`
++	OutputTokens    int64     `json:"output_tokens"`
++	ReasoningTokens int64     `json:"reasoning_tokens"`
++	DurationMS      int64     `json:"duration_ms"`
++}
++
++type candyProgress struct {
++	Done  int `json:"done"`
++	Total int `json:"total"`
++}
++
++// Each credential runs serially; different credentials run in parallel.
++func runCandy(auth credential, model, effort string, runs int) {
++	id := auth.ID
++	defer func() {
++		mu.Lock()
++		delete(candyRunning, id)
++		mu.Unlock()
++	}()
++	for range runs {
++		mu.Lock()
++		stopping := auth.ctx.Err() != nil
++		mu.Unlock()
++		if stopping {
++			return
++		}
++		r := evaluateCandy(auth, model, effort)
++		mu.Lock()
++		candyResults[id] = appendRecent(candyResults[id], r)
++		candyRunning[id].Done++
++		_ = saveStateLocked()
++		mu.Unlock()
++	}
++}
++
++func evaluateCandy(auth credential, model, effort string) candyResult {
++	r := candyResult{Info: auth.info(), Status: "completed", Time: time.Now().UTC(), Model: model, Effort: effort}
++	out, elapsed, err := askCodex(auth, model, effort, candyPrompt)
++	r.DurationMS = elapsed.Milliseconds()
++	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
++	if err != nil {
++		r.Error = truncate(err.Error(), 500)
++		r.Status = failedStatus(auth.ctx)
++		return r
++	}
++	r.Answer = truncate(out.Answer, 4000)
++	r.OK = hasStandalone21(out.Answer)
++	return r
++}
++
++// hasStandalone21 reports whether "21" appears without adjacent digits.
++func hasStandalone21(text string) bool {
++	isDigit := func(i int) bool { return i >= 0 && i < len(text) && text[i] >= '0' && text[i] <= '9' }
++	for i := 0; i+1 < len(text); i++ {
++		if text[i] == '2' && text[i+1] == '1' && !isDigit(i-1) && !isDigit(i+2) {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/backend/internal/codexeval/codex.go b/backend/internal/codexeval/codex.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/codex.go
+@@ -0,0 +1,239 @@
++package codexeval
++
++import (
++	"bytes"
++	"crypto/rand"
++	"crypto/sha1"
++	"crypto/sha256"
++	_ "embed"
++	"encoding/binary"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"time"
++)
++
++// A Codex turn is the first request of a new codex-tui 0.160.0 thread on Responses Lite.
++// data/codex_context.json holds that client's tools, base instructions and turn context, taken
++// from a captured request with the machine's paths replaced by /home/user/workspace.
++const (
++	codexUserAgent   = "codex-tui/0.160.0 (Ubuntu 26.4.0; aarch64) ghostty/1.3.1 (codex-tui; 0.160.0)"
++	codexEnvironment = `<environment_context>
++  <cwd>/home/user/workspace</cwd>
++  <shell>bash</shell>
++  <current_date>%s</current_date>
++  <timezone>Etc/UTC</timezone>
++  <filesystem><workspace_roots><root>/home/user/workspace</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="read"><special>:root</special></entry><entry access="write"><path>/home/user/workspace</path></entry><entry access="write"><special>:slash_tmp</special></entry><entry access="write"><special>:tmpdir</special></entry><entry access="read"><path>/home/user/workspace/.git</path></entry><entry access="read"><path>/home/user/workspace/.agents</path></entry><entry access="read"><path>/home/user/workspace/.codex</path></entry><entry access="read"><path>/home/user/workspace/.aws</path></entry></file_system></permission_profile></filesystem>
++</environment_context>`
++)
++
++// codexText is one text part of a context message, labeled with the kind Codex reports for it.
++type codexText struct {
++	Kind string `json:"kind"`
++	Text string `json:"text"`
++}
++
++//go:embed data/codex_context.json
++var codexContextJSON []byte
++
++var codexContext = mustDecode[struct {
++	Tools            json.RawMessage `json:"tools"`
++	BaseInstructions string          `json:"base_instructions"`
++	Messages         []struct {
++		Role    string      `json:"role"`
++		Content []codexText `json:"content"`
++	} `json:"messages"`
++}](codexContextJSON)
++
++// codexTools is the tools list as Codex sends it; the tools item ID hashes these exact bytes.
++var codexTools = func() []byte {
++	var tools bytes.Buffer
++	if err := json.Compact(&tools, codexContext.Tools); err != nil {
++		panic(err)
++	}
++	return tools.Bytes()
++}()
++
++type codexItem struct {
++	Type     string             `json:"type"`
++	ID       string             `json:"id"`
++	Role     string             `json:"role"`
++	Tools    json.RawMessage    `json:"tools,omitempty"`
++	Content  []codexContent     `json:"content,omitempty"`
++	Metadata *codexItemMetadata `json:"internal_chat_message_metadata_passthrough,omitempty"`
++}
++
++type codexContent struct {
++	Type string `json:"type"`
++	Text string `json:"text"`
++}
++
++type codexItemMetadata struct {
++	TurnID           string   `json:"turn_id,omitempty"`
++	CreateTime       float64  `json:"create_time,omitempty"`
++	ContentItemKinds []string `json:"content_item_kinds"`
++}
++
++type codexReasoning struct {
++	Effort  string `json:"effort,omitempty"`
++	Context string `json:"context"`
++}
++
++type codexClientMetadata struct {
++	ThreadID       string `json:"thread_id"`
++	WindowID       string `json:"x-codex-window-id"`
++	TurnID         string `json:"turn_id"`
++	RootTurnID     string `json:"root_turn_id"`
++	TurnMetadata   string `json:"x-codex-turn-metadata"`
++	InstallationID string `json:"x-codex-installation-id"`
++	SessionID      string `json:"session_id"`
++}
++
++type codexRequest struct {
++	Model             string              `json:"model"`
++	Input             []codexItem         `json:"input"`
++	ToolChoice        string              `json:"tool_choice"`
++	ParallelToolCalls bool                `json:"parallel_tool_calls"`
++	Reasoning         codexReasoning      `json:"reasoning"`
++	Store             bool                `json:"store"`
++	Stream            bool                `json:"stream"`
++	Include           []string            `json:"include"`
++	PromptCacheKey    string              `json:"prompt_cache_key"`
++	Text              map[string]string   `json:"text"`
++	ClientMetadata    codexClientMetadata `json:"client_metadata"`
++}
++
++type codexTurnMetadata struct {
++	InstallationID             string `json:"installation_id"`
++	SessionID                  string `json:"session_id"`
++	ThreadID                   string `json:"thread_id"`
++	AgentName                  string `json:"agent_name"`
++	TurnID                     string `json:"turn_id"`
++	WindowID                   string `json:"window_id"`
++	WindowNumber               int    `json:"window_number"`
++	ContextWindowID            string `json:"context_window_id"`
++	RequestKind                string `json:"request_kind"`
++	RootTurnID                 string `json:"root_turn_id"`
++	ThreadSource               string `json:"thread_source"`
++	TurnTrigger                string `json:"turn_trigger"`
++	Sandbox                    string `json:"sandbox"`
++	SandboxMode                string `json:"sandbox_mode"`
++	AutoReviewEnabled          bool   `json:"auto_review_enabled"`
++	NodeReplAutoReviewRequired bool   `json:"node_repl_auto_review_required"`
++	NodeReplDisabled           bool   `json:"node_repl_disabled"`
++	TurnStartedAtUnixMS        int64  `json:"turn_started_at_unix_ms"`
++	AnalyticsEnabled           bool   `json:"analytics_enabled"`
++	Model                      string `json:"model"`
++	ReasoningEffort            string `json:"reasoning_effort,omitempty"`
++}
++
++// codexTurn returns the request and headers of a new Codex thread whose first user message is prompt.
++// An empty effort leaves the reasoning effort unspecified.
++func codexTurn(authID, model, effort, prompt string) (codexRequest, http.Header) {
++	now := time.Now()
++	thread, turnID := uuidV7(), uuidV7().String()
++	threadID := thread.String()
++	windowID := threadID + ":0"
++	// Each credential acts as its own Codex installation, stable across restarts.
++	installation := sha256.Sum256([]byte("codex-installation:" + authID))
++	installationID := newUUID(installation[:], 4).String()
++	metadata, _ := json.Marshal(codexTurnMetadata{
++		InstallationID: installationID, SessionID: threadID, ThreadID: threadID, AgentName: "/root",
++		TurnID: turnID, WindowID: windowID, ContextWindowID: uuidV7().String(), RequestKind: "turn",
++		RootTurnID: turnID, ThreadSource: "user", TurnTrigger: "user", Sandbox: "seccomp", SandboxMode: "workspace-write",
++		AutoReviewEnabled: true, NodeReplAutoReviewRequired: true, TurnStartedAtUnixMS: now.UnixMilli(),
++		AnalyticsEnabled: true, Model: model, ReasoningEffort: effort,
++	})
++	created := float64(now.UnixMicro()) / 1e6
++	input := codexPrefix(thread)
++	for _, message := range codexContext.Messages {
++		input = append(input, codexMessage("msg_"+uuidV7().String(), message.Role, turnID, created, message.Content...))
++	}
++	input = append(input,
++		codexMessage("msg_"+uuidV7().String(), "user", turnID, created,
++			codexText{"environments.environment_context", fmt.Sprintf(codexEnvironment, now.UTC().Format(time.DateOnly))}),
++		codexMessage("msg_"+uuidV7().String(), "user", turnID, created, codexText{"user.text", prompt}),
++	)
++	request := codexRequest{
++		Model: model, Input: input, ToolChoice: "auto", Reasoning: codexReasoning{effort, "all_turns"},
++		Stream: true, Include: []string{"reasoning.encrypted_content"}, PromptCacheKey: threadID,
++		Text: map[string]string{"verbosity": "low"},
++		ClientMetadata: codexClientMetadata{
++			ThreadID: threadID, WindowID: windowID, TurnID: turnID, RootTurnID: turnID,
++			TurnMetadata: string(metadata), InstallationID: installationID, SessionID: threadID,
++		},
++	}
++	headers := http.Header{
++		"Accept":                                 {"text/event-stream"},
++		"Content-Type":                           {"application/json"},
++		"Originator":                             {"codex-tui"},
++		"User-Agent":                             {codexUserAgent},
++		"Session-Id":                             {threadID},
++		"Thread-Id":                              {threadID},
++		"X-Client-Request-Id":                    {threadID},
++		"X-Codex-Window-Id":                      {windowID},
++		"X-Codex-Turn-Metadata":                  {string(metadata)},
++		"X-Codex-Beta-Features":                  {"remote_compaction_v2"},
++		"X-Openai-Internal-Codex-Responses-Lite": {"true"},
++	}
++	return request, headers
++}
++
++// askCodex sends prompt as a new Codex turn on auth. Effort is sent as selected.
++func askCodex(auth credential, model, effort, prompt string) (out modelResponse, elapsed time.Duration, err error) {
++	body, headers := codexTurn("sub2api-account:"+auth.ID, model, effort, prompt)
++	ctx, cancel := withModelTimeout(auth.ctx, answerTimeout)
++	defer cancel()
++	start := time.Now()
++	out, _, err = executeModel(ctx, auth, model, body, headers)
++	return out, time.Since(start), err
++}
++
++// codexPrefix builds the tools and base instructions items Codex puts first in every request, with
++// IDs hashed from the thread ID and their content.
++func codexPrefix(thread uuid) []codexItem {
++	space := uuidV5(uuidOID, []byte(thread.String()))
++	instructions := codexContext.BaseInstructions
++	return []codexItem{
++		{Type: "additional_tools", ID: "at_" + uuidV5(space, codexTools).String(), Role: "developer", Tools: codexTools},
++		codexMessage("msg_"+uuidV5(space, []byte(instructions)).String(), "developer", "", 0, codexText{"model.base_instructions", instructions}),
++	}
++}
++
++func codexMessage(id, role, turnID string, created float64, parts ...codexText) codexItem {
++	metadata := &codexItemMetadata{TurnID: turnID, CreateTime: created}
++	item := codexItem{Type: "message", ID: id, Role: role, Metadata: metadata}
++	for _, part := range parts {
++		item.Content = append(item.Content, codexContent{"input_text", part.Text})
++		metadata.ContentItemKinds = append(metadata.ContentItemKinds, part.Kind)
++	}
++	return item
++}
++
++type uuid [16]byte
++
++// uuidOID is the RFC 9562 name space for ISO OIDs.
++var uuidOID = uuid{0x6b, 0xa7, 0xb8, 0x12, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
++
++func newUUID(b []byte, version byte) (id uuid) {
++	copy(id[:], b)
++	id[6] = id[6]&0x0f | version<<4
++	id[8] = id[8]&0x3f | 0x80
++	return id
++}
++
++func uuidV5(space uuid, name []byte) uuid {
++	sum := sha1.Sum(append(space[:], name...))
++	return newUUID(sum[:], 5)
++}
++
++func uuidV7() uuid {
++	var b [16]byte
++	binary.BigEndian.PutUint64(b[:], uint64(time.Now().UnixMilli())<<16)
++	_, _ = rand.Read(b[6:])
++	return newUUID(b[:], 7)
++}
++
++func (id uuid) String() string {
++	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
++}
+diff --git a/backend/internal/codexeval/fingerprint.go b/backend/internal/codexeval/fingerprint.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/fingerprint.go
+@@ -0,0 +1,182 @@
++package codexeval
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"math/rand"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++const (
++	fingerprintDefaultConcurrency = 2
++	fingerprintMaxConcurrency     = 6
++)
++
++type fingerprintMode struct {
++	ID      string `json:"id"`
++	Name    string `json:"name"`
++	Cells   int    `json:"cells"`
++	Samples int    `json:"samples_per_cell"`
++}
++
++var fingerprintModes = []fingerprintMode{{"quick", "快速", 4, 15}, {"standard", "标准", 8, 25}, {"strict", "严格", 16, 25}}
++
++type fingerprintSample struct {
++	Output     modelResponse
++	Cell       string
++	Normalized string
++	Category   string
++	Error      string
++}
++
++type fingerprintResult struct {
++	Info
++	ID              string                 `json:"id"`
++	Time            time.Time              `json:"time"`
++	Model           string                 `json:"model"`
++	Mode            string                 `json:"mode"`
++	Concurrency     int                    `json:"concurrency,omitempty"`
++	Effort          string                 `json:"effort"`
++	Status          string                 `json:"status"`
++	Total           int                    `json:"total"`
++	Done            int                    `json:"done"`
++	Valid           int                    `json:"valid"`
++	Errors          int                    `json:"errors"`
++	DurationMS      int64                  `json:"duration_ms"`
++	InputTokens     *int64                 `json:"input_tokens"`
++	OutputTokens    *int64                 `json:"output_tokens"`
++	ReasoningTokens *int64                 `json:"reasoning_tokens"`
++	Error           string                 `json:"error,omitempty"`
++	Attribution     fingerprintAttribution `json:"attribution"`
++}
++
++// summary drops the comparison tables that only the detail dialog shows.
++func (r fingerprintResult) summary() fingerprintResult {
++	r.Attribution.Comparisons, r.Attribution.Warnings = nil, nil
++	return r
++}
++
++type fingerprintProgress struct {
++	Model       string `json:"model"`
++	Mode        string `json:"mode"`
++	Done        int    `json:"done"`
++	Total       int    `json:"total"`
++	Valid       int    `json:"valid"`
++	Errors      int    `json:"errors"`
++	Phase       string `json:"phase"`
++	Concurrency int    `json:"concurrency"`
++	cancel      context.CancelFunc
++}
++
++var (
++	fingerprintResults = map[string][]fingerprintResult{}
++	fingerprintRunning = map[string]*fingerprintProgress{}
++	fingerprintSlots   = make(chan struct{}, fingerprintMaxConcurrency)
++)
++
++func runFingerprint(ctx context.Context, auth credential, model string, mode fingerprintMode, p *fingerprintProgress) {
++	id := auth.ID
++	started := time.Now()
++	var inputTokens, outputTokens, reasoningTokens int64
++	r := fingerprintResult{Info: auth.info(), ID: fmt.Sprintf("%d", started.UnixNano()), Time: started.UTC(), Model: model, Mode: mode.ID, Concurrency: p.Concurrency, Effort: "low", Status: "completed", Total: mode.Cells * mode.Samples}
++	r.InputTokens, r.OutputTokens, r.ReasoningTokens = &inputTokens, &outputTokens, &reasoningTokens
++	defer func() {
++		if recovered := recover(); recovered != nil {
++			r.Status, r.Error = "failed", fmt.Sprint(recovered)
++		}
++		r.DurationMS = time.Since(started).Milliseconds()
++		mu.Lock()
++		if ctx.Err() != nil && r.Done < r.Total && r.Status != "failed" {
++			r.Status = "cancelled"
++		}
++		p.cancel()
++		fingerprintResults[id] = appendRecent(fingerprintResults[id], r)
++		delete(fingerprintRunning, id)
++		_ = saveStateLocked()
++		mu.Unlock()
++	}()
++	jobs := make([]fingerprintProbe, 0, r.Total)
++	for _, probe := range fingerprintProbes[:mode.Cells] {
++		for range mode.Samples {
++			jobs = append(jobs, probe)
++		}
++	}
++	rand.Shuffle(len(jobs), func(i, j int) { jobs[i], jobs[j] = jobs[j], jobs[i] })
++	events := make(chan fingerprintSample)
++	var cursor atomic.Int64
++	var workers sync.WaitGroup
++	for range p.Concurrency {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for ctx.Err() == nil {
++				i := int(cursor.Add(1) - 1)
++				if i >= len(jobs) {
++					return
++				}
++				sample := collectFingerprintSample(ctx, auth, model, jobs[i])
++				events <- sample
++			}
++		}()
++	}
++	go func() { workers.Wait(); close(events) }()
++	valid := map[string][]string{}
++	consecutiveErrors := 0
++	for sample := range events {
++		inputTokens += sample.Output.InputTokens
++		outputTokens += sample.Output.OutputTokens
++		reasoningTokens += sample.Output.ReasoningTokens
++		if sample.Category == "cancelled" {
++			continue
++		}
++		r.Done++
++		if sample.Category == "error" {
++			r.Errors++
++			consecutiveErrors++
++			if consecutiveErrors >= 8 {
++				r.Status, r.Error = "failed", "连续 8 次请求失败，已停止采集："+sample.Error
++				p.cancel()
++			}
++		} else {
++			consecutiveErrors = 0
++		}
++		if sample.Category == "valid" {
++			r.Valid++
++			valid[sample.Cell] = append(valid[sample.Cell], sample.Normalized)
++		}
++		mu.Lock()
++		p.Done, p.Valid, p.Errors = r.Done, r.Valid, r.Errors
++		mu.Unlock()
++	}
++	mu.Lock()
++	if p.Phase != "cancelling" {
++		p.Phase = "comparing"
++	}
++	mu.Unlock()
++	r.Attribution = attributeFingerprint(model, valid)
++}
++
++func collectFingerprintSample(ctx context.Context, auth credential, model string, probe fingerprintProbe) (sample fingerprintSample) {
++	sample.Cell = probe.ID
++	prompt := probe.Prompts[rand.Intn(len(probe.Prompts))]
++	out, _, err := executeProbe(ctx, auth, model, map[string]any{
++		"model": model, "stream": true,
++		"instructions": probe.Instructions, "input": prompt,
++		"temperature": 1.0, "reasoning": map[string]string{"effort": "low"},
++		"store": false,
++	}, nil, fingerprintSlots)
++	sample.Output = out
++	if err != nil {
++		if errors.Is(err, context.Canceled) {
++			sample.Category = "cancelled"
++			return
++		}
++		sample.Category, sample.Error = "error", truncate(err.Error(), 500)
++		return
++	}
++	sample.Normalized, sample.Category = normalizeFingerprintAnswer(out.Answer, probe)
++	return
++}
+diff --git a/backend/internal/codexeval/fingerprint_algorithm.go b/backend/internal/codexeval/fingerprint_algorithm.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/fingerprint_algorithm.go
+@@ -0,0 +1,424 @@
++package codexeval
++
++import (
++	_ "embed"
++	"encoding/json"
++	"hash/crc32"
++	"math"
++	"math/rand"
++	"regexp"
++	"sort"
++	"strconv"
++	"strings"
++	"unicode"
++
++	"golang.org/x/text/unicode/norm"
++)
++
++const (
++	fingerprintMinValid     = 10
++	fingerprintMinCells     = 4
++	fingerprintPermutations = 1000
++)
++
++type fingerprintProbe struct {
++	ID           string   `json:"id"`
++	Kind         string   `json:"kind"`
++	Lo           int      `json:"lo"`
++	Hi           int      `json:"hi"`
++	Instructions string   `json:"instructions"`
++	Prompts      []string `json:"prompts"`
++}
++
++type fingerprintBaseline struct {
++	Model string              `json:"model"`
++	Cells map[string][]string `json:"cells"`
++}
++
++//go:embed data/fingerprint_probes.json
++var fingerprintProbesJSON []byte
++
++//go:embed data/fingerprint_baselines.json
++var fingerprintBaselinesJSON []byte
++
++var fingerprintProbes = mustDecode[[]fingerprintProbe](fingerprintProbesJSON)
++var fingerprintBaselines = mustDecode[[]fingerprintBaseline](fingerprintBaselinesJSON)
++
++func mustDecode[T any](data []byte) T {
++	var value T
++	if err := json.Unmarshal(data, &value); err != nil {
++		panic(err)
++	}
++	return value
++}
++
++var fingerprintRefusal = regexp.MustCompile(`(?i)\bas an ai\b|\bi (?:cannot|can't|can not|won't|will not)\b|\bi'?m (?:unable|not able|sorry)\b|\bsorry,? (?:i|but)\b|\bcannot (?:comply|assist|help)\b|我不能|我无法|无法回答|不能回答|抱歉|对不起|作为(?:一个)?(?:AI|人工智能)`)
++var fingerprintWord = regexp.MustCompile(`^[a-z]+$`)
++var fingerprintDigits = regexp.MustCompile(`^[0-9]+$`)
++var fingerprintLetterNames = map[string]string{"bee": "b", "cee": "c", "dee": "d", "gee": "g", "jay": "j", "kay": "k", "el": "l", "ell": "l", "em": "m", "en": "n", "oh": "o", "pee": "p", "cue": "q", "queue": "q", "ar": "r", "es": "s", "ess": "s", "tee": "t", "vee": "v", "ex": "x", "why": "y", "zee": "z", "zed": "z"}
++var fingerprintOnes = strings.Fields("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen")
++var fingerprintTens = strings.Fields("twenty thirty forty fifty sixty seventy eighty ninety")
++var fingerprintChineseDigits = map[rune]int{'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
++
++func fingerprintNumber(s string) (int, bool) {
++	if fingerprintDigits.MatchString(s) {
++		n, err := strconv.Atoi(s)
++		return n, err == nil
++	}
++	total, current, chinese := 0, 0, true
++	for _, ch := range s {
++		if n, ok := fingerprintChineseDigits[ch]; ok {
++			current = n
++			continue
++		}
++		switch ch {
++		case '十':
++			total += max(current, 1) * 10
++			current = 0
++		case '百':
++			total += max(current, 1) * 100
++			current = 0
++		case '千':
++			total += max(current, 1) * 1000
++			current = 0
++		default:
++			chinese = false
++		}
++	}
++	if chinese && s != "" {
++		return total + current, true
++	}
++	for n, word := range fingerprintOnes {
++		if s == word {
++			return n, true
++		}
++	}
++	if s == "hundred" || s == "onehundred" {
++		return 100, true
++	}
++	for i, tens := range fingerprintTens {
++		if s == tens {
++			return (i + 2) * 10, true
++		}
++		if strings.HasPrefix(s, tens) {
++			for n := 1; n <= 9; n++ {
++				if strings.TrimPrefix(s, tens) == fingerprintOnes[n] {
++					return (i+2)*10 + n, true
++				}
++			}
++		}
++	}
++	return 0, false
++}
++
++func fingerprintChinese(s string, limit int) bool {
++	count := 0
++	for _, ch := range s {
++		if ch < '一' || ch > '鿿' {
++			return false
++		}
++		count++
++	}
++	return count > 0 && count <= limit
++}
++
++func normalizeFingerprintAnswer(raw string, probe fingerprintProbe) (string, string) {
++	raw = strings.TrimSpace(norm.NFC.String(raw))
++	if raw == "" {
++		return "", "empty"
++	}
++	if fingerprintRefusal.MatchString(raw) {
++		return "", "refusal"
++	}
++	clean := strings.Map(func(ch rune) rune {
++		switch {
++		case ch >= '０' && ch <= '９':
++			return '0' + ch - '０'
++		case ch >= '\u0660' && ch <= '\u0669':
++			return '0' + ch - '\u0660'
++		case ch >= '\u06f0' && ch <= '\u06f9':
++			return '0' + ch - '\u06f0'
++		case unicode.IsSpace(ch) || unicode.IsLetter(ch) || unicode.IsNumber(ch):
++			return unicode.ToLower(ch)
++		default:
++			return -1
++		}
++	}, raw)
++	words := strings.Fields(clean)
++	if len(words) == 0 {
++		return "", "empty"
++	}
++	first, answer, valid := words[0], words[0], false
++	switch probe.Kind {
++	case "int":
++		if n, ok := fingerprintNumber(first); ok {
++			answer, valid = strconv.Itoa(n), n >= probe.Lo && n <= probe.Hi
++		}
++	case "letter":
++		if mapped := fingerprintLetterNames[first]; mapped != "" {
++			answer = mapped
++		}
++		valid = len(answer) == 1 && answer[0] >= 'a' && answer[0] <= 'z'
++		if !valid {
++			answer = first
++		}
++	case "color":
++		if first == "grey" {
++			answer = "gray"
++		} else if first == "aqua" {
++			answer = "cyan"
++		} else if len([]rune(first)) >= 2 && fingerprintChinese(first, len([]rune(first))) && strings.HasSuffix(first, "色") {
++			answer = strings.TrimSuffix(first, "色")
++		}
++		valid = fingerprintWord.MatchString(answer) || fingerprintChinese(answer, 4)
++		if !valid {
++			answer = first
++		}
++	case "coin":
++		switch {
++		case first == "heads" || first == "head" || first == "字" || strings.HasPrefix(first, "正"):
++			answer, valid = "heads", true
++		case first == "tails" || first == "tail" || first == "花" || strings.HasPrefix(first, "反"):
++			answer, valid = "tails", true
++		}
++	default:
++		valid = fingerprintWord.MatchString(first) || fingerprintChinese(first, 6)
++	}
++	if valid {
++		return answer, "valid"
++	}
++	return answer, "invalid"
++}
++
++func fingerprintJSD(a, b []string) float64 {
++	if len(a) == 0 || len(b) == 0 {
++		return 0
++	}
++	counts := map[string][2]float64{}
++	for _, v := range a {
++		c := counts[v]
++		c[0]++
++		counts[v] = c
++	}
++	for _, v := range b {
++		c := counts[v]
++		c[1]++
++		counts[v] = c
++	}
++	// Sorting keeps rounding and permutation decisions reproducible across Go map iteration orders.
++	keys := make([]string, 0, len(counts))
++	for key := range counts {
++		keys = append(keys, key)
++	}
++	sort.Strings(keys)
++	distance := 0.0
++	for _, key := range keys {
++		c := counts[key]
++		p, q := c[0]/float64(len(a)), c[1]/float64(len(b))
++		m := (p + q) / 2
++		if p > 0 {
++			distance += p * math.Log2(p/m) / 2
++		}
++		if q > 0 {
++			distance += q * math.Log2(q/m) / 2
++		}
++	}
++	return min(1, max(0, distance))
++}
++
++type fingerprintCellComparison struct {
++	Cell   string  `json:"cell"`
++	JSD    float64 `json:"jsd"`
++	ValidA int     `json:"valid_a"`
++	ValidB int     `json:"valid_b"`
++}
++
++type fingerprintComparison struct {
++	Model   string                      `json:"model"`
++	MeanJSD *float64                    `json:"mean_jsd"`
++	PValue  *float64                    `json:"p_value"`
++	Verdict string                      `json:"verdict"`
++	SelfJSD *float64                    `json:"self_jsd"`
++	Cells   []fingerprintCellComparison `json:"cells"`
++}
++
++func compareFingerprintCells(a, b map[string][]string) ([]fingerprintCellComparison, *float64) {
++	entries := []fingerprintCellComparison{}
++	total := 0.0
++	for _, probe := range fingerprintProbes {
++		x, y := a[probe.ID], b[probe.ID]
++		if len(x) < fingerprintMinValid || len(y) < fingerprintMinValid {
++			continue
++		}
++		d := fingerprintJSD(x, y)
++		total += d
++		entries = append(entries, fingerprintCellComparison{probe.ID, d, len(x), len(y)})
++	}
++	if len(entries) < fingerprintMinCells {
++		return entries, nil
++	}
++	mean := total / float64(len(entries))
++	return entries, &mean
++}
++
++func fingerprintSplitHalf(cells map[string][]string) *float64 {
++	total, n := 0.0, 0
++	for _, probe := range fingerprintProbes {
++		answers := cells[probe.ID]
++		if len(answers) < fingerprintMinValid {
++			continue
++		}
++		a, b := []string{}, []string{}
++		for i, answer := range answers {
++			if i%2 == 0 {
++				a = append(a, answer)
++			} else {
++				b = append(b, answer)
++			}
++		}
++		total += fingerprintJSD(a, b)
++		n++
++	}
++	if n == 0 {
++		return nil
++	}
++	mean := total / float64(n)
++	return &mean
++}
++
++func fingerprintPermutation(a, b map[string][]string, seed string) *float64 {
++	entries, observed := compareFingerprintCells(a, b)
++	if observed == nil {
++		return nil
++	}
++	rng := rand.New(rand.NewSource(int64(crc32.ChecksumIEEE([]byte(seed)))))
++	pools := make([][]string, len(entries))
++	for i, e := range entries {
++		pools[i] = append(append([]string{}, a[e.Cell]...), b[e.Cell]...)
++	}
++	hits := 0
++	for range fingerprintPermutations {
++		total := 0.0
++		for i, e := range entries {
++			pool := pools[i]
++			rng.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
++			total += fingerprintJSD(pool[:e.ValidA], pool[e.ValidA:])
++		}
++		if total/float64(len(entries)) >= *observed-1e-12 {
++			hits++
++		}
++	}
++	p := float64(hits+1) / float64(fingerprintPermutations+1)
++	return &p
++}
++
++func fingerprintDistanceVerdict(d *float64) string {
++	if d == nil {
++		return "insufficient"
++	}
++	if *d <= .25 {
++		return "match"
++	}
++	if *d <= .35 {
++		return "uncertain"
++	}
++	return "mismatch"
++}
++
++type fingerprintAttribution struct {
++	Status          string                  `json:"status"`
++	Message         string                  `json:"message"`
++	Nearest         string                  `json:"nearest,omitempty"`
++	Alpha           float64                 `json:"alpha"`
++	SelfJSD         *float64                `json:"self_jsd"`
++	ReferencePValue *float64                `json:"reference_p_value,omitempty"`
++	Warnings        []string                `json:"warnings"`
++	Comparisons     []fingerprintComparison `json:"comparisons"`
++}
++
++func attributeFingerprint(model string, valid map[string][]string) fingerprintAttribution {
++	r := fingerprintAttribution{Status: "insufficient", Message: "有效样本不足", Alpha: .05 / float64(max(1, 2*len(fingerprintBaselines))), SelfJSD: fingerprintSplitHalf(valid), Warnings: []string{}, Comparisons: []fingerprintComparison{}}
++	var sameCells map[string][]string
++	for _, baseline := range fingerprintBaselines {
++		cells, mean := compareFingerprintCells(valid, baseline.Cells)
++		p := fingerprintPermutation(valid, baseline.Cells, model+"|"+baseline.Model)
++		r.Comparisons = append(r.Comparisons, fingerprintComparison{Model: baseline.Model, MeanJSD: mean, PValue: p, Verdict: fingerprintDistanceVerdict(mean), SelfJSD: fingerprintSplitHalf(baseline.Cells), Cells: cells})
++		if baseline.Model == model {
++			sameCells = baseline.Cells
++		}
++	}
++	sort.SliceStable(r.Comparisons, func(i, j int) bool {
++		a, b := r.Comparisons[i].MeanJSD, r.Comparisons[j].MeanJSD
++		return a != nil && (b == nil || *a < *b)
++	})
++	if len(r.Comparisons) == 0 || r.Comparisons[0].MeanJSD == nil {
++		return r
++	}
++	best := r.Comparisons[0]
++	r.Nearest = best.Model
++	if r.SelfJSD != nil && *r.SelfJSD > .25 {
++		r.Warnings = append(r.Warnings, "本次样本自一致性较低，建议使用严格模式复测")
++	}
++	var same *fingerprintComparison
++	for i := range r.Comparisons {
++		c := &r.Comparisons[i]
++		if c.Model == model {
++			same = c
++		}
++		if c.SelfJSD != nil && *c.SelfJSD > .25 {
++			r.Warnings = append(r.Warnings, c.Model+" 基准自一致性较低")
++		}
++	}
++	significant := func(p *float64) bool { return p != nil && *p < r.Alpha }
++	if same == nil {
++		r.Status, r.Message = "no_baseline", "所选模型没有同名基准，仅展示相似模型"
++		return r
++	}
++	if same.MeanJSD == nil {
++		return r
++	}
++	if best.Model == model {
++		if significant(same.PValue) {
++			r.Status, r.Message = "different", "与同名基准存在显著差异，无法归因到其他模型"
++		} else {
++			r.Status, r.Message = "consistent", "与同名基准未发现显著差异"
++		}
++	} else {
++		var bestCells map[string][]string
++		for _, b := range fingerprintBaselines {
++			if b.Model == best.Model {
++				bestCells = b.Cells
++			}
++		}
++		// Restrict reference separation to the probes actually collected in this run.
++		a, b := map[string][]string{}, map[string][]string{}
++		for cell, answers := range valid {
++			if len(answers) >= fingerprintMinValid {
++				a[cell], b[cell] = sameCells[cell], bestCells[cell]
++			}
++		}
++		r.ReferencePValue = fingerprintPermutation(a, b, "reference|"+model+"|"+best.Model)
++		switch {
++		case !significant(r.ReferencePValue):
++			r.Status, r.Message = "ambiguous", "同名基准与最近基准本身无法区分"
++		case significant(same.PValue) && !significant(best.PValue):
++			r.Status, r.Message = "substitution", "回答分布更接近 "+best.Model+"，疑似被替换为该模型"
++			for _, candidate := range r.Comparisons[1:] {
++				if candidate.Model != model && candidate.PValue != nil && !significant(candidate.PValue) {
++					r.Status, r.Message = "ambiguous", "与同名基准不同，但多个替代模型均无法排除"
++					break
++				}
++			}
++		case !significant(same.PValue) && significant(best.PValue):
++			r.Status, r.Message = "consistent", "与同名基准未发现显著差异"
++		case significant(same.PValue) && significant(best.PValue):
++			r.Status, r.Message = "different", "与同名及最近基准均存在显著差异"
++		default:
++			r.Status, r.Message = "ambiguous", "多个模型均无法排除，样本不足以区分"
++		}
++	}
++	if r.SelfJSD != nil && *r.SelfJSD > .25 && (r.Status == "consistent" || r.Status == "substitution") {
++		r.Status, r.Message = "unstable", "样本波动较大，结论不稳定，建议复测"
++	}
++	return r
++}
+diff --git a/backend/internal/codexeval/model.go b/backend/internal/codexeval/model.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/model.go
+@@ -0,0 +1,277 @@
++package codexeval
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"slices"
++	"strings"
++	"time"
++	"unicode"
++)
++
++type modelResponse struct {
++	Answer          string
++	InputTokens     int64
++	OutputTokens    int64
++	ReasoningTokens int64
++}
++
++func validModelName(model string, allowEffort bool) bool {
++	return model != "" && len(model) <= 200 && strings.IndexFunc(model, unicode.IsControl) < 0 &&
++		(allowEffort || !strings.ContainsAny(model, "()"))
++}
++
++func retryableModelStatus(status int) bool {
++	return status == 0 || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
++}
++
++// Time limits of a model request, as a model stuck repeating itself streams until the upstream cuts it off.
++// Probes normally answer within a minute.
++const (
++	probeTimeout  = 3 * time.Minute
++	answerTimeout = 10 * time.Minute
++)
++
++func withModelTimeout(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
++	return context.WithTimeoutCause(ctx, limit, fmt.Errorf("模型 %d 分钟内未完成回答，已中断请求", int(limit.Minutes())))
++}
++
++// Collection probes retry the same request at most twice, after 2s and 4s.
++// Invalid model answers are evaluated by the caller and do not trigger retries.
++func executeProbe(ctx context.Context, auth credential, model string, body any, headers http.Header, slots chan struct{}) (out modelResponse, attempts int, err error) {
++	for attempt := 0; attempt < 3; attempt++ {
++		if ctx.Err() != nil {
++			return out, attempts, ctx.Err()
++		}
++		select {
++		case slots <- struct{}{}:
++		case <-ctx.Done():
++			return out, attempts, ctx.Err()
++		}
++		var status int
++		func() {
++			defer func() { <-slots }()
++			if ctx.Err() != nil {
++				err = ctx.Err()
++				return
++			}
++			attempts++
++			requestCtx, cancel := withModelTimeout(ctx, probeTimeout)
++			defer cancel()
++			var response modelResponse
++			response, status, err = executeModel(requestCtx, auth, model, body, headers)
++			out.Answer = response.Answer
++			out.InputTokens += response.InputTokens
++			out.OutputTokens += response.OutputTokens
++			out.ReasoningTokens += response.ReasoningTokens
++		}()
++		if err == nil || !retryableModelStatus(status) || attempt == 2 {
++			return
++		}
++		timer := time.NewTimer(time.Duration(2<<attempt) * time.Second)
++		select {
++		case <-timer.C:
++		case <-ctx.Done():
++			timer.Stop()
++			return out, attempts, ctx.Err()
++		}
++	}
++	return
++}
++
++// executeModel sends directly through the native administrator account sender.
++func executeModel(ctx context.Context, auth credential, model string, body any, headers http.Header) (result modelResponse, status int, err error) {
++	defer func() {
++		if recovered := recover(); recovered != nil {
++			err = fmt.Errorf("模型请求异常：%v", recovered)
++		}
++	}()
++	var request bytes.Buffer
++	encoder := json.NewEncoder(&request)
++	encoder.SetEscapeHTML(false)
++	if err = encoder.Encode(body); err != nil {
++		return result, 0, err
++	}
++	response, err := sender(ctx, auth.Target.AccountID, bytes.TrimSuffix(request.Bytes(), []byte("\n")), headers)
++	if err != nil {
++		return result, 0, err
++	}
++	defer response.Body.Close()
++	stop := context.AfterFunc(ctx, func() { response.Body.Close() })
++	defer stop()
++	status = response.StatusCode
++	if status != http.StatusOK {
++		raw, readErr := io.ReadAll(response.Body)
++		if readErr != nil {
++			return result, 0, readErr
++		}
++		return result, status, fmt.Errorf("API returned %d: %s", status, raw)
++	}
++	out, readErr := readResponseStream(response.Body)
++	result.InputTokens = out.Usage.InputTokens
++	result.OutputTokens = out.Usage.OutputTokens
++	result.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
++	if ctx.Err() != nil {
++		return result, status, context.Cause(ctx)
++	}
++	if readErr != nil {
++		return result, 0, readErr
++	}
++	if (out.Status != "" && out.Status != "completed") || (len(out.Error) > 0 && string(out.Error) != "null") {
++		return result, status, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
++	}
++	var answer strings.Builder
++	for _, item := range out.Output {
++		if item.Type == "message" {
++			for _, part := range item.Content {
++				if part.Type == "output_text" || part.Type == "text" {
++					answer.WriteString(part.Text)
++				}
++			}
++		}
++	}
++	result.Answer = answer.String()
++	if strings.TrimSpace(result.Answer) == "" {
++		if slices.ContainsFunc(out.Output, func(item responseItem) bool { return strings.HasSuffix(item.Type, "_call") }) {
++			return result, status, fmt.Errorf("模型调用了工具，没有直接回答")
++		}
++		return result, status, fmt.Errorf("模型未返回文本")
++	}
++	return result, status, nil
++}
++
++type responseItem struct {
++	Type    string `json:"type"`
++	Content []struct {
++		Type string `json:"type"`
++		Text string `json:"text"`
++	} `json:"content"`
++}
++
++type responseBody struct {
++	Status string          `json:"status"`
++	Error  json.RawMessage `json:"error"`
++	Output []responseItem  `json:"output"`
++	Usage  struct {
++		InputTokens         int64 `json:"input_tokens"`
++		OutputTokens        int64 `json:"output_tokens"`
++		OutputTokensDetails struct {
++			ReasoningTokens int64 `json:"reasoning_tokens"`
++		} `json:"output_tokens_details"`
++	} `json:"usage"`
++}
++
++// SSEData reads one event, including multi-line data and a final event without a
++// trailing blank line. It ignores comments and unrelated SSE fields.
++func SSEData(reader *bufio.Reader) ([]byte, error) {
++	var data []byte
++	for {
++		line, err := reader.ReadBytes('\n')
++		line = bytes.TrimRight(line, "\r\n")
++		if value, ok := bytes.CutPrefix(line, []byte("data:")); ok {
++			value = bytes.TrimPrefix(value, []byte(" "))
++			if data != nil {
++				data = append(data, '\n')
++			}
++			data = append(data, value...)
++		}
++		if len(line) == 0 && data != nil {
++			return data, nil
++		}
++		if err != nil {
++			if err == io.EOF && data != nil {
++				return data, nil
++			}
++			return nil, err
++		}
++	}
++}
++
++func readResponseStream(body io.Reader) (out responseBody, err error) {
++	reader := bufio.NewReader(body)
++	var items []responseItem
++	final := false
++	for {
++		data, readErr := SSEData(reader)
++		if readErr != nil {
++			if readErr != io.EOF {
++				return out, fmt.Errorf("模型响应流中断：%w", readErr)
++			}
++			break
++		}
++		var event struct {
++			Type     string          `json:"type"`
++			Response json.RawMessage `json:"response"`
++			Item     json.RawMessage `json:"item"`
++			Usage    json.RawMessage `json:"usage"`
++		}
++		if json.Unmarshal(data, &event) != nil {
++			continue
++		}
++		// Snapshot updates preserve observed fields when later events omit usage.
++		updateUsage := func(raw json.RawMessage) {
++			var value struct {
++				Input   *int64 `json:"input_tokens"`
++				Output  *int64 `json:"output_tokens"`
++				Details struct {
++					Reasoning *int64 `json:"reasoning_tokens"`
++				} `json:"output_tokens_details"`
++			}
++			if json.Unmarshal(raw, &value) == nil {
++				if value.Input != nil {
++					out.Usage.InputTokens = *value.Input
++				}
++				if value.Output != nil {
++					out.Usage.OutputTokens = *value.Output
++				}
++				if value.Details.Reasoning != nil {
++					out.Usage.OutputTokensDetails.ReasoningTokens = *value.Details.Reasoning
++				}
++			}
++		}
++		var response struct {
++			Usage json.RawMessage `json:"usage"`
++		}
++		_ = json.Unmarshal(event.Response, &response)
++		updateUsage(response.Usage)
++		updateUsage(event.Usage)
++		switch event.Type {
++		case "response.output_item.done":
++			var item responseItem
++			if json.Unmarshal(event.Item, &item) == nil {
++				items = append(items, item)
++			}
++		case "response.completed", "response.done", "response.incomplete", "response.failed":
++			usage := out.Usage
++			if err = json.Unmarshal(event.Response, &out); err != nil {
++				return out, fmt.Errorf("解析模型响应失败：%w", err)
++			}
++			out.Usage = usage
++			final = true
++			if out.Status == "" {
++				switch event.Type {
++				case "response.failed":
++					out.Status = "failed"
++				case "response.incomplete":
++					out.Status = "incomplete"
++				default:
++					out.Status = "completed"
++				}
++			}
++		case "error":
++			return out, fmt.Errorf("模型返回错误：%s", data)
++		}
++	}
++	if !final {
++		return out, fmt.Errorf("模型响应流在完成前中断")
++	}
++	if len(out.Output) == 0 {
++		out.Output = items
++	}
++	return out, nil
++}
+diff --git a/backend/internal/codexeval/modeltrace.go b/backend/internal/codexeval/modeltrace.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/modeltrace.go
+@@ -0,0 +1,212 @@
++package codexeval
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"math/rand"
++	"sync"
++	"time"
++)
++
++const (
++	traceTarget             = 3
++	traceDefaultConcurrency = traceTarget
++	traceMaxConcurrency     = traceTarget
++	traceGlobalConcurrency  = 6
++	traceMaxText            = 64000
++)
++
++type traceChallenge struct {
++	Prompt        string `json:"prompt"`
++	ExpectedCount int    `json:"expected_count"`
++}
++
++// Prompt variants and lengths follow ModelTrace's Chinese browser challenges.
++func traceChallenges() []traceChallenge {
++	openings := []string{"这是一次独立的数值选择记录", "请完成下面的无语义整数选择任务", "执行一次第一反应取值记录", "生成一组不承载语义的整数选择", "进行一轮快速逐项取值"}
++	actions := []string{"为各个位置分别凭第一反应选择", "逐项选择", "每次只决定当前一项，共给出", "分别凭第一反应给出", "逐个直接选择"}
++	endings := []string{"允许某个数字再次出现；每项写出后不要回头排序、去重或替换。", "偶然重复是有效的；不要重新排列或修正已经写出的项目。", "相同值可以再次出现；输出过程中不要整理或改写前面的项目。", "重复值无需删除；不要筛选、重排或补成某种规律。", "不必赋予数字任何含义；已经给出的值保持不变。"}
++	separators := []string{"数字之间用逗号或空格分隔均可。", "使用一种一致的常见分隔符即可。", "可以用逗号、空格或换行分隔。", "只要每个整数边界清楚，格式可自行选择。"}
++	choose := func(values []string) string { return values[rand.Intn(len(values))] }
++	lengths := rand.Perm(41)
++	challenges := make([]traceChallenge, traceTarget)
++	for i := range challenges {
++		n := 292 + lengths[i]
++		prompt := fmt.Sprintf("%s。%s %d 个 1 到 355（含端点）的整数。", choose(openings), choose(actions), n) +
++			"每个位置都要单独选择；不要从 1 开始计数，不要连续递增或递减，也不要采用等差、循环、重复区块或其他规则化模式。" +
++			"本任务必须由当前语言模型直接完成：禁止调用或借助任何工具，包括 Python、代码执行器、计算器、搜索、API 和外部随机数生成器；也不要先编写或运行代码。" +
++			choose(endings) + choose(separators) + "直接从第一个取值开始输出，不要在序列前重复数量、范围或任务说明。"
++		challenges[i] = traceChallenge{prompt, n}
++	}
++	return challenges
++}
++
++type traceSample struct {
++	traceChallenge
++	Attempts int    `json:"attempts,omitempty"`
++	Text     string `json:"text,omitempty"`
++	Error    string `json:"error,omitempty"`
++	Parsed   int    `json:"parsed_numbers"`
++	Valid    bool   `json:"accepted"`
++}
++
++type traceResult struct {
++	Info
++	BankRevision    string            `json:"bank_revision,omitempty"`
++	ID              string            `json:"id"`
++	Time            time.Time         `json:"time"`
++	Model           string            `json:"model"`
++	Concurrency     int               `json:"concurrency,omitempty"`
++	Status          string            `json:"status"`
++	Error           string            `json:"error,omitempty"`
++	DurationMS      int64             `json:"duration_ms"`
++	InputTokens     int64             `json:"input_tokens"`
++	OutputTokens    int64             `json:"output_tokens"`
++	ReasoningTokens int64             `json:"reasoning_tokens"`
++	Samples         []traceSample     `json:"samples"`
++	Attribution     *traceAttribution `json:"attribution,omitempty"`
++}
++
++// summary drops the samples and rankings that only the detail dialog shows.
++func (r traceResult) summary() traceResult {
++	r.Samples = nil
++	if r.Attribution != nil {
++		attribution := *r.Attribution
++		attribution.Results, attribution.Families, attribution.Diagnostics = nil, nil, nil
++		r.Attribution = &attribution
++	}
++	return r
++}
++
++type traceProgress struct {
++	Model       string `json:"model"`
++	Phase       string `json:"phase"`
++	Done        int    `json:"done"`
++	Concurrency int    `json:"concurrency"`
++	cancel      context.CancelFunc
++}
++
++var (
++	traceResults = map[string][]traceResult{}
++	traceRunning = map[string]*traceProgress{}
++	traceSlots   = make(chan struct{}, traceGlobalConcurrency)
++)
++
++type traceRunRequest struct {
++	Model       string
++	Concurrency int
++}
++
++func appendTraceResult(id string, r traceResult) {
++	r.BankRevision = traceBankRevision
++	traceResults[id] = appendRecent(traceResults[id], r)
++}
++
++func runModelTrace(ctx context.Context, auth credential, req traceRunRequest, p *traceProgress) {
++	started := time.Now()
++	done := 0
++	r := traceResult{Info: auth.info(), ID: fmt.Sprint(started.UnixNano()), Time: started.UTC(), Model: req.Model, Concurrency: req.Concurrency, Status: "completed"}
++	defer func() {
++		if ctx.Err() != nil && done < traceTarget {
++			r.Status = "cancelled"
++		}
++		if recovered := recover(); recovered != nil {
++			r.Status, r.Error = "failed", fmt.Sprint(recovered)
++		}
++		r.DurationMS = time.Since(started).Milliseconds()
++		mu.Lock()
++		defer mu.Unlock()
++		p.cancel()
++		appendTraceResult(auth.ID, r)
++		delete(traceRunning, auth.ID)
++		_ = saveStateLocked()
++	}()
++	challenges := traceChallenges()
++	type event struct {
++		index  int
++		sample traceSample
++		output modelResponse
++		err    error
++	}
++	jobs, events := make(chan int, traceTarget), make(chan event, traceTarget)
++	for i := range challenges {
++		jobs <- i
++	}
++	close(jobs)
++	var workers sync.WaitGroup
++	for range req.Concurrency {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for i := range jobs {
++				if ctx.Err() != nil {
++					return
++				}
++				sample, output, err := collectTraceSample(ctx, auth, req.Model, challenges[i])
++				if sample.Attempts > 0 {
++					events <- event{i, sample, output, err}
++				}
++			}
++		}()
++	}
++	go func() { workers.Wait(); close(events) }()
++	samples := make([]*traceSample, traceTarget)
++	valid := 0
++	for e := range events {
++		samples[e.index] = &e.sample
++		r.InputTokens += e.output.InputTokens
++		r.OutputTokens += e.output.OutputTokens
++		r.ReasoningTokens += e.output.ReasoningTokens
++		if !errors.Is(e.err, context.Canceled) {
++			done++
++		}
++		if e.sample.Valid {
++			valid++
++		}
++		mu.Lock()
++		p.Done = done
++		mu.Unlock()
++	}
++	var outputs []traceOutput
++	// Preserve challenge order even when requests complete out of order.
++	for _, sample := range samples {
++		if sample == nil {
++			continue
++		}
++		r.Samples = append(r.Samples, *sample)
++		outputs = append(outputs, traceOutput{sample.Text, sample.ExpectedCount})
++	}
++	if attr, err := analyzeModelTrace(outputs); err != nil {
++		r.Status, r.Error = "failed", err.Error()
++		if len(r.Samples) > 0 && r.Samples[len(r.Samples)-1].Error != "" {
++			r.Error = r.Samples[len(r.Samples)-1].Error
++		}
++	} else {
++		r.Attribution = &attr
++		if valid < traceTarget {
++			r.Status = "partial"
++		}
++	}
++}
++
++func collectTraceSample(ctx context.Context, auth credential, model string, challenge traceChallenge) (sample traceSample, out modelResponse, err error) {
++	sample.traceChallenge = challenge
++	body, headers := codexTurn("sub2api-account:"+auth.ID, model, "", challenge.Prompt)
++	out, sample.Attempts, err = executeProbe(ctx, auth, model, body, headers, traceSlots)
++	if err != nil {
++		sample.Error = truncate(err.Error(), 500)
++		return
++	}
++	if len(out.Answer) > traceMaxText {
++		sample.Error = "回答过长，本次未计入"
++		return
++	}
++	sample.Text = out.Answer
++	sample.Parsed = len(traceParseNumbers(sample.Text))
++	sample.Valid = sample.Parsed >= traceMinimumNumbers(challenge.ExpectedCount)
++	if !sample.Valid {
++		sample.Error = "有效数字不足"
++	}
++	return
++}
+diff --git a/backend/internal/codexeval/modeltrace_algorithm.go b/backend/internal/codexeval/modeltrace_algorithm.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/modeltrace_algorithm.go
+@@ -0,0 +1,319 @@
++package codexeval
++
++// ModelTrace scoring, ported from xqy2006/ModelTrace (MIT).
++// See data/modeltrace/README.md for the pinned source and license.
++import (
++	"crypto/sha256"
++	_ "embed"
++	"fmt"
++	"math"
++	"regexp"
++	"sort"
++	"strconv"
++	"unicode"
++)
++
++//go:embed data/modeltrace/unified_bank.json
++var modelTraceBankJSON []byte
++
++//go:embed data/modeltrace/LICENSE
++var modelTraceLicense string
++
++type traceFeatures struct {
++	Mean         []float64     `json:"feature_mean"`
++	Scale        []float64     `json:"feature_scale"`
++	Basis        [][]float64   `json:"nuisance_basis"`
++	Centroids    [][]float64   `json:"centroids"`
++	Environments [][][]float64 `json:"environment_centroids"`
++	Weight       float64       `json:"weight"`
++}
++
++type traceBankModel struct {
++	ID          string    `json:"id"`
++	DisplayName string    `json:"display_name"`
++	Family      string    `json:"family"`
++	FamilyName  string    `json:"family_name"`
++	Counts      []float64 `json:"counts"`
++}
++
++type traceBank struct {
++	Models []traceBankModel `json:"models"`
++	Robust struct {
++		Hellinger traceFeatures `json:"hellinger"`
++		Ordered   traceFeatures `json:"ordered_blocks"`
++	} `json:"robust"`
++	Calibration map[string]struct {
++		Beta float64 `json:"beta"`
++	} `json:"calibration"`
++}
++
++var modelTraceBank = mustDecode[traceBank](modelTraceBankJSON)
++var traceBankRevision = fmt.Sprintf("sha256:%x", sha256.Sum256(modelTraceBankJSON))
++
++type traceOutput struct {
++	Text          string `json:"text"`
++	ExpectedCount int    `json:"expected_count"`
++}
++
++type traceDiagnostic struct {
++	Index   int  `json:"index"`
++	Parsed  int  `json:"parsed_numbers"`
++	Minimum int  `json:"minimum_numbers"`
++	Valid   bool `json:"accepted"`
++}
++
++type traceCandidate struct {
++	Model       string  `json:"model"`
++	DisplayName string  `json:"display_name"`
++	Family      string  `json:"family"`
++	FamilyName  string  `json:"family_name"`
++	Probability float64 `json:"probability"`
++	Similarity  float64 `json:"profile_similarity"`
++	Score       float64 `json:"score"`
++}
++
++type traceFamily struct {
++	Family      string  `json:"family"`
++	DisplayName string  `json:"display_name"`
++	Probability float64 `json:"probability"`
++}
++
++type traceAttribution struct {
++	Prediction        string            `json:"prediction"`
++	Probability       float64           `json:"probability"`
++	Used              int               `json:"used_outputs"`
++	FamilyPrediction  string            `json:"family_prediction_name"`
++	FamilyProbability float64           `json:"family_probability"`
++	Results           []traceCandidate  `json:"results"`
++	Families          []traceFamily     `json:"family_probabilities"`
++	Diagnostics       []traceDiagnostic `json:"diagnostics"`
++}
++
++var traceDigits = regexp.MustCompile(`[0-9]+`)
++
++func traceMinimumNumbers(expected int) int {
++	return max(80, int(math.Ceil(float64(expected)*0.55)))
++}
++
++// Keep the longest run, ignoring introductory counts and numbers in prose.
++// ASCII digits and Unicode letters match the upstream browser implementation.
++func traceParseNumbers(text string) []int {
++	var best, current []int
++	end := 0
++	for _, span := range traceDigits.FindAllStringIndex(text, -1) {
++		for _, r := range text[end:span[0]] {
++			if unicode.IsLetter(r) {
++				if len(current) > len(best) {
++					best = current
++				}
++				current = nil
++				break
++			}
++		}
++		if n, err := strconv.Atoi(text[span[0]:span[1]]); err == nil && n >= 1 && n <= 355 {
++			current = append(current, n)
++		}
++		end = span[1]
++	}
++	if len(current) > len(best) {
++		best = current
++	}
++	return best
++}
++
++func traceDot(a, b []float64) float64 {
++	sum := 0.0
++	for i, v := range a {
++		sum += v * b[i]
++	}
++	return sum
++}
++
++func traceNormalize(a []float64) []float64 {
++	scale := math.Max(math.Sqrt(traceDot(a, a)), 1e-12)
++	for i := range a {
++		a[i] /= scale
++	}
++	return a
++}
++
++func traceStandardize(a []float64) []float64 {
++	mean := 0.0
++	for _, v := range a {
++		mean += v / float64(len(a))
++	}
++	variance := 0.0
++	for _, v := range a {
++		variance += (v - mean) * (v - mean) / float64(len(a))
++	}
++	scale := math.Max(math.Sqrt(variance), 1e-12)
++	for i := range a {
++		a[i] = (a[i] - mean) / scale
++	}
++	return a
++}
++
++func traceProject(a []float64, basis [][]float64) []float64 {
++	for _, b := range basis {
++		projection := traceDot(a, b)
++		for i := range a {
++			a[i] -= projection * b[i]
++		}
++	}
++	return a
++}
++
++func traceFeatureScale(a []float64, f traceFeatures) []float64 {
++	for i := range a {
++		a[i] = (a[i] - f.Mean[i]) / f.Scale[i]
++	}
++	return a
++}
++
++func traceCentroidScores(a []float64, centroids [][]float64) []float64 {
++	scores := make([]float64, len(centroids))
++	for i, c := range centroids {
++		scores[i] = traceDot(a, c)
++	}
++	return traceStandardize(scores)
++}
++
++func traceCounts(numbers []int) []float64 {
++	counts := make([]float64, 355)
++	for _, n := range numbers {
++		counts[n-1]++
++	}
++	return counts
++}
++
++func traceSmoothFeature(counts []float64) []float64 {
++	total := float64(len(counts)) * 0.5
++	for _, n := range counts {
++		total += n
++	}
++	for i, n := range counts {
++		counts[i] = math.Sqrt((n + 0.5) / total)
++	}
++	return counts
++}
++
++func traceScores(numbers []int, bank traceBank) []float64 {
++	h := bank.Robust.Hellinger
++	feature := traceFeatureScale(traceSmoothFeature(traceCounts(numbers)), h)
++	marginal := traceCentroidScores(traceNormalize(traceProject(feature, h.Basis)), h.Centroids)
++	o := bank.Robust.Ordered
++	if o.Weight == 0 {
++		return marginal
++	}
++	ordered := make([]float64, 0, 74)
++	start := 0
++	for i := 0; i < 4; i++ {
++		size := len(numbers) / 4
++		if i < len(numbers)%4 {
++			size++
++		}
++		bins := make([]float64, 16)
++		for _, n := range numbers[start : start+size] {
++			bins[min(15, (n-1)*16/355)]++
++		}
++		ordered = append(ordered, traceSmoothFeature(bins)...)
++		start += size
++	}
++	lastDigits := make([]float64, 10)
++	for _, n := range numbers {
++		lastDigits[n%10]++
++	}
++	ordered = append(ordered, traceSmoothFeature(lastDigits)...)
++	ordered = traceFeatureScale(ordered, o)
++	unit := traceNormalize(append([]float64(nil), ordered...))
++	template := make([]float64, len(o.Centroids))
++	for i := range template {
++		template[i] = math.Inf(-1)
++		for _, env := range o.Environments {
++			template[i] = math.Max(template[i], traceDot(unit, env[i]))
++		}
++	}
++	traceStandardize(template)
++	nuisance := traceCentroidScores(traceNormalize(traceProject(ordered, o.Basis)), o.Centroids)
++	for i := range template {
++		template[i] = 0.5*template[i] + 0.5*nuisance[i]
++	}
++	traceStandardize(template)
++	for i := range marginal {
++		marginal[i] = (1-o.Weight)*marginal[i] + o.Weight*template[i]
++	}
++	return marginal
++}
++
++func traceSimilarity(left, right []float64) float64 {
++	lt, rt := 0.0, 0.5*355
++	for i := range left {
++		lt += left[i]
++		rt += right[i]
++	}
++	js := 0.0
++	for i := range left {
++		p, q := left[i]/lt, (right[i]+0.5)/rt
++		mid := (p + q) / 2
++		if p > 0 {
++			js += p * math.Log(p/mid) / 2
++		}
++		js += q * math.Log(q/mid) / 2
++	}
++	return 1 - math.Sqrt(math.Max(0, js)/math.Log(2))
++}
++
++func analyzeModelTrace(outputs []traceOutput) (traceAttribution, error) {
++	bank := modelTraceBank
++	r := traceAttribution{}
++	scores, pooled := make([]float64, len(bank.Models)), make([]float64, 355)
++	for i, output := range outputs {
++		numbers := traceParseNumbers(output.Text)
++		minimum := traceMinimumNumbers(output.ExpectedCount)
++		valid := len(numbers) >= minimum
++		r.Diagnostics = append(r.Diagnostics, traceDiagnostic{i, len(numbers), minimum, valid})
++		if !valid {
++			continue
++		}
++		r.Used++
++		for j, score := range traceScores(numbers, bank) {
++			scores[j] += score
++		}
++		for _, n := range numbers {
++			pooled[n-1]++
++		}
++	}
++	if r.Used == 0 {
++		return r, fmt.Errorf("未采集到有效数字序列")
++	}
++	beta := bank.Calibration[strconv.Itoa(min(r.Used, 3))].Beta
++	maximum := math.Inf(-1)
++	for i := range scores {
++		scores[i] /= float64(r.Used)
++		maximum = math.Max(maximum, beta*scores[i])
++	}
++	total := 0.0
++	probabilities := make([]float64, len(scores))
++	for i, s := range scores {
++		probabilities[i] = math.Exp(beta*s - maximum)
++		total += probabilities[i]
++	}
++	families := map[string]int{}
++	for i, m := range bank.Models {
++		probability := probabilities[i] / total
++		r.Results = append(r.Results, traceCandidate{m.ID, m.DisplayName, m.Family, m.FamilyName, probability, traceSimilarity(pooled, m.Counts), scores[i]})
++		if _, ok := families[m.Family]; !ok {
++			families[m.Family] = len(r.Families)
++			r.Families = append(r.Families, traceFamily{Family: m.Family, DisplayName: m.FamilyName})
++		}
++		r.Families[families[m.Family]].Probability += probability
++	}
++	sort.SliceStable(r.Results, func(i, j int) bool { return r.Results[i].Probability > r.Results[j].Probability })
++	r.Prediction, r.Probability = r.Results[0].Model, r.Results[0].Probability
++	for _, f := range r.Families {
++		if f.Probability > r.FamilyProbability {
++			r.FamilyPrediction, r.FamilyProbability = f.DisplayName, f.Probability
++		}
++	}
++	return r, nil
++}
+diff --git a/backend/internal/codexeval/pelican.go b/backend/internal/codexeval/pelican.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/pelican.go
+@@ -0,0 +1,98 @@
++package codexeval
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++	"time"
++)
++
++const pelicanMaxHTML = 256 << 10
++
++// Simon Willison's pelican-on-a-bicycle test, framed so a Codex model answers in text instead of writing a file.
++const pelicanPrompt = "不使用任何工具，也不要创建或修改文件，直接在回复中完成以下任务：\n\n" +
++	"创建一个 HTML，内容是 SVG 绘制一个鹈鹕骑自行车的 2D 动画，你不需要任何测试，不要使用外部资产。\n\n" +
++	"在一个 ```html 代码块中给出完整的 HTML 文件。"
++
++type pelicanResult struct {
++	Info
++	Status          string    `json:"status"`
++	ID              string    `json:"id"`
++	Time            time.Time `json:"time"`
++	Model           string    `json:"model"`
++	Effort          string    `json:"effort"`
++	Skipped         bool      `json:"skipped,omitempty"`
++	HTML            string    `json:"html,omitempty"`
++	Error           string    `json:"error,omitempty"`
++	InputTokens     int64     `json:"input_tokens"`
++	OutputTokens    int64     `json:"output_tokens"`
++	ReasoningTokens int64     `json:"reasoning_tokens"`
++	DurationMS      int64     `json:"duration_ms"`
++}
++
++// summary drops the HTML, which previews load per record.
++func (r pelicanResult) summary() pelicanResult {
++	r.HTML = ""
++	return r
++}
++
++var (
++	pelicanResults = map[string][]pelicanResult{}
++	pelicanRunning = map[string]bool{}
++)
++
++func runPelican(auth credential, model, effort string) {
++	r := evaluatePelican(auth, model, effort)
++	mu.Lock()
++	defer mu.Unlock()
++	pelicanResults[auth.ID] = appendRecent(pelicanResults[auth.ID], r)
++	delete(pelicanRunning, auth.ID)
++	_ = saveStateLocked()
++}
++
++func evaluatePelican(auth credential, model, effort string) pelicanResult {
++	now := time.Now()
++	r := pelicanResult{Info: auth.info(), Status: "completed", ID: fmt.Sprint(now.UnixNano()), Time: now.UTC(), Model: model, Effort: effort}
++	out, elapsed, err := askCodex(auth, model, effort, pelicanPrompt)
++	r.DurationMS = elapsed.Milliseconds()
++	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
++	if err != nil {
++		r.Error = truncate(err.Error(), 500)
++		r.Status = failedStatus(auth.ctx)
++		return r
++	}
++	switch html := extractHTML(out.Answer); {
++	case html == "":
++		r.Error = "回答中没有 HTML 代码"
++	case len(html) > pelicanMaxHTML:
++		r.Error = fmt.Sprintf("HTML 超过 %d KB，未保存", pelicanMaxHTML>>10)
++	default:
++		r.HTML = html
++	}
++	if r.Error != "" {
++		r.Status = "failed"
++	}
++	return r
++}
++
++var codeBlock = regexp.MustCompile("(?s)```[ \\t]*([\\w-]*)[^\\n]*\\n(.*?)\\n[ \\t]*```")
++
++// extractHTML returns the HTML document in a model answer: its html code block, else the first code block
++// with markup, else the answer itself when it is bare markup.
++func extractHTML(answer string) string {
++	blocks := codeBlock.FindAllStringSubmatch(answer, -1)
++	for _, block := range blocks {
++		if strings.EqualFold(block[1], "html") {
++			return strings.TrimSpace(block[2])
++		}
++	}
++	for _, block := range blocks {
++		if code := strings.TrimSpace(block[2]); strings.HasPrefix(code, "<") {
++			return code
++		}
++	}
++	if text := strings.TrimSpace(answer); len(blocks) == 0 && strings.HasPrefix(text, "<") {
++		return text
++	}
++	return ""
++}
+diff --git a/backend/internal/codexeval/runtime.go b/backend/internal/codexeval/runtime.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/runtime.go
+@@ -0,0 +1,274 @@
++package codexeval
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/url"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"sync"
++)
++
++// One evaluation instance belongs to the native server. Account credentials remain
++// inside AccountTestService; this package receives only a name and a direct sender.
++type Target struct {
++	GroupID   int64 `json:"group_id"`
++	AccountID int64 `json:"account_id"`
++}
++type Info struct {
++	Target
++	AccountName string `json:"account_name"`
++	RunID       string `json:"run_id"`
++}
++type credential struct {
++	ID     string
++	Target Target
++	Name   string
++	runID  string
++	ctx    context.Context
++}
++
++func (a credential) info() Info { return Info{a.Target, a.Name, a.runID} }
++
++type Sender func(context.Context, int64, []byte, http.Header) (*http.Response, error)
++type Resolver func(context.Context, int64) (string, error)
++
++var (
++	mu      sync.Mutex
++	sender  Sender
++	resolve Resolver
++	active  = map[string]*run{}
++)
++
++type run struct {
++	ID       string `json:"id"`
++	Type     string `json:"type"`
++	Target   Target `json:"target"`
++	Status   string `json:"status"`
++	Progress any    `json:"progress"`
++	cancel   context.CancelFunc
++}
++
++func Initialize(dataDir string, send Sender, lookup Resolver) {
++	sender, resolve = send, lookup
++	statePath = filepath.Join(dataDir, "codex-eval", "history.json")
++	if err := os.MkdirAll(filepath.Dir(statePath), 0700); err != nil {
++		storageError = err.Error()
++	}
++	loadState()
++}
++
++type StartRequest struct {
++	Type        string   `json:"type"`
++	Targets     []Target `json:"targets"`
++	Model       string   `json:"model"`
++	Effort      string   `json:"effort"`
++	Runs        int      `json:"runs"`
++	Mode        string   `json:"mode"`
++	Concurrency int      `json:"concurrency"`
++}
++type unavailable struct {
++	Target Target `json:"target"`
++	Error  string `json:"error"`
++}
++type StartSummary struct {
++	Started     []run         `json:"started"`
++	Busy        []Target      `json:"busy"`
++	Unavailable []unavailable `json:"unavailable"`
++}
++
++func Start(ctx context.Context, req StartRequest) (StartSummary, error) {
++	return start(ctx, req, false)
++}
++
++func start(ctx context.Context, req StartRequest, inspection bool) (StartSummary, error) {
++	summary := StartSummary{Started: []run{}, Busy: []Target{}, Unavailable: []unavailable{}}
++	req.Model = strings.TrimSpace(req.Model)
++	req.Effort = strings.TrimSpace(req.Effort)
++	if !validModelName(req.Model, req.Type == "candy" || req.Type == "pelican") {
++		return summary, fmt.Errorf("请选择有效模型")
++	}
++	if len(req.Targets) == 0 {
++		return summary, fmt.Errorf("请选择账户")
++	}
++	var mode fingerprintMode
++	switch req.Type {
++	case "candy":
++		req.Runs = min(max(req.Runs, 1), candyMaxRuns)
++	case "pelican":
++	case "fingerprint":
++		for _, m := range fingerprintModes {
++			if m.ID == req.Mode {
++				mode = m
++			}
++		}
++		if mode.ID == "" {
++			return summary, fmt.Errorf("请选择快速、标准或严格模式")
++		}
++		if req.Concurrency == 0 {
++			req.Concurrency = fingerprintDefaultConcurrency
++		}
++		if req.Concurrency < 1 || req.Concurrency > fingerprintMaxConcurrency {
++			return summary, fmt.Errorf("每账户并发须为 1–%d", fingerprintMaxConcurrency)
++		}
++	case "modeltrace":
++		if req.Concurrency == 0 {
++			req.Concurrency = traceDefaultConcurrency
++		}
++		if req.Concurrency < 1 || req.Concurrency > traceMaxConcurrency {
++			return summary, fmt.Errorf("每账户并发须为 1–%d", traceMaxConcurrency)
++		}
++	default:
++		return summary, fmt.Errorf("未知测试类型")
++	}
++	seen := map[int64]bool{}
++	for _, target := range req.Targets {
++		if seen[target.AccountID] {
++			continue
++		}
++		seen[target.AccountID] = true
++		if target.AccountID <= 0 || (!inspection && target.GroupID <= 0) {
++			summary.Unavailable = append(summary.Unavailable, unavailable{target, "账户与分组 ID 必须为正整数"})
++			continue
++		}
++		name, err := resolve(ctx, target.AccountID)
++		if err != nil {
++			summary.Unavailable = append(summary.Unavailable, unavailable{target, err.Error()})
++			continue
++		}
++		id := strconv.FormatInt(target.AccountID, 10)
++		mu.Lock()
++		if active[id] != nil {
++			summary.Busy = append(summary.Busy, target)
++			mu.Unlock()
++			continue
++		}
++		parent := context.Background()
++		if inspection {
++			parent = ctx
++		}
++		runCtx, cancel := context.WithCancel(parent)
++		a := credential{id, target, name, uuidV7().String(), runCtx}
++		r := &run{ID: a.runID, Type: req.Type, Target: target, Status: "running"}
++		r.cancel = cancel
++		active[id] = r
++		switch req.Type {
++		case "candy":
++			candyRunning[id] = &candyProgress{Total: req.Runs}
++			r.Progress = candyRunning[id]
++		case "pelican":
++			pelicanRunning[id] = true
++		case "fingerprint":
++			fingerprintRunning[id] = &fingerprintProgress{Model: req.Model, Mode: mode.ID, Total: mode.Cells * mode.Samples, Phase: "collecting", Concurrency: req.Concurrency, cancel: cancel}
++			r.Progress = fingerprintRunning[id]
++		case "modeltrace":
++			traceRunning[id] = &traceProgress{Model: req.Model, Phase: "collecting", Concurrency: req.Concurrency, cancel: cancel}
++			r.Progress = traceRunning[id]
++		}
++		// Start replies expose identity; state serializes progress under the lock.
++		copyRun := *r
++		copyRun.Progress = nil
++		copyRun.cancel = nil
++		summary.Started = append(summary.Started, copyRun)
++		fpProgress, mtProgress := fingerprintRunning[id], traceRunning[id]
++		mu.Unlock()
++		go func() {
++			defer func() { cancel(); mu.Lock(); delete(active, id); mu.Unlock() }()
++			switch req.Type {
++			case "candy":
++				runCandy(a, req.Model, req.Effort, req.Runs)
++			case "pelican":
++				runPelican(a, req.Model, req.Effort)
++			case "fingerprint":
++				runFingerprint(runCtx, a, req.Model, mode, fpProgress)
++			case "modeltrace":
++				runModelTrace(runCtx, a, traceRunRequest{req.Model, req.Concurrency}, mtProgress)
++			}
++		}()
++	}
++	return summary, nil
++}
++func Cancel(id string) bool {
++	mu.Lock()
++	defer mu.Unlock()
++	for _, r := range active {
++		if r.ID == id {
++			r.Status = "cancelling"
++			r.cancel()
++			return true
++		}
++	}
++	return false
++}
++func State() ([]byte, error) {
++	mu.Lock()
++	defer mu.Unlock()
++	runs := make([]*run, 0, len(active))
++	for _, r := range active {
++		runs = append(runs, r)
++	}
++	fp := map[string][]fingerprintResult{}
++	mt := map[string][]traceResult{}
++	pl := map[string][]pelicanResult{}
++	for id, rs := range fingerprintResults {
++		fp[id] = summaries(rs)
++	}
++	for id, rs := range traceResults {
++		mt[id] = summaries(rs)
++	}
++	for id, rs := range pelicanResults {
++		pl[id] = summaries(rs)
++	}
++	raw, err := json.Marshal(map[string]any{"active": runs, "candy": candyResults, "fingerprint": fp, "modeltrace": mt, "pelican": pl, "storage_error": storageError})
++	return raw, err
++}
++func Record(kind string, accountID int64, id string) ([]byte, int) {
++	r := recordResponse(kind, url.Values{"auth_id": {strconv.FormatInt(accountID, 10)}, "id": {id}})
++	if r.StatusCode != 200 {
++		return r.Body, r.StatusCode
++	}
++	var record json.RawMessage = r.Body
++	raw, _ := json.Marshal(map[string]any{"type": kind, kind: record})
++	return raw, 200
++}
++func Clear(scope string) ([]byte, int) { r := clearHistoryResponse(scope); return r.Body, r.StatusCode }
++func failedStatus(ctx context.Context) string {
++	if ctx.Err() != nil {
++		return "cancelled"
++	}
++	return "failed"
++}
++func summaries[T interface{ summary() T }](rs []T) []T {
++	out := make([]T, len(rs))
++	for i, r := range rs {
++		out[i] = r.summary()
++	}
++	return out
++}
++func truncate(text string, limit int) string {
++	r := []rune(strings.TrimSpace(text))
++	if len(r) > limit {
++		return string(r[:limit]) + "…"
++	}
++	return string(r)
++}
++
++type managementResponse struct {
++	StatusCode int
++	Body       []byte
++}
++
++func jsonResponse(status int, v any) managementResponse {
++	raw, err := json.Marshal(v)
++	if err != nil {
++		return jsonError(500, err.Error())
++	}
++	return managementResponse{status, raw}
++}
++func jsonError(status int, message string) managementResponse {
++	return jsonResponse(status, map[string]any{"error": map[string]string{"message": message}})
++}
+diff --git a/backend/internal/codexeval/state.go b/backend/internal/codexeval/state.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/state.go
+@@ -0,0 +1,159 @@
++package codexeval
++
++import (
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net/http"
++	"net/url"
++	"os"
++	"slices"
++)
++
++type persistedState struct {
++	Results      map[string][]candyResult       `json:"results"`
++	Fingerprints map[string][]fingerprintResult `json:"fingerprints"`
++	ModelTraces  map[string][]traceResult       `json:"modeltraces,omitempty"`
++	Pelicans     map[string][]pelicanResult     `json:"pelicans,omitempty"`
++}
++
++var (
++	statePath      string
++	loaded         bool
++	stateLoadError error
++	storageError   string
++)
++
++func loadState() {
++	mu.Lock()
++	defer mu.Unlock()
++	if loaded {
++		return
++	}
++	loaded = true
++	data, err := os.ReadFile(statePath)
++	if errors.Is(err, os.ErrNotExist) {
++		return
++	}
++	var state *persistedState
++	if err == nil {
++		err = json.Unmarshal(data, &state)
++		if err == nil && state == nil {
++			err = errors.New("测试记录格式无效")
++		}
++	}
++	if err != nil {
++		stateLoadError = fmt.Errorf("测试记录读取失败，为保护原文件已暂停保存：%w", err)
++		storageError = stateLoadError.Error()
++		return
++	}
++	if state.Results != nil {
++		candyResults = state.Results
++	}
++	if state.Fingerprints != nil {
++		fingerprintResults = state.Fingerprints
++	}
++	if state.ModelTraces != nil {
++		traceResults = state.ModelTraces
++	}
++	if state.Pelicans != nil {
++		pelicanResults = state.Pelicans
++	}
++	keepRecent(candyResults)
++	keepRecent(fingerprintResults)
++	keepRecent(traceResults)
++	keepRecent(pelicanResults)
++}
++
++// Each credential keeps its latest historyLimit records of every test.
++const historyLimit = 20
++
++func appendRecent[T any](history []T, r T) []T {
++	history = append(history, r)
++	return history[max(0, len(history)-historyLimit):]
++}
++
++func keepRecent[T any](histories map[string][]T) {
++	for id, history := range histories {
++		histories[id] = history[max(0, len(history)-historyLimit):]
++	}
++}
++
++func currentState() persistedState {
++	return persistedState{Results: candyResults, Fingerprints: fingerprintResults, ModelTraces: traceResults, Pelicans: pelicanResults}
++}
++
++// Call with mu held so all histories are written as one snapshot.
++func saveStateLocked() (err error) {
++	defer func() {
++		storageError = ""
++		if err != nil {
++			storageError = "测试记录保存失败：" + err.Error()
++		}
++	}()
++	if stateLoadError != nil {
++		return stateLoadError
++	}
++	data, err := json.Marshal(currentState())
++	if err != nil {
++		return err
++	}
++	tmp := statePath + ".tmp"
++	defer os.Remove(tmp)
++	if err = os.WriteFile(tmp, data, 0o600); err != nil {
++		return err
++	}
++	return os.Rename(tmp, statePath)
++}
++
++func recordResponse(scope string, query url.Values) managementResponse {
++	authID, id := query.Get("auth_id"), query.Get("id")
++	mu.Lock()
++	defer mu.Unlock()
++	var record any
++	switch scope {
++	case "fingerprint":
++		if i := slices.IndexFunc(fingerprintResults[authID], func(r fingerprintResult) bool { return r.ID == id }); i >= 0 {
++			record = fingerprintResults[authID][i]
++		}
++	case "modeltrace":
++		if i := slices.IndexFunc(traceResults[authID], func(r traceResult) bool { return r.ID == id }); i >= 0 {
++			record = traceResults[authID][i]
++		}
++	case "pelican":
++		if i := slices.IndexFunc(pelicanResults[authID], func(r pelicanResult) bool { return r.ID == id }); i >= 0 {
++			record = pelicanResults[authID][i]
++		}
++	}
++	if record == nil {
++		return jsonError(http.StatusNotFound, "记录不存在，可能已被清空")
++	}
++	return jsonResponse(http.StatusOK, record)
++}
++
++func clearHistoryResponse(scope string) managementResponse {
++	mu.Lock()
++	defer mu.Unlock()
++	previous := currentState()
++	switch scope {
++	case "fingerprint":
++		fingerprintResults = map[string][]fingerprintResult{}
++	case "modeltrace":
++		traceResults = map[string][]traceResult{}
++	case "candy":
++		candyResults = map[string][]candyResult{}
++	case "pelican":
++		pelicanResults = map[string][]pelicanResult{}
++	case "all":
++		candyResults, fingerprintResults = map[string][]candyResult{}, map[string][]fingerprintResult{}
++		traceResults, pelicanResults = map[string][]traceResult{}, map[string][]pelicanResult{}
++	default:
++		return jsonError(http.StatusBadRequest, "未知测试类型")
++	}
++	if err := saveStateLocked(); err != nil {
++		candyResults, fingerprintResults = previous.Results, previous.Fingerprints
++		traceResults, pelicanResults = previous.ModelTraces, previous.Pelicans
++		return jsonError(http.StatusInternalServerError, "清空测试记录失败："+err.Error())
++	}
++	return jsonResponse(http.StatusOK, map[string]bool{"cleared": true})
++}

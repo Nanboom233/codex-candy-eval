@@ -1,99 +1,55 @@
-name: Release
+name: Sub2API release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    name: Test
+  delivery:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Check tag matches plugin version
-        run: grep -q "pluginVersion *= \"${GITHUB_REF_NAME#v}\"" internal/plugin/plugin.go
-      - run: go vet ./...
-      - run: go test -race ./...
-      - run: node scripts/test-ui.cjs
-
-  build:
-    name: Build ${{ matrix.os }}-${{ matrix.arch }}
-    needs: check
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: linux, arch: amd64, runner: ubuntu-24.04, ext: so, image: quay.io/pypa/manylinux2014_x86_64 }
-          - { os: linux, arch: arm64, runner: ubuntu-24.04-arm, ext: so, image: quay.io/pypa/manylinux2014_aarch64 }
-          - { os: darwin, arch: amd64, runner: macos-15-intel, ext: dylib }
-          - { os: darwin, arch: arm64, runner: macos-15, ext: dylib }
-          - { os: windows, arch: amd64, runner: windows-2025, ext: dll }
-    steps:
       - uses: actions/checkout@v6
+        with:
+          repository: Wei-Shaw/sub2api
+          ref: v0.2.17
+          path: upstream
+          fetch-depth: 1
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
-
-      # manylinux2014 (glibc 2.17) keeps the plugin loadable on older Linux distributions.
-      - name: Build Linux plugin
-        if: matrix.os == 'linux'
-        run: |
-          mkdir -p dist
-          docker run --rm --user "$(id -u):$(id -g)" \
-            -v "$PWD:/src" -w /src -v "$(go env GOROOT):/opt/go:ro" \
-            -e GOROOT=/opt/go -e HOME=/tmp -e GOFLAGS=-buildvcs=false \
-            ${{ matrix.image }} \
-            /opt/go/bin/go build -trimpath -ldflags="-s -w" -tags cshared -buildmode=c-shared -o dist/cpa-codex-candy-eval.so ./cmd/cpa-codex-candy-eval
-
-      - name: Build plugin
-        if: matrix.os != 'linux'
-        shell: bash
-        env:
-          CGO_ENABLED: "1"
-        run: go build -trimpath -ldflags="-s -w" -tags cshared -buildmode=c-shared -o dist/cpa-codex-candy-eval.${{ matrix.ext }} ./cmd/cpa-codex-candy-eval
-
-      # The CPA plugin store needs <id>_<version>_<os>_<arch>.zip with the library at the zip root.
-      - name: Package
-        if: matrix.os != 'windows'
-        run: |
-          name="cpa-codex-candy-eval_${GITHUB_REF_NAME#v}_${{ matrix.os }}_${{ matrix.arch }}"
-          tar -czf "$name.tar.gz" -C dist cpa-codex-candy-eval.${{ matrix.ext }}
-          zip -j "$name.zip" dist/cpa-codex-candy-eval.${{ matrix.ext }}
-
-      - name: Package
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist/cpa-codex-candy-eval.dll -DestinationPath "cpa-codex-candy-eval_$($env:GITHUB_REF_NAME.TrimStart('v'))_windows_amd64.zip"
-
-      - uses: actions/upload-artifact@v7
+          go-version-file: upstream/backend/go.mod
+      - uses: actions/setup-node@v6
         with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}
-          path: cpa-codex-candy-eval_*_${{ matrix.os }}_${{ matrix.arch }}.*
-          if-no-files-found: error
+          node-version: "20"
+      - name: Install frontend dependencies with the original lockfile
+        working-directory: upstream/frontend
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+          pnpm install --frozen-lockfile
+      - name: Check, build, and package the native administrator port
+        run: python3 scripts/build.py --source upstream --check
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sub2api-codex-eval
+          path: dist/build/sub2api-codex-eval.tar.gz
 
-  release:
-    name: Publish
-    needs: build
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: delivery
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v7
         with:
+          name: sub2api-codex-eval
           path: assets
-          merge-multiple: true
-      - name: Generate checksums
-        working-directory: assets
-        run: sha256sum * > checksums.txt
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: assets/*
-          generate_release_notes: true
+      - name: Publish the built archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" assets/sub2api-codex-eval.tar.gz --repo "$GITHUB_REPOSITORY" --generate-notes

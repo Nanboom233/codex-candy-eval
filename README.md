@@ -1,106 +1,124 @@
-# Codex 降智测试（CLIProxyAPI 插件）
+# Codex Account Evaluation for Sub2API
 
-在 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 管理面板中进行**糖果测试**、**模型指纹测试**、**ModelTrace 模型归因**和**鹈鹕测试**。
+Candy, Fingerprint, ModelTrace and Pelican evaluations for administrator account testing on Sub2API v0.2.17, Linux/amd64.
 
-![example](docs/images/example.png)
+The package contains a prebuilt native server with the native sidebar and iframe view, plus the standalone `/codex-eval` page. Installation replaces `/app/sub2api` in the selected Docker container. It performs no source download or compilation.
 
-## 安装
+Install over an existing v0.2.16 container to upgrade to v0.2.17, or reinstall on v0.2.17. The installer checks the candidate version before replacement.
 
-### CPA 版本要求
+## Install
 
-最低要求 CPA [v7.3.3](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.3.3)。
-
-### 插件商店
-
-CPA 管理面板（CPAMC 或 CPAMP）插件商店搜索安装 `cpa-codex-candy-eval`，并在面板左侧打开「Codex 降智测试」。
-
-### 人工安装
-
-进入 CPA 工作目录，执行对应的安装命令。macOS 和 Linux：
+Extract `sub2api-codex-eval.tar.gz`, enter its `sub2api-codex-eval` directory and run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/install.sh | sh
+python3 install.py
 ```
 
-Windows 请先停止 CPA，再在 PowerShell 中运行：
+Choose the container explicitly. Empty input selects nothing. For unattended installation:
 
-```powershell
-irm https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/install.ps1 | iex
+```sh
+python3 install.py install --container sub2api
 ```
 
-也可以从 [Releases](https://github.com/haowang02/cpa-plugin-codex-candy-eval/releases/latest) 下载对应平台的压缩包，解压后将插件文件重命名为 `cpa-codex-candy-eval-v<版本号>.<扩展名>`，放入对应的 `plugins/<系统>/<架构>/` 目录。
+Use Python 3.9+ and Docker CLI with permission to operate the container. The installer prints progress, backs up the original executable in a private directory under `/tmp`, replaces the binary and restarts only that container. It prints the exact backup path. Startup progress shows elapsed time and current container state/address, followed by an explicit ready message. Final failures retain request diagnostics and restore the original executable; stopped applications fail immediately. Use `--backup-dir` to choose another backup location. No `nc`, Buildx, helper image or `docker --format` is required.
 
-在 CPA 的 `config.yaml` 中启用插件：
+Log into the existing administrator panel and choose `账户评估` beside account management in its sidebar. The native administrator view embeds `/codex-eval` in an iframe automatically; no manual menu configuration is needed. The page reads the existing same-origin `auth_token`; it has no separate key or login.
 
-```yaml
-plugins:
-  enabled: true
-  dir: "plugins"
-  configs:
-    cpa-codex-candy-eval:
-      enabled: true
+## Restore the original executable
+
+Keep the exact backup path printed by the installer. For a running container, restore that backup with:
+
+```sh
+docker cp /path/to/backup/sub2api sub2api:/app/sub2api.restore
+docker exec -u 0 sub2api sh -c 'chmod 755 /app/sub2api.restore && mv -f /app/sub2api.restore /app/sub2api'
+docker restart sub2api
 ```
 
-## 使用
+For a stopped container, copy the backup directly to `/app/sub2api`, then start it:
 
-在「凭证」标题右侧选择类型，默认「认证文件 · codex」，也可选择「全部凭证」。点击凭证旁的按钮单独测试，或勾选多个凭证批量测试。未勾选时，批量操作针对当前类型下的全部可用凭证。
+```sh
+docker cp /path/to/backup/sub2api sub2api:/app/sub2api
+docker restart sub2api
+```
 
-### 糖果测试
+The backup must retain its executable permission. Check `/health` and `/setup/status` after restoration.
+Default backups remain under `/tmp` until the user or system removes them.
+Container recreation removes the binary replacement. Reapply the package after recreation.
 
-选择模型、推理强度和每凭证次数，点击「测试」。推理强度选择 `none` 时由 CPA 决定。
+## Evaluate
 
-正确答案为 **21**。展开凭证可查看历次回答，正确率按当前选择的模型和推理强度统计。
+Choose an OpenAI group, model and accounts. Raw upstream model suggestions remain available, and you can enter a model name directly. Original prompts, sampling, scoring, renderers, options and history controls are retained. The account enable switch changes the native `schedulable` flag. Disabled accounts show the switch off and are skipped during model discovery; enabled accounts' model-fetch failures remain visible. Account errors, inactive status, rate limits and temporary restrictions display separately.
 
-### 指纹测试
+The dedicated `POST /api/v1/admin/accounts/:id/codex-eval` accepts complete streaming Responses JSON and sends to that account only. Background evaluations use the same native service directly. The selected model is sent directly, bypassing Sub2API model mappings and configuration restrictions for evaluation. Native credentials, proxy, TLS, plugin transport and Responses/Chat Completions conversion remain responsible for upstream sending. The original `/test` and ordinary user gateway remain unchanged.
 
-选择模型和采集模式，点击「采集」。结果会提示与所选模型是否一致；疑似替换时会显示更接近的模型。展开凭证可查看历史记录和详情。
+Evaluations use administrator test semantics. They do not create internal users, keys or user bills, and never switch to another account. Supplier requests still consume supplier quota. Native snapshots and 401/429 handling remain; a successful evaluation does not broadly clear account restrictions.
 
-| 模式 | 每个凭证的请求数 | 适用情况 |
-| --- | ---: | --- |
-| 快速 | **60 次** | 初步检查 |
-| 标准 | **200 次** | 日常测试 |
-| 严格 | **400 次** | 结果不明确时复测 |
+History retains the latest 20 records per account and evaluation type. Tasks and progress stay in memory. Restart does not resume interrupted evaluations or create interrupted records. Stop controls cancel the task context and close pending responses. Clear controls retain history when saving fails. Installation does not clear history or business data.
 
-结果不明确或不稳定时，可使用严格模式复测。
+History uses `codex-eval/history.json` under the native data directory, normally `/app/data/codex-eval/history.json` in the container.
+Unreadable or null history files are protected from overwrite. Keep actual history and database files when replacing the executable.
 
-### ModelTrace
+## Automatic Candy inspection
 
-选择模型，点击凭证旁的「测试」，或勾选凭证批量测试。插件自动生成三条数字挑战，与内置候选模型比对，显示最接近的模型、家族及归因概率。展开凭证可查看历史记录和详情。
+Choose the group and account filters on the Candy tab. Inspection uses that account selection and current native memberships.
+Open `设置` for inspection model, effort, maximum tests, wait range, priority, and notifications. Valid edits save automatically. There is no save button or account list on this tab.
 
-### 鹈鹕测试
+The defaults allow three tests per account and a random 15–35 minute wait after each round. Each account gets one first test. Additional confirmation tests run only when that result indicates a possible priority change. Recovery confirmation waits 240 seconds.
 
-选择模型和推理强度，点击「测试」。模型会写出一个用 SVG 绘制鹈鹕骑自行车动画的 HTML 页面。列表和历史记录显示动画的缩略画面，点击即可放大播放。
+Inspection uses the Candy type and plan filters and skips disabled, unavailable, and busy accounts. Its model, effort, count, and confirmation flow remain independent from manual Candy tests. Results and history appear on the Candy tab.
 
-### 记录与额度
+The Candy account header shows the next inspection time beside `账户` and `仅启用`.
+Use `立即巡检` and `停止当前巡检` at the bottom of settings for manual control.
 
-- 测试会消耗凭证额度。糖果测试、ModelTrace 和鹈鹕测试的每次请求都以新会话的完整 Codex CLI 上下文发出，输入约 1.4 万 Token。
-- 每个凭证的每种测试都保留最近 20 次记录，刷新或重启后仍可查看。
-- 点击标签栏右侧的垃圾桶可清空全部测试记录；凭证列表右上角的垃圾桶只清空当前测试的记录。
-- 单次请求有时间限制：ModelTrace 和指纹测试 3 分钟，糖果测试和鹈鹕测试 10 分钟。超时的请求会被中断。
+Automatic priority changes default off. Enable adjustment to show the two priority fields. Normal priority defaults to 10, with a minimum of 1. Degraded priority defaults to 99. Only accounts at these configured values can change. Lower native priority numbers are preferred.
 
-### 定时巡检
+Errors, cancellation, incomplete results, or mixed answers prevent changes. ntfy and Bark report successful changes.
 
-巡检脚本定时用糖果题测试账号，默认跳过 Free 订阅。每个账号先测一次，状态变化须经两次复测确认；降智账号恢复前的复测等待 240 秒。开启自动调整后，脚本改变 priority，并通过 ntfy 或 Bark 通知恢复或降智。部署方法见 [定时糖果巡检](docs/inspection.md)。
+Settings use the native PostgreSQL `settings` table. Empty notification secret fields retain saved values. Current progress and the next run time stay in memory. Restart reloads settings and schedules a fresh wait. It does not resume an interrupted round. Turning off automatic inspection leaves the current round running. Use the stop control to cancel it.
 
-也可以补全下面的提示词，发给 Codex、Claude Code 等 AI 助手，让它帮你部署：
+Container recreation removes changes in its writable layer. Reapply the package to the recreated standard v0.2.17 container.
+
+## Development
+
+Use an existing original Sub2API v0.2.17 source tree with frontend dependencies installed from its frozen lockfile.
+Developer builds use Python 3, Git, Go, Node.js, and pnpm.
+Production changes use the numbered patches listed in `patches/series`. Tests stay under `tests/`.
+The build uses the upstream Go module. This repository has no separate root Go module or shared-library build.
 
 ```text
-请按照 https://raw.githubusercontent.com/haowang02/cpa-plugin-codex-candy-eval/main/docs/inspection.md 中的教程，在这台机器上部署 Codex 降智测试插件的定时巡检。
-
-我的配置（没写的项保持脚本默认值）：
-- CPA 地址：
-- CPA 管理密钥：
-- 巡检频率：（例如每 30 分钟）
-- 糖果测试模型和推理强度：（例如 gpt-6.1-sol、low）
-- 巡检范围：（例如所有 codex- 开头的认证文件）
-- 是否自动调整 priority：（是或否，可指定降智和正常账号的 priority）
-- 通知方式：（ntfy 的服务器地址、主题和账号密码，Bark 的推送地址，或不通知）
-
-部署后先手动运行一次，确认巡检能正常完成，再配置 crontab，最后告诉我日志的位置。缺少必要信息时先问我。
+patches/                 Ordered production patches and series list
+scripts/build.py         Build, check, and package entry
+scripts/install.py       Repository installer source
+tests/backend/           Go tests and test data, by upstream package path
+tests/installer/         Installer tests and retained-container fixtures
+tests/ui/                Page checks against the patched upstream tree
+licenses/                License texts and third-party notices
+dist/build/              Generated executable and installation archive
+README.md AGENTS.md LICENSE  Project documentation and license
+.github/                 Release workflow
+.trellis/                Project workflow and specifications
+.agents/ .codex/ .claude/ .devin/  Tool integration and skills
 ```
 
-## 致谢
+```sh
+python3 scripts/build.py --source /path/to/original/sub2api --check
+```
 
-- [codex-candy-eval](https://github.com/haowang02/codex-candy-eval)
-- [ModelTrace](https://github.com/xqy2006/ModelTrace) — 数字指纹归因方法与候选库（MIT）
-- [LINUX DO](https://linux.do/) - 新的理想型社区
+The build applies each patch in series order to a standard temporary copy of the original tree.
+It uses the upstream module locks, installed frontend dependencies, and available Go caches.
+It rebuilds the patched frontend, compiles the server, and creates the installation archive.
+Use `--check` to attach the existing Go tests and test data to their temporary upstream packages.
+That option runs the existing installer, UI, focused Go tests, and package vet checks before compilation.
+Without `--check`, the build does not copy this repository's test source or test data into the temporary tree.
+
+Fixed outputs:
+
+- `dist/build/sub2api-codex-eval`
+- `dist/build/sub2api-codex-eval.tar.gz`
+
+The archive contains the executable, `install.py` and necessary license texts, including `LICENSE/Project-MIT.txt`.
+It includes no cleanup script, development sources, tests or logs.
+
+Local Docker checks reuse `sub2api-codex-eval-test`, including its PostgreSQL and Redis test dependencies. Run `python3 tests/installer/native_inspection_fixture.py` to load the built binary into that retained container. The command does not create another container.
+
+See [third-party notices](licenses/THIRD_PARTY_NOTICES.txt).

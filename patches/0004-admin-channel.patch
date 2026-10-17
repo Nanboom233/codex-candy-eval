@@ -1,0 +1,454 @@
+diff --git a/backend/internal/handler/admin/account_codex_eval_handler.go b/backend/internal/handler/admin/account_codex_eval_handler.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/handler/admin/account_codex_eval_handler.go
+@@ -0,0 +1,145 @@
++package admin
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"strconv"
++
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
++	"github.com/gin-gonic/gin"
++)
++
++func (h *AccountHandler) InitializeCodexEval(dataDir string) {
++	codexeval.Initialize(dataDir, h.accountTestService.SendCodexEvaluation, h.accountTestService.CodexEvalAccount)
++}
++func (h *AccountHandler) CodexEvalPage(c *gin.Context) {
++	c.Header("X-Frame-Options", "SAMEORIGIN")
++	c.Header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; font-src data:; frame-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
++	c.Header("Cache-Control", "no-store")
++	c.Data(200, "text/html; charset=utf-8", codexeval.Page())
++}
++func (h *AccountHandler) CodexEvalState(c *gin.Context) {
++	raw, err := codexeval.State()
++	if err != nil {
++		response.Error(c, 500, err.Error())
++		return
++	}
++	response.Success(c, json.RawMessage(raw))
++}
++func (h *AccountHandler) CodexEvalModels(c *gin.Context) {
++	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
++	if err != nil || id <= 0 {
++		response.BadRequest(c, "Invalid account ID")
++		return
++	}
++	models, err := h.accountTestService.CodexEvalModels(c.Request.Context(), id)
++	if err != nil {
++		if !response.ErrorFrom(c, err) {
++			response.Error(c, http.StatusBadGateway, err.Error())
++		}
++		return
++	}
++	response.Success(c, models)
++}
++func (h *AccountHandler) CodexEvalStart(c *gin.Context) {
++	var req codexeval.StartRequest
++	if err := c.ShouldBindJSON(&req); err != nil {
++		response.BadRequest(c, err.Error())
++		return
++	}
++	out, err := codexeval.Start(c.Request.Context(), req)
++	if err != nil {
++		response.BadRequest(c, err.Error())
++		return
++	}
++	response.Success(c, out)
++}
++func (h *AccountHandler) CodexEvalCancel(c *gin.Context) {
++	var req struct {
++		RunID string `json:"run_id"`
++	}
++	if err := c.ShouldBindJSON(&req); err != nil || req.RunID == "" {
++		response.BadRequest(c, "run_id is required")
++		return
++	}
++	response.Success(c, map[string]bool{"cancelled": codexeval.Cancel(req.RunID)})
++}
++func (h *AccountHandler) CodexEvalRecord(c *gin.Context) {
++	id, err := strconv.ParseInt(c.Param("account_id"), 10, 64)
++	if err != nil || id <= 0 {
++		response.BadRequest(c, "Invalid account ID")
++		return
++	}
++	raw, status := codexeval.Record(c.Param("type"), id, c.Param("record_id"))
++	if status != 200 {
++		c.Data(status, "application/json", raw)
++		return
++	}
++	response.Success(c, json.RawMessage(raw))
++}
++func (h *AccountHandler) CodexEvalClear(c *gin.Context) {
++	var req struct {
++		Scope string `json:"scope"`
++	}
++	if err := c.ShouldBindJSON(&req); err != nil {
++		response.BadRequest(c, err.Error())
++		return
++	}
++	raw, status := codexeval.Clear(req.Scope)
++	if status != 200 {
++		c.Data(status, "application/json", raw)
++		return
++	}
++	response.Success(c, json.RawMessage(raw))
++}
++
++type codexEvalFlusher struct{ gin.ResponseWriter }
++
++func (w codexEvalFlusher) Write(p []byte) (int, error) {
++	n, err := w.ResponseWriter.Write(p)
++	w.Flush()
++	return n, err
++}
++func (h *AccountHandler) CodexEval(c *gin.Context) {
++	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
++	if err != nil || id <= 0 {
++		response.BadRequest(c, "Invalid account ID")
++		return
++	}
++	body, err := io.ReadAll(c.Request.Body)
++	if err != nil {
++		response.BadRequest(c, err.Error())
++		return
++	}
++	var req struct {
++		Model  string `json:"model"`
++		Stream bool   `json:"stream"`
++	}
++	if err = json.Unmarshal(body, &req); err != nil || req.Model == "" || !req.Stream {
++		response.BadRequest(c, "model and stream:true are required")
++		return
++	}
++	resp, err := h.accountTestService.SendCodexEvaluation(c.Request.Context(), id, body, c.Request.Header)
++	if err != nil {
++		if !response.ErrorFrom(c, err) {
++			response.Error(c, http.StatusBadGateway, err.Error())
++		}
++		return
++	}
++	defer resp.Body.Close()
++	stop := context.AfterFunc(c.Request.Context(), func() { resp.Body.Close() })
++	defer stop()
++	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
++		c.Header("Content-Type", contentType)
++	}
++	c.Header("Cache-Control", "no-cache")
++	c.Header("X-Accel-Buffering", "no")
++	c.Status(resp.StatusCode)
++	if _, err = io.Copy(codexEvalFlusher{c.Writer}, resp.Body); err != nil && c.Request.Context().Err() == nil {
++		raw, _ := json.Marshal(map[string]string{"type": "error", "message": err.Error()})
++		_, _ = codexEvalFlusher{c.Writer}.Write(append(append([]byte("event: error\ndata: "), raw...), '\n', '\n'))
++	}
++}
+diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/service/account_codex_eval_service.go
+@@ -0,0 +1,299 @@
++package service
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
++)
++
++// Evaluation suggestions are raw upstream names. The normal account-test
++// picker projects mappings and allowlists, which do not apply to evaluation.
++func (s *AccountTestService) CodexEvalModels(ctx context.Context, id int64) ([]openai.Model, error) {
++	account, err := s.accountRepo.GetByID(ctx, id)
++	if err != nil {
++		return nil, err
++	}
++	if account.Platform != PlatformOpenAI || (!account.IsOAuth() && account.Type != AccountTypeAPIKey) {
++		return nil, fmt.Errorf("Unsupported OpenAI account type: %s/%s", account.Platform, account.Type)
++	}
++	if s.openaiGatewayService == nil {
++		return nil, fmt.Errorf("OpenAI model discovery service is unavailable")
++	}
++	catalog, err := s.openaiGatewayService.FetchOpenAIModelsList(ctx, account)
++	if err != nil {
++		return nil, err
++	}
++	var payload struct {
++		Data []openai.Model `json:"data"`
++	}
++	if err := json.Unmarshal(catalog.Body, &payload); err != nil {
++		return nil, err
++	}
++	return payload.Data, nil
++}
++
++func (s *AccountTestService) CodexEvalAccount(ctx context.Context, id int64) (string, error) {
++	account, err := s.accountRepo.GetByID(ctx, id)
++	if err != nil {
++		return "", err
++	}
++	if account.Platform != "openai" || (!account.IsOAuth() && account.Type != "apikey") {
++		return "", fmt.Errorf("Unsupported OpenAI account type: %s/%s", account.Platform, account.Type)
++	}
++	return account.Name, nil
++}
++
++// SendCodexEvaluation follows the native account-test transport. It does not
++// enter the user gateway or recover operational restrictions after success.
++func (s *AccountTestService) SendCodexEvaluation(ctx context.Context, id int64, body []byte, headers http.Header) (*http.Response, error) {
++	var payload map[string]json.RawMessage
++	if err := json.Unmarshal(body, &payload); err != nil {
++		return nil, fmt.Errorf("Invalid Responses request: %w", err)
++	}
++	var model string
++	var stream bool
++	_ = json.Unmarshal(payload["model"], &model)
++	_ = json.Unmarshal(payload["stream"], &stream)
++	if strings.TrimSpace(model) == "" || !stream {
++		return nil, fmt.Errorf("model and stream:true are required")
++	}
++	account, err := s.accountRepo.GetByID(ctx, id)
++	if err != nil {
++		return nil, err
++	}
++	if account.Platform != "openai" || (!account.IsOAuth() && account.Type != "apikey") {
++		return nil, fmt.Errorf("Unsupported OpenAI account type: %s/%s", account.Platform, account.Type)
++	}
++	credentialAccount := account
++	if account.IsCredentialShadow() {
++		credentialAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
++		if err != nil {
++			return nil, err
++		}
++	}
++	isOAuth := credentialAccount.IsOAuth()
++	apiURL := chatgptCodexAPIURL
++	authToken := ""
++	chat := false
++	if isOAuth {
++		if !credentialAccount.IsOpenAIAgentIdentity() {
++			authToken = credentialAccount.GetOpenAIAccessToken()
++			if authToken == "" {
++				return nil, fmt.Errorf("No access token available")
++			}
++		}
++	} else {
++		authToken = credentialAccount.GetOpenAIProtocolAPIKey()
++		if authToken == "" {
++			return nil, fmt.Errorf("No API key available")
++		}
++		baseURL := credentialAccount.GetOpenAIBaseURL()
++		if baseURL == "" {
++			baseURL = "https://api.openai.com"
++		}
++		normalized, validationErr := s.validateUpstreamBaseURL(baseURL)
++		if validationErr != nil {
++			return nil, fmt.Errorf("Invalid base URL: %w", validationErr)
++		}
++		chat = !openai_compat.ShouldUseResponsesAPI(account.Extra)
++		if chat {
++			apiURL = buildOpenAIChatCompletionsURL(normalized)
++		} else {
++			apiURL = buildOpenAIResponsesURLForPlatform(credentialAccount.Platform, normalized)
++		}
++	}
++	payload["model"], _ = json.Marshal(model)
++	encoded, err := json.Marshal(payload)
++	if err != nil {
++		return nil, err
++	}
++	var responseRequest apicompat.ResponsesRequest
++	if chat {
++		if err = json.Unmarshal(encoded, &responseRequest); err != nil {
++			return nil, err
++		}
++		converted, convertErr := apicompat.ResponsesToChatCompletionsRequest(&responseRequest)
++		if convertErr != nil {
++			return nil, convertErr
++		}
++		converted.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
++		encoded, err = json.Marshal(converted)
++		if err != nil {
++			return nil, err
++		}
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(encoded))
++	if err != nil {
++		return nil, err
++	}
++	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
++	if !isOAuth && !chat {
++		applyOpenAICodexProbeHeaders(req.Header)
++	}
++	// Only Codex protocol fields are accepted from the caller. Administrator
++	// authorization, target URL and proxy never leave this boundary.
++	for _, key := range []string{"Accept", "Originator", "User-Agent", "Session-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Window-Id", "X-Codex-Turn-Metadata", "X-Codex-Beta-Features", "X-Openai-Internal-Codex-Responses-Lite"} {
++		if values := headers.Values(key); len(values) > 0 {
++			req.Header[key] = append([]string(nil), values...)
++		}
++	}
++	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("Accept", "text/event-stream")
++	if credentialAccount.IsOpenAIAgentIdentity() {
++		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
++		if authErr != nil {
++			return nil, authErr
++		}
++		for key, values := range authHeaders {
++			req.Header[key] = values
++		}
++	} else {
++		req.Header.Set("Authorization", "Bearer "+authToken)
++	}
++	if isOAuth {
++		req.Host = "chatgpt.com"
++		req.Header.Set("OpenAI-Beta", "responses=experimental")
++		canonical := resolveCodexOutboundIdentity(req.Header.Get("User-Agent"))
++		req.Header.Set("Originator", canonical.originator)
++		if custom := strings.TrimSpace(credentialAccount.GetOpenAIUserAgent()); custom != "" {
++			req.Header.Set("User-Agent", custom)
++		} else if req.Header.Get("User-Agent") == "" {
++			req.Header.Set("User-Agent", canonical.userAgent)
++		}
++		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
++		enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
++	}
++	if chat {
++		applyOpenCodeUpstreamUserAgent(account, apiURL, req.Header)
++	}
++	credentialAccount.ApplyHeaderOverrides(req.Header)
++	if chat {
++		applyOpenCodeSessionHeader(nil, account, apiURL, req.Header, body, encoded)
++	}
++	proxyURL := ""
++	if account.ProxyID != nil && account.Proxy != nil {
++		proxyURL = account.Proxy.URL()
++	}
++	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
++	if err != nil {
++		return nil, err
++	}
++	if isOAuth && s.accountRepo != nil {
++		if updates, updateErr := extractOpenAICodexProbeUpdates(resp); updateErr == nil && len(updates) > 0 {
++			_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
++			mergeAccountExtra(account, updates)
++		}
++	}
++	if resp.StatusCode != http.StatusOK {
++		raw, readErr := io.ReadAll(resp.Body)
++		_ = resp.Body.Close()
++		if readErr != nil {
++			return nil, readErr
++		}
++		raw = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, raw)
++		if resp.StatusCode == http.StatusTooManyRequests {
++			s.reconcileOpenAI429State(ctx, account, resp.Header, raw)
++		}
++		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
++			_ = s.accountRepo.SetError(ctx, account.ID, fmt.Sprintf("Authentication failed (401): %s", raw))
++		}
++		resp.Body = io.NopCloser(bytes.NewReader(raw))
++		resp.ContentLength = int64(len(raw))
++		return resp, nil
++	}
++	if chat {
++		state := apicompat.NewChatCompletionsToResponsesStreamState(model)
++		tools, toolsErr := apicompat.EffectiveResponsesTools(&responseRequest)
++		if toolsErr != nil {
++			resp.Body.Close()
++			return nil, toolsErr
++		}
++		state.CustomTools = apicompat.CustomToolNames(tools)
++		state.FunctionTools = apicompat.FunctionToolNames(tools)
++		state.ToolSearchDeclared = apicompat.HasToolSearchTool(tools)
++		state.NamespaceTools = apicompat.NamespaceToolNames(tools)
++		resp.Body = &codexChatStream{body: resp.Body, reader: bufio.NewReader(resp.Body), state: state}
++		resp.Header.Set("Content-Type", "text/event-stream")
++		resp.Header.Del("Content-Length")
++		resp.ContentLength = -1
++	}
++	return resp, nil
++}
++
++// Pull conversion uses the native bridge without a producer goroutine or pipe.
++type codexChatStream struct {
++	body     io.ReadCloser
++	reader   *bufio.Reader
++	state    *apicompat.ChatCompletionsToResponsesStreamState
++	pending  []byte
++	finished bool
++}
++
++func (s *codexChatStream) Close() error { return s.body.Close() }
++func (s *codexChatStream) fail(err error) {
++	raw, _ := json.Marshal(map[string]any{"type": "error", "message": err.Error(), "usage": s.state.Usage})
++	s.pending = append([]byte("event: error\ndata: "), raw...)
++	s.pending = append(s.pending, '\n', '\n')
++	s.finished = true
++}
++func (s *codexChatStream) Read(p []byte) (int, error) {
++	for len(s.pending) == 0 {
++		if s.finished {
++			return 0, io.EOF
++		}
++		data, err := codexeval.SSEData(s.reader)
++		if err != nil && err != io.EOF {
++			s.fail(err)
++			continue
++		}
++		var events []apicompat.ResponsesStreamEvent
++		if err == io.EOF || bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
++			if s.state.FinishReason == "" {
++				s.fail(fmt.Errorf("Chat Completions stream ended before finish_reason"))
++				continue
++			}
++			if err = s.state.ValidateToolCallArguments(); err != nil {
++				s.fail(err)
++				continue
++			}
++			events = apicompat.FinalizeChatCompletionsResponsesStream(s.state)
++			s.finished = true
++		} else {
++			var upstreamError struct {
++				Error json.RawMessage `json:"error"`
++			}
++			_ = json.Unmarshal(data, &upstreamError)
++			if len(upstreamError.Error) > 0 && string(upstreamError.Error) != "null" {
++				s.fail(fmt.Errorf("Chat Completions error: %s", data))
++				continue
++			}
++			var chunk apicompat.ChatCompletionsChunk
++			if err = json.Unmarshal(data, &chunk); err != nil {
++				continue
++			}
++			events = apicompat.ChatCompletionsChunkToResponsesEvents(&chunk, s.state)
++		}
++		for _, event := range events {
++			raw, encodeErr := json.Marshal(event)
++			if encodeErr != nil {
++				return 0, encodeErr
++			}
++			s.pending = append(s.pending, []byte("event: "+event.Type+"\ndata: ")...)
++			s.pending = append(s.pending, raw...)
++			s.pending = append(s.pending, '\n', '\n')
++		}
++	}
++	n := copy(p, s.pending)
++	s.pending = s.pending[n:]
++	return n, nil
++}

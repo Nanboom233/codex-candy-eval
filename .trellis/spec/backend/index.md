@@ -1,26 +1,28 @@
-# Plugin Development Guidelines
+# Sub2API Development Guidelines
 
-> Source-backed rules for the CPA evaluation plugin and its embedded management page.
+## Current scope
 
-## Scope
+Active delivery targets Sub2API v0.2.17 Linux/amd64 after the user's approved version update.
+Use the existing original Sub2API source and this repository's native evaluation module.
+Current production code lives in numbered patches under `patches/`. All tests live under `tests/`.
+Installation uses a prebuilt binary and a simple replacement script.
 
-This is a single Go module with a C ABI bridge and embedded plain JavaScript, HTML, and CSS. It has no database, ORM, standalone web server, or frontend framework build.
+## Active guidelines
 
-Use this spec layer for plugin handlers, model requests, persisted history, concurrency, and backend-facing UI contracts. Read the actual browser modules before changing UI behavior.
+| Guide | Purpose |
+| --- | --- |
+| [Directory Structure](./directory-structure.md) | Current native code, tests, and delivery owners |
+| [Administrator Evaluation](./runtime-installation.md) | Sending, task APIs, history, page and native session contracts |
+| [Native Candy Inspection](./native-inspection.md) | Automatic rounds, native settings, priority changes and the fifth page tab |
+| [Binary Delivery](./minimal-linux-delivery.md) | Existing-source build, fixed package and replacement/restoration |
+| [Persistence](./database-guidelines.md) | Native database settings and four-map JSON history |
+| [Error Handling](./error-handling.md) | Actual errors, cancellation and original retries |
+| [Diagnostics](./logging-guidelines.md) | Error visibility and private-data boundaries |
+| [Quality and Commits](./quality-guidelines.md) | Changed-code checks and commit workflow |
 
-Repository-wide rules remain in [AGENTS.md](../../../AGENTS.md). Release checks and packaging remain in [release.yml](../../../.github/workflows/release.yml).
-
-## Guidelines Index
-
-| Guide | Purpose | Status |
-| --- | --- | --- |
-| [Directory Structure](./directory-structure.md) | Package ownership, file placement, C bridge, and embedded assets | Source-backed |
-| [JSON Persistence](./database-guidelines.md) | Snapshot compatibility, lock ownership, history limits, and file safety | Source-backed |
-| [Error Handling](./error-handling.md) | Host envelopes, management errors, request failures, and retry boundaries | Source-backed |
-| [Quality Guidelines](./quality-guidelines.md) | Concurrency, test isolation, ABI ownership, UI checks, and release gates | Source-backed |
-| [Diagnostics and Logging](./logging-guidelines.md) | User-visible diagnostics and sensitive-data exclusions | Source-backed |
-
-The persistence guide keeps its original filename for link compatibility. Its content describes JSON files, not SQL or an ORM.
+The current task and active contracts supersede historical adapter, gateway, key, activation, maintenance and recovery designs.
+Historical specification files remain evidence; they do not add implementation or test requirements.
+Standalone cleanup, source pinning, compatibility configurations and assistant-added race gates are removed.
 
 ## Pre-Development Checklist
 
@@ -28,37 +30,34 @@ The persistence guide keeps its original filename for link compatibility. Its co
 2. Read `AGENTS.md`.
 3. Identify the smallest change boundary.
 4. Read the directory guide and the specific guides for the affected behavior.
-5. Inspect the owner files and adjacent tests before editing.
+5. Inspect the patched native owners and corresponding tests before editing.
 6. Search for existing helpers before adding scheduling, response, history, or model-execution logic.
 7. Read the [shared thinking guides](../guides/index.md) when changes span boundaries or repeat existing behavior.
-8. Check host and UI consumers before changing management or C ABI contracts.
+8. Check native handler, runner and page consumers before changing their contracts.
 9. Preserve unrelated work.
 10. Keep private deployment values out of files and reports.
 
-The shared guides contain upstream Trellis examples. Apply their general reasoning to this plugin. Do not assume their upstream package paths exist here.
+The shared guides contain upstream Trellis examples. Apply their general reasoning to this delivery. Do not assume their upstream package paths exist here.
 
 ## Quality Check
 
-For changed Go files, run `gofmt`, then:
+For changed native code, use the current entry:
 
 ```sh
-go vet ./...
-go test -race ./...
+python3 scripts/build.py --source /path/to/original-sub2api --check
 ```
 
-For embedded UI changes, also run:
+It applies the patch series, attaches existing tests, runs focused tests and vet, builds the frontend/server, and packages fixed outputs.
+Reuse completed baseline and unchanged integration evidence.
+Add focused checks only for changed behavior lacking coverage.
+Format changed Go files and check affected scripts/resources.
+Do not run retired universal helpers, full root suites or a repeated pristine baseline for this task.
+No race, coverage, architecture matrix, source manifest or resource-parity gate is required.
+Report actual results and any visual or hardware execution limits.
+Keep task/fixture logs outside the user package.
 
-```sh
-node scripts/test-ui.cjs
-```
-
-Review JSON tags, response shapes, lock ownership, worker shutdown, and persistence failure behavior for the affected flow.
-
-Default Go checks do not build the `cshared` bridge. For ABI or build changes, follow the tagged shared-library build instructions in `AGENTS.md`.
-
-Plugin code, UI, build, and installer changes require deployment and authenticated end-to-end checks. Documentation and local setup changes are exempt.
-
-For spec-only changes, verify source claims, local links, and the absence of unfinished content. Report incomplete checks instead of treating them as successful.
+For spec-only changes, verify current source claims and local references.
+Follow [the commit workflow](./quality-guidelines.md#commit-and-finish-work) after implementation, check and spec synchronization.
 
 ## Documentation Rules
 

@@ -1,52 +1,41 @@
 # Diagnostics and Logging Guidelines
 
-> Report failures through existing error and state fields. This plugin has no dedicated logging framework.
+> Report failures through existing native API, result, and state fields.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's logging conventions here.
+The native module exposes evaluation, inspection, and storage diagnostics to the administrator page.
+It does not add a separate logging framework or event store.
+Use the response or state owner for each failure.
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
-
-The Go plugin returns errors to CPA and exposes evaluation and storage diagnostics to the management page. It does not configure `log`, `slog`, or a structured logging dependency.
-
-Do not add stdout prints to a host-loaded shared library as a substitute for its response contract.
-
-Evidence: [module dependencies](../../../go.mod), [host and management responses](../../../internal/plugin/plugin.go), and [result errors](../../../internal/plugin/candy.go).
+Evidence: [administrator channel](../../../patches/0004-admin-channel.patch), [evaluation core](../../../patches/0001-evaluation-core.patch), and [inspection](../../../patches/0005-inspection.patch).
 
 ---
 
 ## Diagnostic Categories
 
-<!-- When to use each level: debug, info, warn, error -->
-
-There is no plugin log-level policy. Use the existing category that owns the failure:
+Use the existing category that owns the failure:
 
 | Category | Existing channel | Owner |
 | --- | --- | --- |
-| Host dispatch or ABI callback failure | `EnvelopeError`, `errorEnvelope`, or returned Go error | `plugin.go`, `cabi.go` |
-| Invalid management request | HTTP status and `error.message` | Management handlers and `jsonError` |
+| Invalid administrator request | Native HTTP status and response message | Administrator handlers |
+| Supplier HTTP or stream failure | Actual upstream status and error | Native account sender and `executeModel` |
 | Evaluation request failure | Result or sample `error` field | `candy.go`, `modeltrace.go` |
-| State read or save failure | `storageError` and `/state` response `storage_error` | `state.go`, `stateResponse` |
+| State read or save failure | `storageError` and `/state` response `storage_error` | `state.go`, `State` |
+| Inspection or notification failure | State `error`, account result `error`, or `notification_error` | Inspection coordinator and page |
+| Settings persistence failure | Native response message and form error | Native settings service and page |
 | Incorrect model answer | Evaluation score, validity, or attribution outcome | Evaluation and algorithm files |
 
-Do not describe an incorrect answer as a plugin crash. Transport success and answer correctness are separate outcomes.
+Do not describe an incorrect answer as an application crash.
+Transport success and answer correctness are separate outcomes.
 
-References: [response helpers](../../../internal/plugin/plugin.go), [C ABI errors](../../../cmd/cpa-codex-candy-eval/cabi.go), and [trace outcomes](../../../internal/plugin/modeltrace.go).
+References: [administrator channel](../../../patches/0004-admin-channel.patch) and [evaluation UI](../../../patches/0006-evaluation-ui.patch).
 
 ---
 
 ## Structured Diagnostic Fields
-
-<!-- Log format, required fields -->
 
 Preserve the JSON field names consumed by the UI. The state endpoint returns `storage_error`, and the page renders it through `setNotice`.
 
@@ -54,37 +43,34 @@ Candy records include model, effort, time, duration, token counts, answer, the `
 
 Use `truncate` for bounded user-visible request errors where adjacent runners do so. Candy and trace samples retain at most 500 runes of those errors.
 
-This bound is not secret redaction. Do not treat a truncated host response as safe to publish.
+This bound is not secret redaction. Do not treat truncated supplier text as safe to publish.
 
-Evidence: [candyResult and evaluateCandy](../../../internal/plugin/candy.go), [collectTraceSample](../../../internal/plugin/modeltrace.go), and [page notices](../../../internal/plugin/web/app.js).
+Evidence: results and trace samples in the [evaluation core](../../../patches/0001-evaluation-core.patch), and notices in the [evaluation UI](../../../patches/0006-evaluation-ui.patch).
 
 ---
 
 ## What to Report
 
-<!-- Important events to log -->
-
-- Preserve contextual error messages for failed host calls, response decoding, and interrupted streams.
+- Preserve contextual errors for native account lookup, supplier requests, response decoding, and interrupted streams.
 - Expose state-file failures through `storageError`, including read failures that pause future saves.
 - Preserve upstream HTTP status when retry decisions depend on it.
 - Retain cancellation, incomplete response, and invalid-answer distinctions in the owning evaluation flow.
-- Use test failure messages and synthetic host mocks when investigating local behavior.
+- Use test failure messages and synthetic senders when investigating local behavior.
 
-Examples: `%w` context in [credentials](../../../internal/plugin/credentials.go), stream errors in [model execution](../../../internal/plugin/model.go), and visible save failures in [state tests](../../../internal/plugin/plugin_test.go).
+Examples: stream errors in the [evaluation core](../../../patches/0001-evaluation-core.patch) and save failures in [runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go).
 
 ---
 
 ## What NOT to Report
 
-<!-- Sensitive data, PII, secrets -->
-
 - Do not log or copy `.env` values, deployment passwords, management keys, API keys, or authorization headers.
 - Do not publish raw credential configuration, token contents, account metadata, full model payloads, or private deployment paths.
 - Use synthetic credentials in tests. Keep production account data out of screenshots, journals, and reports.
-- Use existing masked key previews and stable credential IDs instead of adding secret fields to synchronization payloads.
+- Use stable native account IDs and existing masked display fields. Do not add secrets to page payloads.
 
-The credential sync contract sends metadata, not API keys. `previewAPIKey` masks display names. It does not authorize disclosure of the original value.
+Inspection settings reads omit notification secrets and return configured flags.
+Empty secret updates retain saved values. Do not expose saved values in screenshots or reports.
 
-Evidence: [private configuration rules](../../../AGENTS.md), [syncCredentialsResponse and previewAPIKey](../../../internal/plugin/credentials.go), and credential assertions in [UI checks](../../../scripts/test-ui.cjs).
+Evidence: [private configuration rules](../../../AGENTS.md), [native inspection](../../../patches/0005-inspection.patch), and [UI checks](../../../tests/ui/sub2api-dropdowns.cjs).
 
 Current errors can include upstream text. Check them for sensitive content before you share a report. This repository does not provide a universal redaction layer.

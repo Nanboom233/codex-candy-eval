@@ -1,0 +1,2507 @@
+diff --git a/backend/internal/codexeval/web/app.js b/backend/internal/codexeval/web/app.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/app.js
+@@ -0,0 +1,557 @@
++"use strict";
++const BASE = "/api/v1/admin/codex-eval";
++const PREF_STORE = "sub2api-codex-eval.prefs";
++const MASK_STORE = "sub2api-codex-eval.masked";
++const DEFAULT_MODEL = "gpt-6.1-sol";
++const DEFAULT_EFFORT = "low";
++const DEFAULT_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
++const HIDDEN_MODEL = (id) => id.toLowerCase().includes("image");
++const tabNames = ["candy", "fingerprint", "modeltrace", "pelican", "settings"];
++
++let sessionBlocked = false;
++let credentials = [];
++let evaluationState = { active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} };
++let pollTimer = 0;
++let loadError = "";
++let loadController = null;
++// Whether a refresh started with the button is running; polling never shows progress.
++let refreshing = false;
++let pending = false;
++let storageError = "";
++let clearScope = "candy";
++// Enable changes in flight, by credential ID; reloads keep these requested states.
++const switching = new Map();
++
++function applyTheme() {
++ const selected = new URLSearchParams(location.search).get("theme") || localStorage.getItem("theme");
++ document.documentElement.dataset.theme = ["light", "dark"].includes(selected) ? selected
++   : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
++}
++
++class AuthError extends Error {}
++
++async function api(path, { method = "GET", body, signal } = {}) {
++  const timeout = AbortSignal.timeout(30000);
++  const requestKey = localStorage.getItem("auth_token");
++  if (!requestKey) throw new AuthError("请登录 Sub2API 管理面板，登录后刷新本页");
++  const init = { method, cache: "no-store", signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: { Authorization: "Bearer " + requestKey } };
++  if (body !== undefined) {
++    init.headers["Content-Type"] = "application/json";
++    init.body = JSON.stringify(body);
++  }
++  let resp, text;
++  try {
++    resp = await fetch(path, init);
++    text = await resp.text();
++  } catch (err) {
++    if (signal?.aborted) throw err;
++    throw new Error(err.name === "TimeoutError" ? "连接超时，请稍后重试。" : "无法连接 Sub2API，请检查网络后重试。");
++  }
++  let data = null;
++  try { data = JSON.parse(text); } catch (_) {}
++  if (resp.status === 401) throw new AuthError("请登录 Sub2API 管理面板，登录后刷新本页");
++  if (resp.status === 403) throw new AuthError("无管理员权限");
++  if (!resp.ok) {
++    const err = data?.error;
++    throw Object.assign(new Error(String((typeof err === "string" ? err : err?.message) || data?.message || text || "HTTP " + resp.status)), { status: resp.status });
++  }
++  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("服务器返回了无效数据，请稍后重试。");
++  return data.data;
++}
++
++function stored(name) {
++  try { return JSON.parse(localStorage.getItem(name)); } catch (_) { return null; }
++}
++function store(name, value) {
++  try { localStorage.setItem(name, JSON.stringify(value)); } catch (_) {}
++}
++function fillModels() {
++  const ids = [...new Set(catalogCache.models?.ids || [])].sort(compareModels);
++  const probeModels = ids.filter((id) => !/[()]/.test(id));
++  const fill = (id, options, saved) => {
++    const initial = !$(id).dataset.initialized;
++    updateModelPicker(id, options, initial ? saved || DEFAULT_MODEL : undefined);
++    $(id).dataset.initialized = "true";
++  };
++  fill("model", ids, candyPrefs().model);
++  fill("fp-model", probeModels, stored(PREF_STORE + ".fingerprint")?.model);
++  fill("mt-model", probeModels, stored(PREF_STORE + ".modeltrace")?.model);
++  fill("pl-model", ids, stored(PREF_STORE + ".pelican")?.model);
++  updateModelPicker("inspection-model", ids);
++}
++// Rows are keyed by credential, and an update patches only the markup that changed, so the rest keeps its
++// state, such as focus or a loaded preview.
++const renderedLists = new Map();
++function renderList(prefix, renderRow) {
++  const list = $(prefix + "rows"), previous = renderedLists.get(list) || { rows: new Map(), empty: "" };
++  const visible = visibleCredentials(prefix);
++  if (!visible.length) {
++    const message = loadController && !credentials.length ? "正在读取账户和测试记录…" : "没有符合筛选条件的账户，请调整筛选或在 Sub2API 中添加账户。";
++    const empty = `<div class="empty">${esc(loadError || message)}</div>`;
++    if (previous.empty !== empty) list.innerHTML = empty;
++    renderedLists.set(list, { rows: new Map(), empty });
++    return;
++  }
++  const rows = new Map(visible.map((a) => {
++    const html = renderRow(a), row = previous.rows.get(a.id);
++    if (row?.html === html) return [a.id, row];
++    return [a.id, { html, node: row ? patch(row.node, rowNode(html)) : rowNode(html) }];
++  }));
++  renderedLists.set(list, { rows, empty: "" });
++  const kept = new Set([...rows.values()].map((row) => row.node));
++  let cursor = list.firstChild;
++  const dropStale = () => {
++    while (cursor && !kept.has(cursor)) {
++      const next = cursor.nextSibling;
++      cursor.remove();
++      cursor = next;
++    }
++  };
++  for (const { node } of rows.values()) {
++    dropStale();
++    if (node === cursor) cursor = cursor.nextSibling;
++    else list.insertBefore(node, cursor);
++  }
++  dropStale();
++  refreshTip();
++}
++// patch updates node to match next and returns the node now in place.
++function patch(node, next) {
++  if (node.isEqualNode(next)) return node;
++  if (node.nodeName !== next.nodeName) {
++    node.replaceWith(next);
++    return next;
++  }
++  if (node.nodeType !== Node.ELEMENT_NODE) {
++    node.nodeValue = next.nodeValue;
++    return node;
++  }
++  for (const { name } of [...node.attributes]) if (!next.hasAttribute(name)) node.removeAttribute(name);
++  for (const { name, value } of next.attributes) if (node.getAttribute(name) !== value) node.setAttribute(name, value);
++  // Once clicked, a checkbox no longer follows its checked attribute.
++  if (node instanceof HTMLInputElement) node.checked = next.checked;
++  const children = [...node.childNodes], updates = [...next.childNodes];
++  updates.forEach((update, i) => children[i] ? patch(children[i], update) : node.append(update));
++  for (const child of children.slice(updates.length)) child.remove();
++  return node;
++}
++function rowNode(html) {
++  const template = document.createElement("template");
++  template.innerHTML = html;
++  return template.content.firstElementChild;
++}
++
++function renderPageActions() {
++  $("clear-all").disabled = pending || credentials.every((a) => !a.results.length && !a.fingerprints?.length && !a.modeltraces?.length && !a.pelicans?.length);
++  $("refresh").disabled = pending || refreshing;
++  $("refresh").setAttribute("aria-busy", refreshing);
++}
++
++function render() {
++  renderPageActions();
++  setNotice("storage-error", storageError);
++  for (const prefix of ["", "fp-", "mt-", "pl-"]) fillPlanFilter(prefix);
++  renderCandy();
++  renderFingerprints();
++  renderModelTrace();
++  renderPelican();
++}
++
++function stopPolling() {
++  clearTimeout(pollTimer);
++  loadController?.abort();
++  loadController = null;
++}
++
++function stateCredentials(data) {
++ return accountList.filter((account) => accountInGroup(account)).map((account) => {
++  const id = String(account.id);
++  const task = data.active.find((run) => run.target.account_id === account.id);
++  const restrictions = accountRestrictions(account);
++  const a = { ...account, id, account_id: account.id, disabled: account.schedulable === false,
++   unavailable: restrictions.length > 0, restrictions,
++   plan_type: account.credentials?.plan_type || account.parent_plan_type || "",
++   results: data.candy[id] || [], fingerprints: data.fingerprint[id] || [],
++   modeltraces: data.modeltrace[id] || [], pelicans: data.pelican[id] || [], task,
++   task_in_scope: task?.target.group_id === selectedGroup };
++  if (task && a.task_in_scope) {
++   if (task.type === "candy") a.running = task.progress;
++   if (task.type === "fingerprint") a.fingerprint_running = { ...task.progress, phase: task.status === "cancelling" ? "cancelling" : task.progress.phase };
++   if (task.type === "modeltrace") a.modeltrace_running = { ...task.progress, phase: task.status === "cancelling" ? "cancelling" : task.progress.phase };
++   if (task.type === "pelican") a.pelican_running = true;
++  }
++  return a;
++ });
++}
++function accountRestrictions(account) {
++  const restrictions = [];
++  if (account.status !== "active") {
++    const label = ({ inactive: "账户未激活", error: "账户错误", quota_exceeded: "额度已用尽" })[account.status] || account.status;
++    restrictions.push({ label, message: statusText(account.error_message) || label });
++  }
++  for (const [field, label, reason] of [
++    ["temp_unschedulable_until", "暂不可调度", account.temp_unschedulable_reason],
++    ["rate_limit_reset_at", "限流中", ""],
++    ["overload_until", "过载中", ""],
++  ]) {
++    if (Date.parse(account[field]) > Date.now()) restrictions.push({ label, message: [statusText(reason), `预计 ${fmtTime(account[field], false)} 恢复`].filter(Boolean).join("\n") });
++  }
++  return restrictions;
++}
++const targetsFor = (ids) => (manualCatalogReady() ? ids : []).filter((id) => accountList.some((a) => String(a.id) === String(id) && accountInGroup(a)))
++  .map((id) => ({ group_id: selectedGroup, account_id: Number(id) }));
++
++function syncCredentials() {
++  credentials = stateCredentials(evaluationState);
++  for (const a of credentials) if (switching.has(a.id)) a.disabled = switching.get(a.id);
++  fillCredentialTypes();
++  const ids = new Set(credentials.map((a) => a.id));
++  const usable = new Set(credentials.filter(usableCredential).map((a) => a.id));
++  const answers = new Set(credentials.flatMap((a) => a.results.map((r) => answerKey(a.id, r))));
++  const pages = new Set(credentials.flatMap((a) => a.pelicans.map((r) => pelicanKey(a.id, r.id))));
++  for (const expanded of [candyExpanded, fpExpanded, mtExpanded, plExpanded]) {
++    for (const id of expanded) if (!ids.has(id)) expanded.delete(id);
++  }
++  for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) {
++    for (const id of selection) if (!usable.has(id)) selection.delete(id);
++  }
++  for (const id of candyAnswersExpanded) if (!answers.has(id)) candyAnswersExpanded.delete(id);
++  // Failed page loads retry with the next state.
++  for (const [key, page] of pelicanPages) if (!pages.has(key) || page instanceof Error) pelicanPages.delete(key);
++}
++
++async function load({ refresh = false } = {}) {
++  stopPolling();
++  const controller = new AbortController();
++  loadController = controller;
++  accountListReady = false;
++  render();
++  try {
++    try {
++      await refreshCatalog({ signal: controller.signal, force: refresh });
++      if (controller.signal.aborted) return;
++      fillModels();
++      setNotice("catalog-error", "");
++    } catch (err) {
++      if (controller.signal.aborted) return;
++      if (err instanceof AuthError) return showLogin(err.message);
++      setNotice("catalog-error", "读取账户和模型列表失败：" + err.message);
++      if (!manualCatalogReady()) clearTimeout(notices.get("catalog-error")?.timer);
++    }
++    if (manualCatalogReady()) {
++      syncCredentials();
++      render();
++    }
++    const data = await api(BASE + "/state", { signal: controller.signal });
++    if (controller.signal.aborted) return;
++    evaluationState = data;
++    syncCredentials();
++    storageError = data.storage_error || "";
++    loadError = "";
++    setNotice("load-error", "");
++  } catch (err) {
++    if (controller.signal.aborted) return;
++    if (err instanceof AuthError) return showLogin(err.message);
++    loadError = "读取测试记录失败：" + err.message;
++    setNotice("load-error", loadError);
++  } finally {
++    if (loadController === controller) {
++      loadController = null;
++      render();
++      if (!sessionBlocked) pollTimer = setTimeout(load, credentials.some(credentialBusy) ? 2500 : 20000);
++    }
++  }
++}
++
++async function update(path, options, errorPrefix) {
++  if (path === "/start" && !manualCatalogReady()) return setNotice("flash", catalogBlocker());
++  if (pending) return;
++  pending = true;
++  stopPolling();
++  setNotice("flash", "");
++  render();
++  try {
++    const response = await api(BASE + path, options);
++    if (path === "/start") {
++      const messages = [`已为 ${response.started.length} 个账户开始测试`];
++      if (response.busy.length) messages.push(`${response.busy.length} 个账户正在测试`);
++      for (const item of response.unavailable) messages.push(`账户 ${item.target.account_id}：${item.error}`);
++      setNotice("flash", messages.join("；"), response.unavailable.length ? "warning" : "info");
++    }
++    if (path === "/cancel" && response.cancelled) setNotice("flash", "正在取消，等待请求结束", "info");
++  } catch (err) {
++    if (err instanceof AuthError) return showLogin(err.message);
++    setNotice("flash", errorPrefix + "：" + err.message);
++  } finally {
++    pending = false;
++    if (!$("app").hidden) await load();
++  }
++}
++
++function showLogin(message) {
++  stopPolling();
++  clearTimeout(inspectionTimer);
++  clearTimeout(inspectionAutosaveTimer);
++  inspectionStateController?.abort();
++  sessionBlocked = true;
++  resetCatalogCache();
++  credentials = [];
++  evaluationState = { active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} };
++  inspectionState = { results: [] };
++  inspectionSettingsLoaded = false;
++  inspectionDirtyFields.clear();
++  loadError = storageError = "";
++  for (const collection of [candySelected, fpSelected, mtSelected, plSelected, candyExpanded, fpExpanded, mtExpanded, plExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
++  for (const id of notices.keys()) setNotice(id, "");
++  hideTip();
++  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
++  render();
++  $("app").hidden = true;
++  $("login").hidden = false;
++  $("login-error").hidden = !message;
++  $("login-error").textContent = message || "";
++
++}
++
++async function start() {
++  setNotice("flash", "");
++  $("login").hidden = true;
++  $("app").hidden = false;
++  sessionBlocked = false;
++  await loadInspectionSettings();
++  fillModels();
++  await load({ refresh: true });
++}
++
++function setMasked(masked) {
++  document.body.classList.toggle("masked", masked);
++  for (const id of ["mask", "fp-mask", "mt-mask", "pl-mask"]) {
++    $(id).setAttribute("aria-pressed", masked);
++    $(id).innerHTML = icon(masked ? "eye" : "eye-off");
++    setLabel($(id), masked ? "取消脱敏" : "脱敏");
++  }
++}
++function switchTab(name) {
++  for (const tab of tabNames) {
++    const active = name === tab;
++    $("tab-" + tab).setAttribute("aria-selected", active);
++    $("tab-" + tab).tabIndex = active ? 0 : -1;
++    $(tab + "-panel").hidden = !active;
++  }
++  hideTip();
++  document.querySelector(".page-actions").hidden = name === "settings";
++  if (name === "settings") loadInspectionSettings();
++  store(PREF_STORE + ".tab", name);
++}
++const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["modeltrace_running", "ModelTrace 测试"], ["pelican_running", "鹈鹕测试"]];
++const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", modeltrace: "ModelTrace 测试", pelican: "鹈鹕测试" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
++const credentialBusy = (a) => !!busyTest(a);
++const usableCredential = (a) => !a.disabled && !a.unavailable;
++const availableCredential = (a) => usableCredential(a) && !credentialBusy(a);
++// Why a test cannot start, shown on its disabled button; empty when it can.
++const pageBlocker = (prefix) => !selectedGroup ? "没有可用 OpenAI 分组" : catalogBlocker() || (!$(prefix + "model").value.trim() ? "请输入模型名称" : pending ? "正在处理上一个操作，请稍候" : "");
++function runBlocker(prefix, a) {
++  if (a.disabled) return "账户已停用，启用后才能测试";
++  if (a.unavailable) return "账户暂不可用：" + unavailableReason(a);
++  if (credentialBusy(a)) return `${busyTest(a)}进行中，结束后才能开始新测试`;
++  return pageBlocker(prefix);
++}
++const runnable = (prefix, a) => !runBlocker(prefix, a);
++const selectedCredentials = (prefix, selection) => visibleCredentials(prefix).filter((a) => selection.has(a.id));
++const batchCredentials = (prefix, selection) => {
++  const selected = selectedCredentials(prefix, selection);
++  return (selected.length ? selected : visibleCredentials(prefix)).filter(availableCredential);
++};
++async function setCredentialEnabled(id, enabled) {
++  const a = credentials.find((entry) => entry.id === id);
++  if (!a || switching.has(id)) return;
++  switching.set(id, !enabled);
++  a.disabled = !enabled;
++  render();
++  try {
++    const saved = await api(`/api/v1/admin/accounts/${Number(id)}/schedulable`, { method: "POST", body: { schedulable: enabled } });
++    a.schedulable = saved.schedulable; a.disabled = saved.schedulable === false;
++  } catch (err) {
++    if (err instanceof AuthError) return showLogin(err.message);
++    setNotice("flash", (enabled ? "启用账户失败：" : "停用账户失败：") + err.message);
++    const current = credentials.find((entry) => entry.id === id);
++    if (current) current.disabled = enabled;
++  } finally {
++    switching.delete(id);
++  }
++  render();
++  // Refresh the native account after its status update.
++  if (!$("app").hidden) await load({ refresh: true });
++}
++function renderSelection(prefix, selection, action) {
++  const available = visibleCredentials(prefix).filter(availableCredential);
++  const selected = selectedCredentials(prefix, selection);
++  const targets = batchCredentials(prefix, selection);
++  const button = $(prefix + "run-batch");
++  button.innerHTML = `${icon("play")}${action}${selected.length ? "所选" : "全部"} (${targets.length})`;
++  const blocker = pageBlocker(prefix) || (targets.length ? "" : selected.length ? "所选账户均已停用、不可用或正在测试" : "当前列表没有可测试的账户");
++  button.disabled = !!blocker;
++  button.dataset.tip = blocker;
++  const checkbox = $(prefix + "select-all");
++  checkbox.checked = available.length > 0 && available.every((a) => selection.has(a.id));
++  checkbox.indeterminate = selected.length > 0 && !checkbox.checked;
++  checkbox.disabled = pending || (!available.length && !selected.length);
++}
++
++function bindCollectionActions({ type, scope, expanded, renderRows, run, showDetail }) {
++  const rows = $(type + "-rows"), dialog = $(type + "-detail");
++  $(type + "-detail-close").addEventListener("click", () => dialog.close());
++  dialog.addEventListener("close", () => {
++    rows.querySelector(`[data-${type}-detail="${CSS.escape(dialog.dataset.record)}"][data-${type}-credential="${CSS.escape(dialog.dataset.credential)}"]`)?.focus();
++  });
++  rows.addEventListener("click", (e) => {
++    if (e.target.closest("label")) return;
++    const action = (name) => e.target.closest(`[data-${type}-${name}]`)?.getAttribute(`data-${type}-${name}`);
++    const runID = action("run");
++    if (runID) return run({ targets: targetsFor([runID]) });
++    const cancelID = action("cancel");
++    if (cancelID) return update("/cancel", { method: "POST", body: { run_id: credentials.find((a) => a.id === cancelID)?.task?.id } }, "停止测试失败");
++    const recordID = action("detail"), credentialID = action("credential");
++    if (recordID && credentialID) return openResultDetail(type, scope, credentialID, recordID, showDetail);
++    const toggleID = e.target.closest("[data-row]")?.dataset.row;
++    if (toggleID) {
++      expanded.has(toggleID) ? expanded.delete(toggleID) : expanded.add(toggleID);
++      renderRows();
++    }
++  });
++}
++
++const providerType = (a) => a.type;
++const credentialType = (a) => a.type;
++const credentialTypeLabel = (a) => a.type === "oauth" ? "OAuth" : a.type === "apikey" ? "API Key" : a.type;
++const typedCredentials = (prefix) => credentials.filter((a) => $(prefix + "credential-type").value === "all" || credentialType(a) === $(prefix + "credential-type").value);
++const PRO_ALL = "Pro ALL";
++function visibleCredentials(prefix) {
++  const filter = $(prefix + "credential-plan").value;
++  const enabledOnly = $(prefix + "enabled-only").checked;
++  const matches = (plan) => filter === "all" || (filter === PRO_ALL ? plan?.pro : plan?.label === filter);
++  return typedCredentials(prefix).filter((a) => (!enabledOnly || !a.disabled) && matches(credentialPlan(a))).sort((a, b) => planRank(a) - planRank(b));
++}
++function fillPlanFilter(prefix) {
++  const plans = [...new Map(typedCredentials(prefix).map(credentialPlan).filter(Boolean).map((plan) => [plan.label, plan])).values()]
++    .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
++  const groups = plans.filter((plan) => plan.pro).length > 1 ? [PRO_ALL] : [];
++  const selected = $(prefix + "credential-plan").value;
++  const options = [["all", "所有订阅类型"], ...groups, ...plans.map((plan) => plan.label)];
++  if (!prefix && selected && selected !== "all" && !options.some((option) => (Array.isArray(option) ? option[0] : option) === selected)) options.push(selected);
++  $(prefix + "plan-filter").hidden = !plans.length && !(selected && selected !== "all" && !prefix);
++  fillSelect(prefix + "credential-plan", options, selected, "all");
++}
++function fillCredentialTypes() {
++  const types = new Map(credentials.map((a) => [credentialType(a), credentialTypeLabel(a)]));
++  const options = [["all", "全部账户"], ...[...types].sort(([a], [b]) => a.localeCompare(b))];
++  for (const prefix of ["", "fp-", "mt-", "pl-"]) {
++    const selected = $(prefix + "credential-type").value;
++    const values = [...options];
++    if (!prefix && selected && !values.some(([value]) => value === selected)) values.push([selected, selected === "oauth" ? "OAuth" : "API Key"]);
++    fillSelect(prefix + "credential-type", values, selected, "all");
++  }
++}
++
++function initializeLayout() {
++  $("candy-credentials").innerHTML = credentialCard("", "糖果测试", ["账户", "最近一次", "正确率", "最近 20 次"]);
++  $("fp-credentials").innerHTML = credentialCard("fp-", "指纹测试", ["账户", "指纹结果", "模式", "测试时间"]);
++  $("mt-credentials").innerHTML = credentialCard("mt-", "ModelTrace 测试", ["账户", "归因结果", "测试模型", "测试时间"]);
++  $("pl-credentials").innerHTML = credentialCard("pl-", "鹈鹕测试", ["账户", "最近一次", "动画"]);
++  $("notifications").innerHTML = ["flash", "load-error", "catalog-error", "storage-error"].map((id) => `<div id="${id}" class="global-flash" role="alert" hidden><span class="notice-symbol" aria-hidden="true"></span><span class="notice-message"></span><button class="notice-close" type="button" aria-label="隐藏提示" data-tip>${icon("x")}</button></div>`).join("");
++}
++
++// Events and initialization.
++initializeLayout();
++initializeModelPickers();
++initializeTips();
++initializeCopyButtons();
++initializeCandy();
++initializeFingerprint();
++initializeModelTrace();
++initializePelican();
++initializeInspection();
++document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon, el.dataset.class); });
++
++for (const id of ["flash", "load-error", "catalog-error", "storage-error"]) {
++  $(id).querySelector(".notice-close").addEventListener("click", () => hideNotice(id));
++}
++
++$("refresh").addEventListener("click", async () => {
++  if (pending) return;
++  resetCatalogCache();
++  refreshing = true;
++  try {
++    await load({ refresh: true });
++  } finally {
++    refreshing = false;
++    renderPageActions();
++  }
++});
++
++applyTheme();
++addEventListener("storage", applyTheme);
++matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
++
++setMasked(stored(MASK_STORE) === true);
++$("mask").addEventListener("click", () => {
++  const masked = !document.body.classList.contains("masked");
++  setMasked(masked);
++  store(MASK_STORE, masked);
++});
++for (const id of ["fp-mask", "mt-mask", "pl-mask"]) $(id).addEventListener("click", () => $("mask").click());
++
++for (const [id, scope] of [["clear", "candy"], ["fp-clear", "fingerprint"], ["mt-clear", "modeltrace"], ["pl-clear", "pelican"], ["clear-all", "all"]]) {
++  $(id).addEventListener("click", () => {
++    clearScope = scope;
++    $("clear-title").textContent = `${$(id).getAttribute("aria-label")}？`;
++    $("confirm-clear").returnValue = ""; // Esc keeps the previous returnValue.
++    $("confirm-clear").showModal();
++  });
++}
++$("confirm-clear").addEventListener("close", () => {
++  if ($("confirm-clear").returnValue !== "confirm") return;
++  update("/clear-history", { method: "POST", body: { scope: clearScope } }, "清空测试记录失败");
++});
++
++for (const name of tabNames) {
++  $("tab-" + name).addEventListener("click", () => switchTab(name));
++  $("tab-" + name).addEventListener("keydown", (e) => {
++    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
++    e.preventDefault();
++    const next = e.key === "Home" ? tabNames[0] : e.key === "End" ? tabNames.at(-1) : tabNames[(tabNames.indexOf(name) + (e.key === "ArrowRight" ? 1 : -1) + tabNames.length) % tabNames.length];
++    switchTab(next); $("tab-" + next).focus();
++  });
++}
++switchTab(tabNames.includes(stored(PREF_STORE + ".tab")) ? stored(PREF_STORE + ".tab") : "candy");
++
++for (const [prefix, type, selection, submit] of [["", "candy", candySelected, runCandy], ["fp-", "fp", fpSelected, runFingerprint], ["mt-", "mt", mtSelected, runModelTrace], ["pl-", "pl", plSelected, runPelican]]) {
++  for (const filter of ["credential-type", "credential-plan", "enabled-only"]) $(prefix + filter).addEventListener("change", () => { selection.clear(); render(); });
++  $(prefix + "toolbar").addEventListener("submit", (e) => {
++    e.preventDefault();
++    const ids = batchCredentials(prefix, selection).map((a) => a.id);
++    if (ids.length) submit({ targets: targetsFor(ids) });
++  });
++  $(prefix + "select-all").addEventListener("change", (e) => {
++    for (const a of visibleCredentials(prefix)) {
++      if (!e.target.checked) selection.delete(a.id);
++      else if (availableCredential(a)) selection.add(a.id);
++    }
++    render();
++  });
++  $(prefix + "rows").addEventListener("change", (e) => {
++    if (e.target.dataset.enable) return setCredentialEnabled(e.target.dataset.enable, e.target.checked);
++    const id = e.target.getAttribute(`data-${type}-select`);
++    if (!id) return;
++    e.target.checked ? selection.add(id) : selection.delete(id);
++    render();
++  });
++}
++document.querySelectorAll("[data-group-select]").forEach((select) => select.addEventListener("change", () => {
++ selectedGroup = Number(select.value);
++ store(PREF_STORE + ".group", selectedGroup);
++ stopPolling(); resetCatalogCache(); credentials = [];
++ for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) selection.clear();
++ syncGroupControls(); load({ refresh: true });
++}));
++localStorage.getItem("auth_token") ? start() : showLogin("请登录 Sub2API 管理面板，登录后刷新本页");
+diff --git a/backend/internal/codexeval/web/candy.js b/backend/internal/codexeval/web/candy.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/candy.js
+@@ -0,0 +1,115 @@
++"use strict";
++
++const candyExpanded = new Set();
++const candyAnswersExpanded = new Set();
++const candySelected = new Set();
++
++const candyPrefs = () => stored(PREF_STORE) || {};
++const candySavePrefs = () => store(PREF_STORE, { model: $("model").value, effort: $("effort").value, runs: candyRuns() });
++const candyRuns = () => boundedInput("runs", 1, 10);
++
++const scopeMatch = (r) => r.model === $("model").value && (r.effort || "none") === $("effort").value;
++const kind = (r) => (r.skipped ? "skip" : r.error ? "err" : r.ok ? "ok" : "bad");
++const VERDICT = { ok: "答对", bad: "答错", err: "出错", skip: "已跳过" };
++const verdict = (r) => statusPill(kind(r), VERDICT[kind(r)]);
++const resultMeta = (r) => `<div class="result-meta">${verdict(r)}${metric("calendar", "测试时间", fmtTime(r.time))}${modelMeta(r)}</div>`;
++// Answers come from untrusted upstreams: raw HTML is escaped, links and images stay text, and Temml
++// refuses commands that need trust, such as \href. The CJK plugin lets emphasis close after full-width
++// punctuation, as in **答案：**21.
++const markdown = markdownit({ breaks: true }).disable(["link", "image", "autolink"])
++  .use(markdownItCjkFriendly).use(texmath, { engine: temml, delimiters: ["dollars", "brackets"] });
++const answerHTML = (r) => r.error ? esc(r.error) : markdown.render(r.answer || "");
++const answerKey = (id, r) => JSON.stringify([id, r.time, r.model, r.effort]);
++const answerToggle = (open) => `${icon("chevron-right", "chev")}${open ? "收起" : "展开"}`;
++
++function candyHistory(a, r, i) {
++  const key = answerKey(a.id, r);
++  const answerOpen = candyAnswersExpanded.has(key);
++  const bodyID = `answer-${encodeURIComponent(a.id)}-${i}`;
++  return historyCard(r, `<div class="answer ${answerOpen ? "expanded" : ""}">${verdict(r)}
++    <button class="answer-toggle" type="button" data-answer="${esc(key)}" aria-expanded="${answerOpen}" aria-controls="${esc(bodyID)}" aria-label="${answerOpen ? "收起文本" : "展开文本"}">${answerToggle(answerOpen)}</button>
++    <div id="${esc(bodyID)}" class="answer-content ${r.error ? "error" : "markdown"}">${answerHTML(r)}</div>
++  </div>`);
++}
++
++function renderCandyRow(a) {
++  const results = a.results;
++  const last = results[results.length - 1];
++  const graded = results.filter((r) => scopeMatch(r) && !r.error && !r.skipped);
++  const correct = graded.filter((r) => r.ok).length;
++
++  const rate = graded.length
++    ? `<b class="mono">${Math.round((correct / graded.length) * 100)}%</b><small class="mono">${correct}/${graded.length}</small>`
++    : `<span class="none">—</span>`;
++  const marks = results.map((r, i) => `<button class="mark-hit" type="button" data-auth="${esc(a.id)}" data-i="${i}" aria-label="${esc(`${fmtTime(r.time)} ${modelName(r)} ${VERDICT[kind(r)]}`)}">${icon(STATUS_ICONS[kind(r)], `mark ${kind(r)} ${scopeMatch(r) ? "" : "dim"}`)}</button>`).join("");
++  const progress = a.running && `${a.running.done}/${a.running.total}`;
++  const blocker = runBlocker("", a);
++  const button = progress
++    ? `<button class="btn ghost" type="button" aria-label="测试中 ${progress}" data-tip disabled>${icon("loader-circle", "spin")}<span class="mono">${progress}</span></button>`
++    : `<button class="btn" type="button" data-candy-run="${esc(a.id)}" ${disabledFor(blocker)}>${icon("play")}测试</button>`;
++
++  return credentialRow({
++    type: "candy", credential: a, selected: candySelected.has(a.id), open: candyExpanded.has(a.id), selectable: !blocker, button,
++    result: latestResult(last, verdict), meta: `<div class="rate">${rate}</div><div class="marks">${marks}</div>`, tested: results.length > 0,
++    history: () => [...results].reverse().map((r, i) => candyHistory(a, r, i)).join(""),
++  });
++}
++
++function runCandy(body) {
++  if (!$("toolbar").reportValidity()) return;
++  candySavePrefs();
++  return update("/start", { method: "POST", body: { type: "candy", ...body, model: $("model").value, effort: $("effort").value, runs: candyRuns() } }, "开始测试失败");
++}
++
++function candyTip(target) {
++  const r = credentials.find((a) => a.id === target.dataset.auth)?.results[target.dataset.i];
++  return r ? `${resultMeta(r)}
++    <div class="metrics">${r.skipped ? "" : metrics(r)}</div>
++    <div class="tip-text ${r.error ? "error" : "markdown"}">${answerHTML(r)}</div>` : "";
++}
++
++function renderCandy() {
++  $("rate-scope").textContent = `正确率按 ${modelName({ model: $("model").value, effort: $("effort").value })} 统计`;
++  renderSelection("", candySelected, "测试");
++  $("clear").disabled = pending || credentials.every((a) => !a.results.length);
++  renderList("", renderCandyRow);
++}
++
++function initializeCandy() {
++  const saved = candyPrefs();
++  fillSelect("effort", DEFAULT_EFFORTS, saved.effort, DEFAULT_EFFORT);
++  $("runs").value = saved.runs || 1;
++  $("runs").value = candyRuns();
++
++  for (const id of ["model", "effort", "runs"]) $(id).addEventListener("input", candySavePrefs);
++  $("model").addEventListener("change", () => { candySavePrefs(); render(); });
++  $("effort").addEventListener("change", () => { candySavePrefs(); render(); });
++  $("runs").addEventListener("change", () => { $("runs").value = candyRuns(); candySavePrefs(); });
++  bindCandyRows();
++}
++
++function bindCandyRows() {
++  $("rows").addEventListener("click", (e) => {
++    if (e.target.closest("label")) return;
++    const hit = e.target.closest("[data-auth]");
++    if (hit) return showTip(hit);
++    const toggle = e.target.closest("[data-answer]");
++    if (toggle) {
++      const key = toggle.dataset.answer;
++      const open = !candyAnswersExpanded.has(key);
++      open ? candyAnswersExpanded.add(key) : candyAnswersExpanded.delete(key);
++      toggle.closest(".answer").classList.toggle("expanded", open);
++      toggle.setAttribute("aria-expanded", open);
++      toggle.setAttribute("aria-label", open ? "收起文本" : "展开文本");
++      toggle.innerHTML = answerToggle(open);
++      return;
++    }
++    const btn = e.target.closest("[data-candy-run]");
++    if (btn) return runCandy({ targets: targetsFor([btn.dataset.candyRun]) });
++    const row = e.target.closest("[data-row]");
++    if (!row) return;
++    const id = row.dataset.row;
++    candyExpanded.has(id) ? candyExpanded.delete(id) : candyExpanded.add(id);
++    render();
++  });
++}
+diff --git a/backend/internal/codexeval/web/catalog.js b/backend/internal/codexeval/web/catalog.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/catalog.js
+@@ -0,0 +1,123 @@
++"use strict";
++let groups = [];
++let selectedGroup = 0;
++let accountList = [];
++let accountListReady = false;
++let accountListGroup = 0;
++let accountListError = "";
++let catalogCache = { models: null };
++let catalogLoaded = false;
++let catalogGroup = 0;
++let catalogGeneration = 0;
++function resetCatalogCache() {
++  catalogGeneration++;
++  catalogLoaded = false;
++  catalogGroup = 0;
++  catalogCache = { models: null };
++  accountList = [];
++  accountListReady = false;
++  accountListGroup = 0;
++  accountListError = "";
++}
++function syncGroupControls() {
++  const options = groups.map((g) => [String(g.id), g.name]);
++  if (selectedGroup && !groups.some((g) => g.id === selectedGroup)) options.push([String(selectedGroup), `分组 ${selectedGroup}（不可用）`]);
++  for (const prefix of ["", "fp-", "mt-", "pl-"]) {
++    fillSelect(prefix + "group", options, String(selectedGroup), String(selectedGroup));
++  }
++}
++// Keep the original model ordering; IDs are sent without CPA suffix conversion.
++function compareModels(a, b) {
++  const name = (id) => id.toLowerCase().split("/").pop();
++  const group = (id) => id.startsWith("gpt-") ? 0 : id.split("(")[0] === "codex-auto-review" ? 1 : id.startsWith("claude-") ? 2 : 3;
++  const left = name(a), right = name(b), family = group(left) - group(right);
++  const lexical = (x, y) => x < y ? -1 : x > y ? 1 : 0;
++  if (family) return family;
++  if (group(left) === 0) {
++    const generation = /^gpt-(\d+(?:\.\d+)*)(?:-(astra|sol|terra|luna))?(?=[-(]|$)/;
++    const l = left.match(generation), r = right.match(generation);
++    if (l && r) {
++      const lv = l[1].split(".").map(Number), rv = r[1].split(".").map(Number);
++      for (let i = 0; i < Math.max(lv.length, rv.length); i++) {
++        const version = (rv[i] || 0) - (lv[i] || 0);
++        if (version) return version;
++      }
++      const tiers = ["astra", "sol", "terra", "luna"];
++      const rank = (tier) => tier ? tiers.indexOf(tier) : tiers.length;
++      const tier = rank(l[2]) - rank(r[2]);
++      if (tier) return tier;
++    }
++  }
++  return (group(left) < 3 ? lexical(right, left) : lexical(left, right)) || lexical(a, b);
++}
++
++async function refreshCatalog({ signal, force = false } = {}) {
++  const reuseModels = catalogLoaded && catalogGroup === selectedGroup && !force;
++  const previousModelAccounts = enabledAccountIDs(accountList);
++  accountListReady = false;
++  accountListError = "";
++  catalogLoaded = false;
++  const generation = ++catalogGeneration;
++  const initialGroup = selectedGroup;
++  const current = () => generation === catalogGeneration && !signal?.aborted;
++  try {
++    const available = reuseModels ? groups : await api("/api/v1/admin/groups/all?platform=openai", { signal });
++    if (!current() || selectedGroup !== initialGroup) return;
++    groups = available;
++    if (!groups.some((g) => g.id === selectedGroup) && !(inspectionSettingsLoaded && selectedGroup > 0)) {
++      const remembered = Number(stored(PREF_STORE + ".group"));
++      selectedGroup = groups.some((g) => g.id === remembered) ? remembered : groups[0]?.id || 0;
++      if (inspectionSettingsLoaded && selectedGroup) markInspectionEdit("group_id");
++    }
++    syncGroupControls();
++    if (!selectedGroup) { accountList = []; catalogCache.models = { ids: [] }; catalogLoaded = true; return; }
++    const group = selectedGroup;
++    const inGroup = () => current() && selectedGroup === group;
++    const accounts = await fetchNativeAccounts(group, signal, inGroup);
++    if (!inGroup()) return;
++    accountList = accounts.filter((account) => accountInGroup(account, group));
++    accountListReady = true;
++    accountListGroup = group;
++    const { ids, errors } = reuseModels && previousModelAccounts === enabledAccountIDs(accountList)
++      ? { ids: catalogCache.models.ids, errors: [] } : await discoverEvaluationModels(accountList, signal);
++    if (!inGroup()) return;
++    catalogCache.models = { ids };
++    fillModels();
++    if (errors.length) throw new Error(errors.join("；"));
++    catalogLoaded = true;
++    catalogGroup = group;
++  } catch (err) {
++    if (current() && !accountListReady) accountListError = err.message;
++    throw err;
++  }
++}
++
++const enabledAccountIDs = (accounts) => accounts.filter((account) => account.schedulable !== false).map((account) => String(account.id)).sort().join(",");
++const manualCatalogReady = () => !!selectedGroup && accountListReady && accountListGroup === selectedGroup;
++const catalogBlocker = () => manualCatalogReady() ? "" : accountListError ? "账户列表读取失败：" + accountListError : "正在读取账户列表，请稍候";
++const accountInGroup = (account, group = selectedGroup) => (account.group_ids || []).some((id) => Number(id) === group);
++async function fetchNativeAccounts(group, signal, current = () => !signal?.aborted) {
++  const accounts = [];
++  const filter = group == null ? "" : `&group=${group}`;
++  for (let page = 1; ; page++) {
++    const data = await api(`/api/v1/admin/accounts?platform=openai${filter}&lite=1&page=${page}&page_size=100`, { signal });
++    if (!current()) return [];
++    accounts.push(...data.items);
++    if (page >= data.pages || !data.items.length) return accounts;
++  }
++}
++
++async function discoverEvaluationModels(accounts, signal) {
++  const enabled = accounts.filter((account) => account.schedulable !== false);
++  const results = await Promise.allSettled(enabled.map((account) => api(`/api/v1/admin/accounts/${account.id}/codex-eval/models`, { signal })));
++  if (signal?.aborted) return { ids: [], errors: [] };
++  const ids = [], errors = [];
++  results.forEach((result, i) => {
++    if (result.status === "fulfilled") ids.push(...result.value.map((model) => model.id));
++    else {
++      if (result.reason instanceof AuthError) throw result.reason;
++      errors.push(`${enabled[i].name}：${result.reason.message}`);
++    }
++  });
++  return { ids: [...new Set(ids)].filter((id) => !HIDDEN_MODEL(id)).sort(compareModels), errors };
++}
+diff --git a/backend/internal/codexeval/web/components.js b/backend/internal/codexeval/web/components.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/components.js
+@@ -0,0 +1,342 @@
++"use strict";
++
++// Lucide icons (https://lucide.dev, ISC license).
++const ICONS = {
++  ban: '<circle cx="12" cy="12" r="10"/><path d="M4.929 4.929 19.07 19.071"/>',
++  "file-key": '<path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M4 12v6"/><path d="M4 14h2"/><path d="M9.65 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v4"/><circle cx="4" cy="20" r="2"/>',
++  "key": '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
++  candy: '<path d="M10 7v10.9"/><path d="M14 6.1V17"/><path d="M16 7V3a1 1 0 0 1 1.707-.707 2.5 2.5 0 0 0 2.152.717 1 1 0 0 1 1.131 1.131 2.5 2.5 0 0 0 .717 2.152A1 1 0 0 1 21 8h-4"/><path d="M16.536 7.465a5 5 0 0 0-7.072 0l-2 2a5 5 0 0 0 0 7.07 5 5 0 0 0 7.072 0l2-2a5 5 0 0 0 0-7.07"/><path d="M8 17v4a1 1 0 0 1-1.707.707 2.5 2.5 0 0 0-2.152-.717 1 1 0 0 1-1.131-1.131 2.5 2.5 0 0 0-.717-2.152A1 1 0 0 1 3 16h4"/>',
++  "chevron-right": '<path d="m9 18 6-6-6-6"/>',
++  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
++  check: '<path d="M20 6 9 17l-5-5"/>',
++  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
++  "square-arrow-right-enter": '<path d="m10 16 4-4-4-4"/><path d="M3 12h11"/><path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"/>',
++  "square-arrow-right-exit": '<path d="M10 12h11"/><path d="m17 16 4-4-4-4"/><path d="M21 6.344V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-1.344"/>',
++  brain: '<path d="M12 18V5a3 3 0 0 0-5.997-.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 18V5a3 3 0 0 1 5.997-.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4M6 17a4 4 0 0 1-1.967-.767M18 17a4 4 0 0 0 1.967-.767"/>',
++  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/>',
++  astroid: '<path d="M12.983 21.186a1 1 0 0 1-1.966 0 10 10 0 0 0-8.203-8.203 1 1 0 0 1 0-1.966 10 10 0 0 0 8.203-8.203 1 1 0 0 1 1.966 0 10 10 0 0 0 8.203 8.203 1 1 0 0 1 0 1.966 10 10 0 0 0-8.203 8.203"/>',
++  "rotate-cw": '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
++  "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/>',
++  "circle-x": '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
++  "circle-alert": '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
++  "circle-help": '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
++  "arrow-right": '<path d="M5 12h14m-6-6 6 6-6 6"/>',
++  "shuffle": '<path d="m18 14 4 4-4 4m0-20 4 4-4 4M2 18h2.5c6 0 9-12 15-12H22M2 6h2.5c2 0 3.7 1.3 5.2 3.2M14.3 14.8c1.5 1.9 3.2 3.2 5.2 3.2H22"/>',
++  "fingerprint": '<path d="M12 11a2 2 0 0 1 2 2c0 4-1 6-2 8M8 16c.4-1 .5-2 .5-3a3.5 3.5 0 0 1 7 0c0 4-1 7-2 9M5 16c.4-1 .5-2 .5-3a6.5 6.5 0 0 1 13 0c0 3-.4 5-1 7M2 12a10 10 0 0 1 20 0M8 20l1-2"/>',
++  "circle-pause": '<circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/>',
++  "x": '<path d="m18 6-12 12M6 6l12 12"/>',
++  "chart": '<path d="M3 3v18h18M7 14v3m5-8v8m5-12v12"/>',
++  "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
++  play: '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/>',
++  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
++  "eye-off": '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
++  "trash-2": '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
++};
++const icon = (name, cls = "") =>
++  `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
++
++const $ = (id) => document.getElementById(id);
++const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
++
++function fillSelect(id, options, preferred, fallback) {
++  const select = $(id);
++  const entries = options.map((option) => typeof option === "string" ? [option, option] : option);
++  const markup = entries.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join("");
++  if (select.innerHTML !== markup) select.innerHTML = markup;
++  const values = entries.map(([value]) => value);
++  select.value = values.includes(preferred) ? preferred : values.includes(fallback) ? fallback : values[0] || "";
++}
++
++const modelPickers = new Map();
++function updateModelPicker(id, models, value) {
++  const picker = modelPickers.get(id);
++  if (value !== undefined) {
++    picker.input.value = value;
++    picker.custom = false;
++  }
++  if (models) picker.models = models;
++  const current = picker.input.value;
++  const choices = [...new Set([current, ...picker.models].filter(Boolean))];
++  const markup = '<option value="" disabled>选择模型</option>' + choices.map((model) => `<option value="${esc(model)}">${esc(model)}</option>`).join("") + '<option value="" data-custom>自定义模型…</option>';
++  if (picker.select.innerHTML !== markup) picker.select.innerHTML = markup;
++  picker.select.selectedIndex = picker.custom ? picker.select.options.length - 1 : current ? choices.indexOf(current) + 1 : 0;
++  picker.input.hidden = !picker.custom;
++}
++function initializeModelPickers() {
++  for (const id of ["model", "fp-model", "mt-model", "pl-model", "inspection-model"]) {
++    const input = $(id), select = $(id + "-select");
++    const picker = { input, select, models: [], custom: false };
++    modelPickers.set(id, picker);
++    updateModelPicker(id, []);
++    select.addEventListener("change", () => {
++      picker.custom = select.options[select.selectedIndex].hasAttribute("data-custom");
++      input.hidden = !picker.custom;
++      if (picker.custom) { input.focus(); input.select(); }
++      else {
++        input.value = select.value;
++        input.dispatchEvent(new Event("input", { bubbles: true }));
++        input.dispatchEvent(new Event("change", { bubbles: true }));
++      }
++    });
++  }
++}
++
++const boundedInput = (id, fallback, maximum) => Math.min(Math.max(parseInt($(id).value, 10) || fallback, 1), maximum);
++
++const fmtNum = (n) => (n ? Number(n).toLocaleString("en-US") : "0");
++const fmtSec = (ms) => (ms / 1000).toFixed(1) + "s";
++function fmtTime(iso, seconds = true) {
++  const d = new Date(iso);
++  if (!Number.isFinite(d.getTime())) return "—";
++  const p = (n) => String(n).padStart(2, "0");
++  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}${seconds ? ":" + p(d.getSeconds()) : ""}`;
++}
++const listTime = (iso) => `<div class="test-time mono" ${iso ? `data-tip="${esc(fmtTime(iso))}"` : ""}>${iso ? esc(fmtTime(iso, false)) : "—"}</div>`;
++const modelName = (r) => r.effort ? `${r.model}(${r.effort})` : r.model;
++const metric = (name, label, value, cls = "") => `<span class="metric ${cls}" aria-label="${esc(`${label} ${value}`)}" data-tip>${icon(name)}<span class="meta mono">${esc(value)}</span></span>`;
++const modelMeta = (r) => metric("astroid", "模型", modelName(r), "model-meta");
++const STATUS_ICONS = { ok: "circle-check", bad: "circle-x", err: "circle-alert", skip: "ban" };
++const statusPill = (kind, label) => `<span class="verdict ${kind}">${icon(STATUS_ICONS[kind])}${label}</span>`;
++const metrics = (r) =>
++  metric("clock", "耗时", r.duration_ms != null ? fmtSec(r.duration_ms) : "—") +
++  metric("square-arrow-right-enter", "输入 Token", r.input_tokens != null ? fmtNum(r.input_tokens) : "—") +
++  metric("square-arrow-right-exit", "输出 Token", r.output_tokens != null ? fmtNum(r.output_tokens) : "—") +
++  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "");
++
++// Codex plans in sort order, labelled like the official Codex client.
++// Badges follow the original panel: platinum for top Pro plans, gold for Pro 100 and Business Premium.
++const CODEX_PLANS = [
++  { label: "Pro 500", ids: ["promax"], badge: "elite", pro: true },
++  { label: "Pro 200", ids: ["pro"], badge: "elite", pro: true },
++  { label: "Pro 100", ids: ["prolite", "pro-lite", "pro_lite"], badge: "premium", pro: true },
++  { label: "Plus", ids: ["plus"], badge: "plus" },
++  { label: "Go", ids: ["go"], badge: "go" },
++  { label: "Business Premium", ids: ["self_serve_business_prolite"], badge: "premium" },
++  { label: "Business", ids: ["team", "self_serve_business_usage_based"], badge: "business" },
++  { label: "Enterprise", ids: ["business", "enterprise", "ent26", "enterprise_cbp_usage_based", "hc"], badge: "business" },
++  { label: "Enterprise (Automation)", ids: ["enterprise_cbp_automation"], badge: "business" },
++  { label: "Edu Pro", ids: ["edu_pro"], badge: "" },
++  { label: "Edu Plus", ids: ["edu_plus"], badge: "" },
++  { label: "Edu", ids: ["edu", "education"], badge: "" },
++  { label: "Free", ids: ["free"], badge: "" },
++];
++const PLAN_BY_ID = new Map(CODEX_PLANS.flatMap((plan, rank) => plan.ids.map((id) => [id, { ...plan, rank }])));
++function credentialPlan(a) {
++  if (a.type !== "oauth") return null;
++  const id = String(a.plan_type || "").trim();
++  return PLAN_BY_ID.get(id.toLowerCase()) || { label: id || "未知", badge: "", rank: CODEX_PLANS.length };
++}
++const planRank = (a) => credentialPlan(a)?.rank ?? CODEX_PLANS.length + 1;
++
++// Native account identity and subscription labels.
++function credentialView(a, open) {
++  const plan = credentialPlan(a);
++  const label = a.name;
++  return `<div class="credential"><button class="toggle" type="button" data-toggle="${esc(a.id)}" aria-expanded="${open}">${icon("chevron-right", "chev")}<span class="name">${esc(label)}</span></button>
++    <div class="tags"><span class="tag" aria-label="${esc(credentialTypeLabel(a))}" data-tip>${icon(a.type === "oauth" ? "file-key" : "key")}<span>${esc(providerType(a))}</span></span>${plan ? `<span class="tag ${plan.badge ? "plan-" + plan.badge : ""}"><span>${esc(plan.label)}</span></span>` : ""}<span class="tag"><span>${a.priority == null ? "—" : "P" + esc(a.priority)}</span></span>${a.disabled ? '<span class="tag"><span>已停用</span></span>' : ""}${(a.restrictions || []).map((r) => `<span class="tag warn" data-tip="${esc(r.message)}"><span>${esc(r.label)}</span></span>`).join("")}</div></div>`;
++}
++function unavailableReason(a) {
++  return (a.restrictions || []).map((r) => r.message).join("\n");
++}
++// Sub2API keeps the upstream error body, often JSON; show only its message.
++function statusText(text) {
++  try {
++    const data = JSON.parse(text), message = data?.error?.message ?? data?.error ?? data?.message;
++    if (typeof message === "string" && message) return message;
++  } catch (_) {}
++  return text;
++}
++
++const disabledFor = (reason) => reason ? `disabled data-tip="${esc(reason)}"` : "";
++
++function enableSwitch(a) {
++  const locked = credentialBusy(a) ? `${busyTest(a)}进行中，结束后才能切换` : "";
++  return `<label class="switch"><input type="checkbox" role="switch" data-enable="${esc(a.id)}" aria-label="启用此账户" aria-busy="${switching.has(a.id)}" ${a.disabled ? "" : "checked"} ${switching.has(a.id) ? "disabled" : disabledFor(locked)}></label>`;
++}
++
++// Row details are separate columns on wide screens and one footer line on narrow ones.
++function credentialRow({ type, credential: a, selected, open, selectable, result, meta, tested, button, history }) {
++  return `<div class="row ${open ? "open" : ""}"><div class="list-row row-main" data-row="${esc(a.id)}">
++    <label class="select-cell"><input type="checkbox" data-${type}-select="${esc(a.id)}" aria-label="选择此账户" ${selected ? "checked" : ""} ${selectable ? "" : "disabled"}></label>
++    ${credentialView(a, open)}<div class="latest">${result}</div><div class="row-meta ${tested ? "" : "untested"}">${meta}${enableSwitch(a)}</div>${button}</div>
++    ${open ? historyPanel(history()) : ""}</div>`;
++}
++
++function resultOutcome({ tone = "", symbol, titleHTML, detailHTML = "", progressHTML = "" }) {
++  return `<div class="outcome ${tone}"><span class="outcome-icon">${icon(symbol, progressHTML ? "spin" : "")}</span><div class="outcome-copy"><div class="outcome-title">${titleHTML}</div>${detailHTML ? `<div class="outcome-detail">${detailHTML}</div>` : ""}${progressHTML}</div></div>`;
++}
++function collectionOutcome(p, total, showModel = false) {
++  const stopping = p.phase === "cancelling";
++  const phase = stopping ? "正在停止" : p.phase === "comparing" ? "正在分析指纹" : "正在采集";
++  return resultOutcome({
++    symbol: "loader-circle",
++    titleHTML: `${phase} <span class="meta mono">${p.done}/${total}</span>`,
++    detailHTML: stopping ? "正在中断请求，等待采集结束后保存结果" : showModel ? `<span class="mono">${esc(p.model)}</span>` : "",
++    progressHTML: `<progress class="collection-progress" value="${p.done}" max="${total}" aria-label="采集进度"></progress>`,
++  });
++}
++function collectionButton(type, credential, progress, label) {
++  if (progress) return `<button class="btn ghost" type="button" data-${type}-cancel="${esc(credential.id)}" data-tip="停止采集并中断进行中的请求" ${pending || progress.phase === "cancelling" ? "disabled" : ""}>停止</button>`;
++  return `<button class="btn" type="button" data-${type}-run="${esc(credential.id)}" ${disabledFor(runBlocker(type + "-", credential))}>${icon("play")}${esc(label)}</button>`;
++}
++// The latest result of a single-prompt test: its verdict and model, then its usage.
++const latestResult = (r, verdict) => r
++  ? `<div class="latest-top">${verdict(r)}${modelMeta(r)}</div><div class="metrics">${r.skipped ? "" : metrics(r)}</div>`
++  : `<span class="none">尚未测试</span>`;
++// A record's time, model and usage, as history cards and detail dialogs head it.
++const recordMeta = (r, extraMetaHTML = "") => `<div class="result-meta">${metric("calendar", "测试时间", fmtTime(r.time))}${modelMeta(r)}${extraMetaHTML}</div><span class="metrics">${metrics(r)}</span>`;
++function historyCard(r, contentHTML, extraMetaHTML = "") {
++  return `<article class="history-card">
++    <div class="history-card-head record-meta">${recordMeta(r, extraMetaHTML)}</div>
++    <div class="history-card-body">${contentHTML}</div>
++  </article>`;
++}
++function historyEntry(type, credentialID, r, outcomeHTML, extraMetaHTML = "") {
++  return historyCard(r, `${outcomeHTML}<button class="btn ghost" type="button" data-${type}-detail="${esc(r.id)}" data-${type}-credential="${esc(credentialID)}">${icon("chart")}查看详情</button>`, extraMetaHTML);
++}
++function historyPanel(entries) {
++  return `<div class="history-panel"><div class="history-title">历史记录</div><div class="result-history">${entries || `<div class="none">暂无记录</div>`}</div></div>`;
++}
++// Lists carry record summaries; a detail dialog loads its full record.
++async function openResultDetail(type, scope, credentialID, recordID, showDetail) {
++  const dialog = $(type + "-detail"), body = $(type + "-detail-body");
++  const current = () => dialog.open && dialog.dataset.record === recordID && dialog.dataset.credential === credentialID;
++  dialog.dataset.record = recordID;
++  dialog.dataset.credential = credentialID;
++  body.innerHTML = `<div class="empty">正在加载详情…</div>`;
++  if (!dialog.open) dialog.showModal();
++  try {
++    const record = await api(`${BASE}/records/${scope}/${Number(credentialID)}/${encodeURIComponent(recordID)}`);
++    if (current()) showDetail(record[scope]);
++  } catch (err) {
++    if (err instanceof AuthError) return showLogin(err.message);
++    if (current()) body.innerHTML = `<div class="empty">${esc("读取详情失败：" + err.message)}</div>`;
++  }
++}
++
++const notices = new Map();
++function hideNotice(id) {
++  const notice = notices.get(id);
++  if (notice) { clearTimeout(notice.timer); notice.timer = 0; }
++  $(id).hidden = true;
++}
++function setNotice(id, message, tone = "error") {
++  message = String(message || "");
++  const previous = notices.get(id);
++  // Polling must not reopen a dismissed or expired copy of the same error.
++  if (previous?.message === message && previous?.tone === tone) return;
++  hideNotice(id);
++  const notice = { message, tone, timer: 0 };
++  notices.set(id, notice);
++  const node = $(id);
++  node.querySelector(".notice-message").textContent = message;
++  if (!message) return;
++  node.querySelector(".notice-symbol").innerHTML = icon(tone === "error" ? "circle-alert" : tone === "warning" ? "circle-help" : "circle-check");
++  node.dataset.tone = tone;
++  node.setAttribute("role", tone === "error" ? "alert" : "status");
++  node.hidden = false;
++  notice.timer = setTimeout(() => hideNotice(id), 8000);
++}
++
++// The page tooltip: [data-tip] shows its text, or the aria-label when empty; candy marks show their result.
++const TIP_TARGETS = "[data-tip], [data-auth]";
++let tipTarget = null, tipPoint = null;
++function showTip(target) {
++  const rich = !!target.dataset.auth;
++  const html = rich ? candyTip(target) : esc(target.dataset.tip || target.getAttribute("aria-label"));
++  hideTip();
++  if (!html) return;
++  const tip = $("tip");
++  tip.innerHTML = html;
++  tip.classList.toggle("rich", rich);
++  tip.hidden = false;
++  const box = target.getBoundingClientRect();
++  const { width, height } = tip.getBoundingClientRect();
++  const left = Math.min(Math.max(box.left + box.width / 2 - width / 2, 8), innerWidth - width - 8);
++  const top = box.top - height - 8 >= 8 ? box.top - height - 8 : Math.max(8, Math.min(box.bottom + 8, innerHeight - height - 8));
++  tip.style.left = left + "px";
++  tip.style.top = top + "px";
++  // A tip that only repeats the aria-label is not announced again.
++  if (rich || target.dataset.tip) target.setAttribute("aria-describedby", "tip");
++  tipTarget = target;
++}
++function hideTip() {
++  $("tip").hidden = true;
++  tipTarget?.removeAttribute("aria-describedby");
++  tipTarget = null;
++}
++// Renders replace rows and change labels; redraw the open tip for whatever is now under the pointer.
++function refreshTip() {
++  if (!tipTarget) return;
++  const target = tipTarget.isConnected ? tipTarget : tipPoint && document.elementFromPoint(...tipPoint)?.closest(TIP_TARGETS);
++  target ? showTip(target) : hideTip();
++}
++function setLabel(el, label) {
++  el.setAttribute("aria-label", label);
++  refreshTip();
++}
++function initializeTips() {
++  document.addEventListener("mouseover", (e) => {
++    tipPoint = [e.clientX, e.clientY];
++    const target = e.target.closest(TIP_TARGETS);
++    if (target !== tipTarget) target ? showTip(target) : hideTip();
++  });
++  document.addEventListener("mouseout", (e) => { if (!e.relatedTarget) hideTip(); });
++  document.addEventListener("focusin", (e) => {
++    const target = e.target.closest(TIP_TARGETS);
++    if (target && e.target.matches(":focus-visible")) showTip(target);
++  });
++  document.addEventListener("focusout", (e) => { if (tipTarget?.contains(e.target)) hideTip(); });
++  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
++  addEventListener("scroll", hideTip, true);
++  addEventListener("resize", hideTip);
++}
++
++function credentialCard(prefix, test, columns) {
++  const clearLabel = `清空${test}记录`;
++  const inspection = prefix ? "" : `<span id="inspection-status" class="inspection-status" aria-live="polite" hidden><span id="inspection-phase"></span><span id="inspection-next"></span><span id="inspection-progress"></span></span>`;
++  const errors = prefix ? "" : `<span id="inspection-runtime-error" class="error" role="alert" hidden></span><span id="candy-settings-status" role="alert" hidden></span>`;
++  return `<div class="section-head credential-head${prefix ? "" : " candy-head"}"><h2>账户</h2><label class="switch credential-enabled-filter"><input id="${prefix}enabled-only" type="checkbox" role="switch"><span>仅启用</span></label>${inspection}<div class="credential-filters"><span class="native-select credential-filter"><select id="${prefix}credential-type" aria-label="账户类型"><option value="all">全部账户</option></select></span><span id="${prefix}plan-filter" class="native-select credential-filter" hidden><select id="${prefix}credential-plan" aria-label="订阅类型"><option value="all">所有订阅类型</option></select></span></div>
++    <div class="list-actions"><button id="${prefix}mask" class="btn ghost icon-button" type="button" aria-label="脱敏" data-tip></button><button id="${prefix}clear" class="btn ghost icon-button" type="button" aria-label="${clearLabel}" data-tip disabled>${icon("trash-2")}</button></div>${errors}</div>
++    <div class="list-head"><input id="${prefix}select-all" type="checkbox" aria-label="选择全部可测试账户">${[...columns, "启用", ""].map((label) => `<div>${label}</div>`).join("")}</div>
++    <div id="${prefix}rows"><div class="empty">正在加载…</div></div>`;
++}
++
++// Copy buttons copy the prompt beside them.
++function initializeCopyButtons() {
++  for (const button of document.querySelectorAll(".copy-btn")) {
++    let timer = 0;
++    const reset = () => {
++      button.innerHTML = icon("copy");
++      button.classList.remove("copied");
++      setLabel(button, "复制题目");
++    };
++    reset();
++    button.addEventListener("click", async () => {
++      const prompt = button.parentElement.querySelector("code").textContent;
++      try {
++        if (navigator.clipboard) {
++          await navigator.clipboard.writeText(prompt);
++        } else {
++          const area = Object.assign(document.createElement("textarea"), { value: prompt, className: "clipboard-buffer" });
++          document.body.append(area);
++          try {
++            area.select();
++            if (!document.execCommand("copy")) throw new Error("copy failed");
++          } finally {
++            area.remove();
++            button.focus();
++          }
++        }
++      } catch (_) {
++        setLabel(button, "复制失败，请手动复制题目");
++        return;
++      }
++      clearTimeout(timer);
++      button.innerHTML = icon("check");
++      button.classList.add("copied");
++      setLabel(button, "已复制");
++      timer = setTimeout(reset, 1600);
++    });
++  }
++}
+diff --git a/backend/internal/codexeval/web/fingerprint.js b/backend/internal/codexeval/web/fingerprint.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/fingerprint.js
+@@ -0,0 +1,107 @@
++"use strict";
++
++const FP_CONFIG = /*FINGERPRINT_CONFIG*/{};
++const fpModes = Object.fromEntries(FP_CONFIG.modes.map((m) => [m.id, { name: m.name, requests: m.cells * m.samples_per_cell }]));
++const fpSelected = new Set();
++const fpExpanded = new Set();
++
++const fpModeName = (mode) => fpModes[mode]?.name || mode || "—";
++const fpConcurrency = () => boundedInput("fp-concurrency", FP_CONFIG.default_concurrency, FP_CONFIG.max_concurrency);
++const fpSavePrefs = () => store(PREF_STORE + ".fingerprint", { model: $("fp-model").value, mode: $("fp-mode").value, concurrency: fpConcurrency() });
++
++function fpOutcome(r) {
++  const status = r.status && r.status !== "completed" ? r.status : r.attribution?.status;
++  const model = `<span class="mono">${esc(r.model)}</span>`;
++  const retry = r.mode === "strict" ? "建议稍后重新采集" : "建议用严格模式复测";
++  const states = {
++    consistent: ["ok", "circle-check", "与所选模型一致", model],
++    substitution: ["warn", "shuffle", "疑似模型替换", `${model}${icon("arrow-right")}<strong class="mono">${esc(r.attribution?.nearest)}</strong>`],
++    different: ["bad", "circle-alert", "与所选模型有差异", "暂无法确定实际模型"],
++    ambiguous: ["neutral", "circle-help", "暂无法判断", retry],
++    insufficient: ["neutral", "circle-help", "有效回答不足", "建议重新采集"],
++    no_baseline: ["neutral", "circle-help", "暂不支持判断此模型", model],
++    unstable: ["warn", "circle-alert", "结果不稳定", retry],
++    cancelled: ["neutral", "circle-pause", "采集已停止", model],
++    failed: ["bad", "circle-x", "采集失败", "请稍后重试"],
++    skipped: ["neutral", "ban", "已跳过", "此凭证不支持所选模型"],
++  };
++  const [tone, symbol, title, detail] = states[status] || ["idle", "fingerprint", "等待采集", ""];
++  return resultOutcome({ tone, symbol, titleHTML: title, detailHTML: detail });
++}
++const fpMetric = (n) => n == null ? "—" : Number(n).toFixed(4);
++const fpComparisonNames = { match: "相似", uncertain: "不确定", mismatch: "不同", insufficient: "样本不足" };
++const fpProbeNames = { "random-number-1-100": "随机数 1–100", "random-number-1-10": "随机数 1–10", "random-letter": "随机字母", "random-color": "随机颜色", "coin-flip": "抛硬币", "random-animal": "随机动物", "random-city": "随机城市", "favorite-number": "喜欢的数字" };
++let fpDetailRecord = null;
++function showFingerprintDetail(r) {
++  fpDetailRecord = r;
++  const attr = r.attribution || {};
++  const comparisons = attr.comparisons || [];
++  const stat = (label, value) => `<div class="fp-stat"><dt>${label}</dt><dd class="mono">${esc(value)}</dd></div>`;
++  $("fp-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fpModeName(r.mode))}模式 · <time class="mono" datetime="${esc(r.time)}">${esc(fmtTime(r.time))}</time></p>
++    ${fpOutcome(r)}
++    ${r.status === "cancelled" || r.status === "failed" ? `<p class="detail-note">结果基于已采集的部分样本，仅供参考</p>` : ""}
++    ${attr.message ? `<p class="detail-note">${esc(attr.message)}</p>` : ""}
++    ${r.error ? `<p class="detail-note detail-warning">${esc(r.error)}</p>` : ""}
++    ${r.status === "skipped" ? "" : `<dl class="fp-stats">${stat("采集进度", `${r.done} / ${r.total}`)}${stat("有效回答", r.valid)}${stat("请求失败", r.errors)}${stat("耗时", fmtSec(r.duration_ms))}</dl>
++    <section class="result-dialog-section"><h3>基准比对</h3>
++      <div class="fp-detail-scroll"><table class="fp-detail-table"><thead><tr><th>基准模型</th><th>距离 JSD ↓</th><th>p 值</th><th>有效探针</th><th>距离判断</th></tr></thead><tbody>
++        ${comparisons.map((c) => `<tr class="${c.model === attr.nearest ? "closest" : ""}"><td class="mono">${esc(c.model)}${c.model === r.model ? " · 所选" : ""}${c.model === attr.nearest ? " · 最近" : ""}</td><td class="mono">${fpMetric(c.mean_jsd)}</td><td class="mono">${fpMetric(c.p_value)}</td><td>${c.cells?.length || 0}</td><td>${esc(fpComparisonNames[c.verdict] || c.verdict)}</td></tr>`).join("") || `<tr><td colspan="5">暂无可比数据</td></tr>`}
++      </tbody></table></div>
++      <p class="detail-note">距离越小，回答分布越接近。p 值低于 ${fpMetric(attr.alpha)} 时视为差异显著；归因同时考虑距离与统计检验。</p>
++    </section>
++    <section class="result-dialog-section"><h3>结果稳定性</h3>
++      <p class="detail-note">本次自一致性 JSD：<span class="mono">${fpMetric(attr.self_jsd)}</span>（越小越稳定）${attr.reference_p_value != null ? `<br>所选模型与最近模型的基准差异 p 值：<span class="mono">${fpMetric(attr.reference_p_value)}</span>` : ""}</p>
++      ${(attr.warnings || []).map((w) => `<p class="detail-note detail-warning">${esc(w)}</p>`).join("")}
++    </section>
++    <section class="result-dialog-section"><h3>逐项比对</h3><label class="field fp-probe-select"><span class="field-label">对比模型</span><span class="native-select"><select id="fp-detail-baseline">${comparisons.map((c) => `<option>${esc(c.model)}</option>`).join("")}</select></span></label><div id="fp-detail-probes" class="fp-detail-scroll"></div></section>`}`;
++  if (r.status !== "skipped") renderFingerprintProbes();
++}
++function renderFingerprintProbes() {
++  const comparison = fpDetailRecord?.attribution?.comparisons?.find((c) => c.model === $("fp-detail-baseline").value);
++  const rows = (comparison?.cells || []).map((c) => {
++    const [task, lang] = String(c.cell || "").split(":");
++    return `<tr><td>${esc(fpProbeNames[task] || task)} · ${lang === "zh" ? "中文" : "英文"}</td><td class="mono">${fpMetric(c.jsd)}</td><td>${esc(c.valid_a ?? "—")}</td><td>${esc(c.valid_b ?? "—")}</td></tr>`;
++  }).join("");
++  $("fp-detail-probes").innerHTML = `<table class="fp-detail-table"><thead><tr><th>探针</th><th>距离 JSD</th><th>本次有效回答</th><th>基准有效回答</th></tr></thead><tbody>${rows || `<tr><td colspan="4">有效样本不足，暂无可比探针</td></tr>`}</tbody></table>`;
++}
++function renderFingerprintRow(a) {
++  const history = a.fingerprints || [];
++  const last = history[history.length - 1];
++  const p = a.fingerprint_running;
++  const latest = p ? collectionOutcome(p, p.total, true) : fpOutcome(last || {});
++  return credentialRow({
++    type: "fp", credential: a, selected: fpSelected.has(a.id), open: fpExpanded.has(a.id), selectable: runnable("fp-", a), button: collectionButton("fp", a, p, "采集"),
++    result: latest, tested: !!(last || p),
++    meta: `<div class="fp-mode">${esc(fpModeName(p?.mode || last?.mode))}</div>${listTime(!p && last?.time)}`,
++    history: () => [...history].reverse().map((r) => historyEntry("fp", a.id, r, fpOutcome(r), metric("fingerprint", "采集模式", fpModeName(r.mode)))).join(""),
++  });
++}
++function renderFingerprints() {
++  renderSelection("fp-", fpSelected, "采集");
++  const selected = selectedCredentials("fp-", fpSelected).filter(availableCredential);
++  $("fp-clear").disabled = pending || !credentials.some((a) => a.fingerprints?.length);
++  const count = fpModes[$("fp-mode").value]?.requests || fpModes.quick.requests;
++  $("fp-cost").textContent = `每个凭证 ${count} 次请求（失败会重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${count * selected.length} 次` : ""}`;
++  renderList("fp-", renderFingerprintRow);
++}
++function runFingerprint(body) {
++  if (!$("fp-toolbar").reportValidity()) return;
++  fpSavePrefs();
++  return update("/start", { method: "POST", body: { type: "fingerprint", ...body, model: $("fp-model").value, mode: $("fp-mode").value, concurrency: fpConcurrency() } }, "开始采集失败");
++}
++
++function initializeFingerprint() {
++  const saved = stored(PREF_STORE + ".fingerprint") || {};
++  fillSelect("fp-mode", Object.entries(fpModes).map(([id, mode]) => [id, `${mode.name} · ${mode.requests} 次`]), saved.mode, "quick");
++  $("fp-concurrency").max = FP_CONFIG.max_concurrency;
++  $("fp-concurrency").value = saved.concurrency || FP_CONFIG.default_concurrency;
++  $("fp-concurrency").value = fpConcurrency();
++
++  for (const id of ["fp-model", "fp-mode", "fp-concurrency"]) $(id).addEventListener("input", fpSavePrefs);
++  $("fp-detail-body").addEventListener("change", (e) => { if (e.target.id === "fp-detail-baseline") renderFingerprintProbes(); });
++  $("fp-detail").addEventListener("close", () => { fpDetailRecord = null; });
++
++  for (const id of ["fp-model", "fp-mode"]) $(id).addEventListener("change", () => { fpSavePrefs(); renderFingerprints(); });
++  $("fp-concurrency").addEventListener("change", () => { $("fp-concurrency").value = fpConcurrency(); fpSavePrefs(); });
++  bindCollectionActions({ type: "fp", scope: "fingerprint", expanded: fpExpanded, renderRows: renderFingerprints, run: runFingerprint, showDetail: showFingerprintDetail });
++}
+diff --git a/backend/internal/codexeval/web/inspection.js b/backend/internal/codexeval/web/inspection.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/inspection.js
+@@ -0,0 +1,207 @@
++"use strict";
++const INSPECTION_SETTINGS = "/api/v1/admin/settings/codex-eval-inspection";
++const CANDY_SELECTION_FIELDS = { group_id: "group", account_type: "credential-type", account_plan: "credential-plan", enabled_only: "enabled-only" };
++let inspectionSettingsLoaded = false;
++let inspectionSettingsLoading = false;
++let inspectionSettingsSaving = false;
++let inspectionActionPending = false;
++let inspectionTimer = 0;
++let inspectionAutosaveTimer = 0;
++let inspectionSavePromise = null;
++let inspectionFormRevision = 0;
++let inspectionSettingsGeneration = 0;
++const inspectionDirtyFields = new Map();
++let inspectionState = { results: [] };
++let inspectionStateController = null;
++
++function inspectionForm() { return document.getElementById("inspection-settings"); }
++function inspectionField(name) { return CANDY_SELECTION_FIELDS[name] ? $(CANDY_SELECTION_FIELDS[name]) : inspectionForm().elements.namedItem(name); }
++function inspectionMessage(message, error = false) {
++  for (const id of ["inspection-save-status", "candy-settings-status"]) {
++    $(id).textContent = message;
++    $(id).classList.toggle("error", error);
++    $(id).hidden = !message;
++  }
++}
++function fillInspectionSettings(settings, preserveDirty = false) {
++  for (const [name, value] of Object.entries(settings)) {
++    const field = inspectionField(name);
++    if (!field || preserveDirty && inspectionDirtyFields.has(name)) continue;
++    if (name === "group_id") {
++      const changed = selectedGroup !== value;
++      selectedGroup = value;
++      syncGroupControls();
++      if (changed && accountListReady) {
++        stopPolling(); resetCatalogCache(); credentials = [];
++        for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) selection.clear();
++        load({ refresh: true });
++      }
++    } else if (name === "account_type" || name === "account_plan") {
++      if (![...field.options].some((option) => option.value === value)) field.add(new Option(value, value));
++      field.value = value;
++    } else if (field.type === "checkbox") field.checked = value === true;
++    else if (name === "model") updateModelPicker("inspection-model", catalogCache.models?.ids || [], value);
++    else field.value = value ?? "";
++  }
++  if (!preserveDirty || !inspectionDirtyFields.has("enabled")) document.getElementById("inspection-enabled").checked = settings.enabled;
++  updateInspectionVisibility();
++}
++function updateInspectionVisibility() {
++  document.getElementById("inspection-auto-fields").hidden = !document.getElementById("inspection-enabled").checked;
++  document.getElementById("inspection-priority-fields").hidden = !inspectionField("adjust_priority").checked;
++}
++async function loadInspectionSettings() {
++  if (inspectionSettingsLoading || inspectionSettingsSaving) return;
++  inspectionSettingsLoading = true;
++  try {
++    const generation = inspectionSettingsGeneration;
++    const settings = await api(INSPECTION_SETTINGS);
++    if (sessionBlocked) return;
++    if (generation === inspectionSettingsGeneration) {
++      fillInspectionSettings(settings, true);
++      inspectionSettingsLoaded = true;
++      if (inspectionDirtyFields.size) scheduleInspectionSave();
++    }
++    await loadInspectionState();
++  } catch (err) {
++    if (err instanceof AuthError) return showLogin(err.message);
++    inspectionMessage(err.message, true);
++  } finally { inspectionSettingsLoading = false; }
++}
++function renderInspectionState(state) {
++  inspectionState = state;
++  const phase = state.cancelling ? "正在停止" : ({ idle: "", testing: "正在测试", recovery_wait: "等待恢复确认", completed: "", cancelled: "巡检已停止", failed: "巡检失败" })[state.phase] ?? state.phase;
++  document.getElementById("inspection-phase").textContent = phase;
++  document.getElementById("inspection-next").textContent = state.next_run_at ? "下次巡检：" + fmtTime(state.next_run_at, false) : "";
++  document.getElementById("inspection-progress").textContent = state.running && state.started_at ? `账户进度：${state.done}/${state.total}` : "";
++  document.getElementById("inspection-status").hidden = !phase && !state.next_run_at && !document.getElementById("inspection-progress").textContent;
++  const error = document.getElementById("inspection-runtime-error");
++  const errors = [state.error || ""];
++  for (const result of state.results || []) {
++    const name = credentials.find((account) => account.id === String(result.account_id))?.name || result.account_name || result.account_id;
++    if (result.error) errors.push(`${name}：${result.error}`);
++    if (result.notification_error) errors.push(`${name}：通知：${result.notification_error}`);
++  }
++  error.textContent = errors.filter(Boolean).join("；");
++  error.hidden = !error.textContent;
++  document.getElementById("inspection-start").disabled = !inspectionSettingsLoaded || state.running || inspectionActionPending;
++  document.getElementById("inspection-stop").disabled = !state.running || state.cancelling || inspectionActionPending;
++  renderCandy();
++}
++async function loadInspectionState() {
++  clearTimeout(inspectionTimer);
++  inspectionStateController?.abort();
++  const controller = new AbortController();
++  inspectionStateController = controller;
++  const signal = controller.signal;
++  try {
++    const state = await api(BASE + "/inspection/state", { signal });
++    if (signal.aborted || sessionBlocked) return;
++    renderInspectionState(state);
++  } catch (err) {
++    if (signal.aborted) return;
++    if (err instanceof AuthError) return showLogin(err.message);
++    const error = document.getElementById("inspection-runtime-error");
++    error.textContent = err.message;
++    error.hidden = false;
++  } finally {
++    if (inspectionStateController === controller && !$("app").hidden && !sessionBlocked) {
++      inspectionTimer = setTimeout(loadInspectionState, inspectionState.running ? 2500 : 20000);
++    }
++  }
++}
++function validateInspectionFields() {
++  const min = inspectionField("min_wait_minutes"), max = inspectionField("max_wait_minutes");
++  max.setCustomValidity(Number(max.value) < Number(min.value) ? "最长等待须不小于最短等待" : "");
++  const normal = inspectionField("normal_priority"), degraded = inspectionField("degraded_priority");
++  const invalidPriorityPair = Number(normal.value) >= Number(degraded.value);
++  degraded.setCustomValidity(invalidPriorityPair ? "降级优先级须大于正常优先级" : "");
++}
++function markInspectionEdit(name) {
++  inspectionDirtyFields.set(name, ++inspectionFormRevision);
++  scheduleInspectionSave();
++}
++function scheduleInspectionSave() {
++  clearTimeout(inspectionAutosaveTimer);
++  inspectionAutosaveTimer = setTimeout(saveInspectionSettings, 400);
++}
++async function saveInspectionSettings() {
++  clearTimeout(inspectionAutosaveTimer);
++  if (inspectionSavePromise) {
++    const saved = await inspectionSavePromise;
++    if (!saved) return false;
++    return inspectionDirtyFields.size ? saveInspectionSettings() : true;
++  }
++  if (!inspectionSettingsLoaded || !inspectionDirtyFields.size || sessionBlocked) return false;
++  const form = inspectionForm();
++  validateInspectionFields();
++  const invalid = [...form.elements].find((field) => field.willValidate && !field.checkValidity());
++  if (invalid) { inspectionMessage(invalid.validationMessage, true); return false; }
++  if ($("inspection-enabled").checked && !selectedGroup) { inspectionMessage("请选择糖果测试分组", true); return false; }
++  const body = { enabled: $("inspection-enabled").checked, group_id: selectedGroup,
++    account_type: $("credential-type").value, account_plan: $("credential-plan").value, enabled_only: $("enabled-only").checked };
++  for (const field of form.elements) {
++    if (!field.name) continue;
++    body[field.name] = field.type === "checkbox" ? field.checked : field.type === "number" ? Number(field.value)
++      : field.type === "password" ? field.value : field.value.trim();
++  }
++  inspectionSettingsSaving = true;
++  inspectionSettingsGeneration++;
++  const revision = inspectionFormRevision;
++  const submittedFields = new Map(inspectionDirtyFields);
++  form.setAttribute("aria-busy", "true");
++  inspectionSavePromise = (async () => {
++    try {
++      const saved = await api(INSPECTION_SETTINGS, { method: "PUT", body });
++      if (sessionBlocked) return false;
++      for (const [name, version] of submittedFields) {
++        if (inspectionDirtyFields.get(name) === version) inspectionDirtyFields.delete(name);
++      }
++      fillInspectionSettings(saved, true);
++      inspectionMessage("");
++      await loadInspectionState();
++      return true;
++    } catch (err) {
++      if (err instanceof AuthError) { showLogin(err.message); return false; }
++      inspectionMessage(err.message, true);
++      return false;
++    } finally {
++      inspectionSettingsSaving = false;
++      form.setAttribute("aria-busy", "false");
++      inspectionSavePromise = null;
++      if (!sessionBlocked && revision !== inspectionFormRevision && inspectionDirtyFields.size) scheduleInspectionSave();
++    }
++  })();
++  return inspectionSavePromise;
++}
++function initializeInspection() {
++  const form = inspectionForm();
++  inspectionField("effort").innerHTML = `<option value="">未指定</option>` + DEFAULT_EFFORTS.map((value) => `<option>${value}</option>`).join("");
++  const changed = (event) => {
++    const name = event.target.name || (event.target.id === "inspection-enabled" ? "enabled" : "");
++    if (!name) return;
++    updateInspectionVisibility();
++    markInspectionEdit(name);
++  };
++  form.addEventListener("input", changed);
++  form.addEventListener("change", changed);
++  form.addEventListener("submit", (event) => { event.preventDefault(); saveInspectionSettings(); });
++  for (const [name, id] of Object.entries(CANDY_SELECTION_FIELDS)) {
++    const controls = name === "group_id" ? document.querySelectorAll("[data-group-select]") : [$(id)];
++    for (const control of controls) control.addEventListener("change", () => markInspectionEdit(name));
++  }
++  for (const action of ["start", "stop"]) document.getElementById("inspection-" + action).addEventListener("click", async () => {
++    if (inspectionActionPending) return;
++    inspectionActionPending = true;
++    document.getElementById("inspection-" + action).disabled = true;
++    try {
++      if (action === "start" && inspectionDirtyFields.size && !await saveInspectionSettings()) return;
++      renderInspectionState(await api(BASE + "/inspection/" + action, { method: "POST", body: {} }));
++      if (action === "start") await load();
++    }
++    catch (err) {
++      if (err instanceof AuthError) return showLogin(err.message);
++      inspectionMessage(err.message, true);
++    } finally { inspectionActionPending = false; if (!sessionBlocked) await loadInspectionState(); }
++  });
++}
+diff --git a/backend/internal/codexeval/web/modeltrace.js b/backend/internal/codexeval/web/modeltrace.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/modeltrace.js
+@@ -0,0 +1,84 @@
++"use strict";
++const MT_CONFIG = /*MODELTRACE_CONFIG*/{};
++const mtSelected = new Set();
++const mtExpanded = new Set();
++const mtPercent = (value) => Number.isFinite(value) && value >= 0 && value <= 1 ? `${(value * 100).toFixed(1)}%` : "—";
++const mtConcurrency = () => boundedInput("mt-concurrency", MT_CONFIG.default_concurrency, MT_CONFIG.max_concurrency);
++const mtSavePrefs = () => store(PREF_STORE + ".modeltrace", { model: $("mt-model").value, concurrency: mtConcurrency() });
++
++function mtComparison(r) {
++  if (!r?.attribution || !["completed", "partial"].includes(r.status)) return { tone: "neutral", symbol: "chart", label: "" };
++  const modelID = (model) => String(model || "").trim().toLowerCase().split("/").pop();
++  return modelID(r.model) === modelID(r.attribution.prediction)
++    ? { tone: "ok", symbol: "circle-check", label: "与测试模型一致" }
++    : { tone: "warn", symbol: "shuffle", label: "与测试模型不一致" };
++}
++
++function mtOutcome(r) {
++  const a = r?.attribution;
++  const comparison = mtComparison(r);
++  const state = { failed: ["bad", "circle-x", "测试失败", "查看详情了解原因"], cancelled: ["neutral", "circle-pause", "测试已停止", ""], skipped: ["neutral", "ban", "已跳过", "此凭证不支持所选模型"] }[r?.status];
++  const [tone, symbol, title] = state || (a ? [comparison.tone, comparison.symbol, a.prediction] : ["idle", "fingerprint", "等待测试"]);
++  const detail = state ? state[3] : a ? `${comparison.label}${r.status === "partial" ? " · 部分结果" : ""}` : "";
++  return resultOutcome({
++    tone, symbol,
++    titleHTML: `<span class="mt-prediction"><span>${esc(title)}</span>${a && !state ? `<span class="mt-probability mono">${mtPercent(a.probability)}</span>` : ""}</span>`,
++    detailHTML: esc(detail),
++  });
++}
++
++function renderModelTraceRow(a) {
++  const history = a.modeltraces || [], last = history.at(-1), p = a.modeltrace_running;
++  const latest = p ? collectionOutcome(p, MT_CONFIG.requests) : mtOutcome(last);
++  return credentialRow({
++    type: "mt", credential: a, selected: mtSelected.has(a.id), open: mtExpanded.has(a.id), selectable: runnable("mt-", a), button: collectionButton("mt", a, p, "测试"),
++    result: latest, tested: !!(last || p),
++    meta: `<div class="mt-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
++    history: () => [...history].reverse().map((r) => historyEntry("mt", a.id, r, mtOutcome(r))).join(""),
++  });
++}
++
++function renderModelTrace() {
++  renderSelection("mt-", mtSelected, "测试");
++  const selected = selectedCredentials("mt-", mtSelected).filter(availableCredential);
++  $("mt-cost").textContent = `每个凭证 ${MT_CONFIG.requests} 次请求（失败会重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${MT_CONFIG.requests * selected.length} 次` : ""}`;
++  $("mt-clear").disabled = pending || !credentials.some((a) => a.modeltraces?.length);
++  renderList("mt-", renderModelTraceRow);
++}
++
++function runModelTrace(body) {
++  if (!$("mt-toolbar").reportValidity()) return;
++  mtSavePrefs();
++  return update("/start", { method: "POST", body: { type: "modeltrace", ...body, model: $("mt-model").value, concurrency: mtConcurrency() } }, "开始测试失败");
++}
++
++function mtResultHTML(r) {
++  const a = r.attribution, comparison = mtComparison(r);
++  return `<dl class="mt-summary ${comparison.tone}"><div><dt>${comparison.label ? `${icon(comparison.symbol)}${comparison.label}` : "最接近的模型"}</dt><dd class="mono">${esc(a.prediction)}<small>${mtPercent(a.probability)}</small></dd></div><div><dt>模型家族</dt><dd>${esc(a.family_prediction_name)}<small class="mono">${mtPercent(a.family_probability)}</small></dd></div><div><dt>有效回答</dt><dd class="mono">${a.used_outputs} / ${MT_CONFIG.requests}</dd></div></dl>
++    <div class="mt-families">${(a.family_probabilities || []).map((f) => `<span>${esc(f.display_name)}<b class="mono">${mtPercent(f.probability)}</b></span>`).join("")}</div>
++    <div class="mt-result-heading"><h3>候选模型排行</h3><span class="meta">归因概率</span></div>
++    <div class="mt-ranking">${(a.results || []).map((r, i) => `<div class="mt-rank"><span class="meta mono">${String(i + 1).padStart(2, "0")}</span><span class="mono mt-rank-name">${esc(r.display_name || r.model)}</span><div class="mt-bar" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, (r.probability || 0) * 100))}%"></span></div><span class="mono">${mtPercent(r.probability)}</span></div>`).join("")}</div>`;
++}
++
++function showModelTraceDetail(r) {
++  const samples = r.samples || [];
++  const sampleEntries = samples.map((s, i) => `<details class="mt-sample">
++    <summary>${icon("chevron-right", "chev")}挑战 ${i + 1}<span class="meta">${s.parsed_numbers} / ${s.expected_count} 个数字${s.attempts > 1 ? ` · 重试 ${s.attempts - 1} 次` : ""}</span><span class="verdict ${s.accepted ? "ok" : "err"}">${s.accepted ? "有效" : "未计入"}</span></summary>
++    <pre>${esc(s.prompt)}</pre>${s.error ? `<p class="detail-warning">${esc(s.error)}</p>` : ""}${s.text ? `<pre class="mono">${esc(s.text)}</pre>` : ""}
++  </details>`).join("");
++  $("mt-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fmtTime(r.time))} · ${fmtSec(r.duration_ms)}${r.concurrency ? ` · 并发 ${esc(r.concurrency)}` : ""}</p>
++    ${r.attribution && r.status !== "completed" ? `<p class="detail-note">${esc({ partial: "部分结果", cancelled: "测试已停止", failed: "测试失败", skipped: "已跳过" }[r.status] || r.status)}</p>` : ""}
++    ${r.attribution ? mtResultHTML(r) : mtOutcome(r)}
++    ${r.error ? `<p class="detail-note detail-warning">${esc(r.error)}</p>` : ""}
++    ${samples.length ? `<div class="mt-result-heading"><h3>挑战记录</h3><span class="meta">${samples.reduce((n, s) => n + (s.attempts || 1), 0)} 次请求</span></div>${sampleEntries}` : ""}`;
++}
++
++function initializeModelTrace() {
++  $("mt-concurrency").max = MT_CONFIG.max_concurrency;
++  $("mt-concurrency").value = stored(PREF_STORE + ".modeltrace")?.concurrency || MT_CONFIG.default_concurrency;
++  $("mt-concurrency").value = mtConcurrency();
++  for (const id of ["mt-model", "mt-concurrency"]) $(id).addEventListener("input", mtSavePrefs);
++  $("mt-model").addEventListener("change", () => { mtSavePrefs(); renderModelTrace(); });
++  $("mt-concurrency").addEventListener("change", () => { $("mt-concurrency").value = mtConcurrency(); mtSavePrefs(); });
++  bindCollectionActions({ type: "mt", scope: "modeltrace", expanded: mtExpanded, renderRows: renderModelTrace, run: runModelTrace, showDetail: showModelTraceDetail });
++}
+diff --git a/backend/internal/codexeval/web/pelican.js b/backend/internal/codexeval/web/pelican.js
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/pelican.js
+@@ -0,0 +1,97 @@
++"use strict";
++const plSelected = new Set();
++const plExpanded = new Set();
++const plSavePrefs = () => store(PREF_STORE + ".pelican", { model: $("pl-model").value, effort: $("pl-effort").value });
++
++const plKind = (r) => (r.skipped ? "skip" : r.error ? "err" : "ok");
++const PL_VERDICT = { ok: "已生成", err: "未生成", skip: "已跳过" };
++const plVerdict = (r) => statusPill(plKind(r), PL_VERDICT[plKind(r)]);
++
++// Lists carry summaries, so each page loads once per record: undefined while loading, an Error when it failed.
++const pelicanPages = new Map();
++const pelicanKey = (credentialID, recordID) => JSON.stringify([credentialID, recordID]);
++function pelicanPage(credentialID, recordID) {
++  const key = pelicanKey(credentialID, recordID);
++  if (!pelicanPages.has(key)) {
++    pelicanPages.set(key, undefined);
++    const settle = (page) => {
++      if (!pelicanPages.has(key)) return;
++      pelicanPages.set(key, page);
++      renderPelican();
++    };
++    api(`${BASE}/records/pelican/${Number(credentialID)}/${encodeURIComponent(recordID)}`)
++      .then((r) => settle(r.pelican.html), (err) => err instanceof AuthError ? showLogin(err.message) : settle(err));
++  }
++  return pelicanPages.get(key);
++}
++
++// Model pages run sandboxed: their scripts work, but this page's origin and storage stay out of reach, and
++// the CSP they inherit from it blocks external assets.
++const pelicanFrame = (html) => `<iframe sandbox="allow-scripts" srcdoc="${esc(html)}" title="鹈鹕动画" loading="lazy" tabindex="-1"></iframe>`;
++// Previews show a page as it looks a second after it is first drawn, then hold its animations and stop its
++// timers, so a long list costs no CPU; only the dialog plays the page. Frames in a hidden tab can load without
++// being drawn, and Chrome restarts CSS animations whenever a frame is drawn again, hence the wait for a frame
++// and the hold on every animation start.
++const PREVIEW_FREEZE = `<script>addEventListener("load", () => requestAnimationFrame(() => setTimeout(() => {
++  const hold = () => document.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 1000; });
++  hold();
++  addEventListener("animationstart", hold);
++  document.querySelectorAll("svg").forEach((svg) => svg.pauseAnimations());
++  for (let id = setTimeout(() => {}); id > 0; id--) { clearTimeout(id); clearInterval(id); }
++  window.requestAnimationFrame = window.setTimeout = window.setInterval = () => 0;
++}, 1000)));<\/script>`;
++function pelicanPreview(credentialID, r) {
++  if (r.error) return `<div class="preview" data-tip="${esc(r.error)}">${icon(STATUS_ICONS[plKind(r)])}</div>`;
++  const page = pelicanPage(credentialID, r.id);
++  if (page instanceof Error) return `<div class="preview" data-tip="${esc("动画加载失败：" + page.message)}">${icon("circle-alert")}</div>`;
++  return `<div class="preview">${page === undefined ? icon("loader-circle", "spin") : pelicanFrame(page + PREVIEW_FREEZE)}
++    <button class="preview-open" type="button" data-pl-detail="${esc(r.id)}" data-pl-credential="${esc(credentialID)}" aria-label="${esc(`放大查看 ${fmtTime(r.time)} 的动画`)}"></button></div>`;
++}
++
++function pelicanHistory(a, r) {
++  return historyCard(r, r.error ? `${plVerdict(r)}<span class="${r.skipped ? "meta" : "detail-warning"}">${esc(r.error)}</span>` : pelicanPreview(a.id, r));
++}
++
++function renderPelicanRow(a) {
++  const history = a.pelicans || [], last = history.at(-1);
++  const button = a.pelican_running
++    ? `<button class="btn ghost" type="button" data-tip="正在等待模型生成动画" disabled>${icon("loader-circle", "spin")}测试中</button>`
++    : collectionButton("pl", a, null, "测试");
++  return credentialRow({
++    type: "pl", credential: a, selected: plSelected.has(a.id), open: plExpanded.has(a.id), selectable: runnable("pl-", a), button,
++    result: latestResult(last, plVerdict), tested: !!last, meta: last ? pelicanPreview(a.id, last) : `<span class="none">—</span>`,
++    history: () => [...history].reverse().map((r) => pelicanHistory(a, r)).join(""),
++  });
++}
++
++function renderPelican() {
++  renderSelection("pl-", plSelected, "测试");
++  $("pl-clear").disabled = pending || !credentials.some((a) => a.pelicans?.length);
++  renderList("pl-", renderPelicanRow);
++}
++
++function runPelican(body) {
++  if (!$("pl-toolbar").reportValidity()) return;
++  plSavePrefs();
++  return update("/start", { method: "POST", body: { type: "pelican", ...body, model: $("pl-model").value, effort: $("pl-effort").value } }, "开始测试失败");
++}
++
++function showPelicanDetail(r) {
++  $("pl-detail-body").innerHTML = `<div class="result-dialog-meta record-meta">${recordMeta(r)}</div>
++    <div class="preview pelican-stage">${pelicanFrame(r.html)}</div>`;
++  fitPelicanStage();
++}
++function fitPelicanStage() {
++  const stage = $("pl-detail-body").querySelector(".pelican-stage");
++  stage?.style.setProperty("--preview-scale", stage.clientWidth / 800);
++}
++
++function initializePelican() {
++  fillSelect("pl-effort", DEFAULT_EFFORTS, stored(PREF_STORE + ".pelican")?.effort, DEFAULT_EFFORT);
++  for (const id of ["pl-model", "pl-effort"]) $(id).addEventListener("input", plSavePrefs);
++  for (const id of ["pl-model", "pl-effort"]) $(id).addEventListener("change", plSavePrefs);
++  // Closing the dialog also stops its animation.
++  $("pl-detail").addEventListener("close", () => { $("pl-detail-body").innerHTML = ""; });
++  addEventListener("resize", fitPelicanStage);
++  bindCollectionActions({ type: "pl", scope: "pelican", expanded: plExpanded, renderRows: renderPelican, run: runPelican, showDetail: showPelicanDetail });
++}
+diff --git a/backend/internal/codexeval/web/style.css b/backend/internal/codexeval/web/style.css
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/style.css
+@@ -0,0 +1,436 @@
++/* Layout */
++:root {
++  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
++  --page-width: 1280px;
++  --list-padding: 22px; --list-gap: 16px; --list-checkbox: 22px; --credential-indent: 20px; --switch-width: 32px; --action-width: 88px;
++  --credential-track: minmax(0, 300px); --result-track: minmax(0, 280px); --marks-width: 208px;
++}
++
++/* Base */
++/* CPAMP injects zero-specificity base styles into the pages it embeds. Revert them below <html> so this sheet
++   alone styles the page; SVG icons are left out to keep their presentation attributes. */
++:where(body, body :not(svg, svg *)) { all: revert; }
++* { box-sizing: border-box; }
++html { background: var(--bg-image) fixed var(--bg); }
++body {
++  margin: 0; padding: 0 var(--page-inline); color: var(--ink);
++  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
++  -webkit-font-smoothing: antialiased;
++}
++.mono, .markdown code { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
++main { display: flow-root; min-height: 100dvh; max-width: var(--page-width); margin: 0 auto; padding-top: var(--page-top); }
++.page-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 0; padding: 24px 12px max(32px, env(safe-area-inset-bottom)); color: var(--faint); font-size: 11px; }
++.page-footer span { white-space: nowrap; }
++.page-footer a { color: inherit; text-decoration: none; }
++.page-footer a:hover, .page-footer a:focus-visible { color: var(--muted); }
++button, input, select { font: inherit; color: inherit; }
++:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++.icon { display: block; width: 16px; height: 16px; flex: none; }
++.spin { animation: spin 1s linear infinite; }
++@keyframes spin { to { transform: rotate(360deg); } }
++[hidden] { display: none !important; }
++
++/* Shared controls */
++.card { background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--radius); box-shadow: var(--shadow); backdrop-filter: var(--glass); overflow: clip; }
++.inspection-settings { display: grid; gap: 24px; max-width: 1152px; margin: 0 auto; }
++.settings-card-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); }
++.settings-card-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
++.settings-card .switch { font-size: 14px; }
++.settings-card-header .switch { gap: 12px; min-height: 28px; }
++.settings-card-body { display: grid; gap: 20px; padding: 24px; }
++.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
++.settings-card .field { gap: 8px; font-size: 14px; }
++.settings-card .field input, .settings-card .native-select > select { height: 40px; }
++.settings-span { grid-column: 1 / -1; }
++.settings-save { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
++.settings-save .btn { min-height: 40px; }
++@media (max-width: 640px) {
++  .settings-grid { grid-template-columns: minmax(0, 1fr); }
++  .settings-card-header, .settings-card-body { padding: 16px; }
++  .settings-save { flex-wrap: wrap; }
++}
++.toolbar { display: grid; grid-template-columns: var(--toolbar-columns); align-items: end; gap: 12px 16px; padding: 14px 16px; margin-bottom: 8px; }
++.toolbar > .btn { justify-self: end; min-width: 138px; }
++.field { display: grid; gap: 4px; min-width: 0; width: 100%; }
++.field-label { color: var(--muted); font-size: 12px; }
++.field input, .native-select > select, .login input { width: 100%; min-width: 0; height: 36px; padding: 0 10px; background: var(--field); border: 1px solid var(--control-line); border-radius: 9px; }
++.native-select { position: relative; display: flex; align-items: center; min-width: 0; max-width: 100%; color: var(--muted); }
++.native-select::after {
++  content: ""; position: absolute; right: 8px; top: 50%; width: 20px; height: 20px; background: currentColor;
++  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
++  transform: translateY(-50%); pointer-events: none;
++}
++.native-select > select { appearance: none; padding-right: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
++.btn {
++  --button-bg: var(--accent-soft); --button-hover: var(--accent-soft-hover); --button-ink: var(--accent-ink); --button-line: var(--action-line);
++  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 16px; border-radius: 9px;
++  border: 1px solid var(--button-line); background: var(--button-bg); color: var(--button-ink); font-weight: 600; cursor: pointer; white-space: nowrap;
++}
++.btn:hover:not(:disabled) { background: var(--button-hover); border-color: var(--button-hover-line, var(--button-line)); }
++.btn .icon { width: 15px; height: 15px; }
++.btn.ghost { --button-bg: var(--control-bg); --button-hover: var(--control-hover); --button-ink: var(--ink); --button-line: var(--control-line); --button-hover-line: var(--control-hover-line); font-weight: 500; height: 32px; padding: 0 12px; }
++.btn.ghost .icon { width: 14px; height: 14px; color: var(--muted); }
++.btn.danger { --button-bg: var(--danger-soft); --button-hover: var(--danger-soft-hover); --button-ink: var(--danger-ink); --button-line: var(--danger-line); --button-hover-line: var(--danger-line); }
++.btn:disabled { --button-bg: var(--control-bg); --button-ink: var(--muted); --button-line: var(--control-line); opacity: .6; cursor: default; }
++.btn.icon-button { width: 32px; padding: 0; }
++input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; cursor: pointer; }
++.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
++.switch > input { appearance: none; position: relative; flex: none; width: var(--switch-width); height: 18px; border-radius: 999px; background: color-mix(in srgb, var(--faint) 55%, var(--line)); transition: background .15s; }
++.switch > input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 20%); transition: transform .15s; }
++.switch > input:checked { background: var(--accent); }
++.switch > input:checked::before { transform: translateX(14px); }
++.switch > input:disabled { opacity: .55; cursor: default; }
++.tip {
++  position: fixed; z-index: 10; width: max-content; max-width: min(320px, calc(100vw - 16px)); padding: var(--tip-padding); pointer-events: none;
++  background: var(--tip-bg); color: var(--tip-ink); border: 1px solid var(--tip-line); border-radius: var(--tip-radius); box-shadow: var(--tip-shadow);
++  backdrop-filter: var(--glass); font-size: 12px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; animation: tip-in .15s ease-out;
++}
++.tip.rich { max-width: min(480px, calc(100vw - 16px)); padding: 8px 10px; white-space: normal; background: var(--popover-bg); color: var(--ink); border-color: var(--popover-line); box-shadow: var(--popover-shadow); }
++@keyframes tip-in { from { opacity: 0; translate: 0 2px; } }
++
++/* Tables and code blocks */
++.fp-detail-scroll, .markdown table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
++:is(.fp-detail-table, .markdown) :is(th, td) { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
++:is(.fp-detail-table, .markdown) th { color: var(--muted); font-weight: 500; background: var(--sunken); }
++:is(.fp-detail-table, .markdown) tr:last-child td { border-bottom: 0; }
++:is(.mt-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
++
++/* Page navigation and introduction */
++header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--section-gap); }
++h1 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
++h1 .icon { width: 26px; height: 26px; color: var(--accent); }
++details.problem { margin-top: 10px; }
++details.problem summary { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; color: var(--muted); font-size: 13px; list-style: none; }
++details.problem summary::-webkit-details-marker { display: none; }
++details.problem summary:hover { color: var(--ink); }
++.chev { width: 15px; height: 15px; transition: transform .15s; }
++details.problem[open] summary .chev, .row.open .toggle .chev { transform: rotate(90deg); }
++.problem-body {
++  position: relative; margin-top: 10px; background: var(--sunken); border: 1px solid var(--line); border-radius: 12px;
++}
++.problem-body pre { margin: 0; padding: 16px 52px 16px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.75; }
++.problem-body code { font: inherit; }
++.copy-btn { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; }
++.problem-body:hover .copy-btn, .problem-body:focus-within .copy-btn, .copy-btn.copied { opacity: 1; }
++.copy-btn:hover, .copy-btn.copied { color: var(--accent); border-color: currentColor; }
++.clipboard-buffer { position: fixed; opacity: 0; pointer-events: none; }
++.page-navigation { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: var(--section-gap); }
++/* The padding keeps the tabs' press spring inside the scroll area. */
++.tabs { display: flex; gap: 2px; min-width: 0; padding: 3px; overflow-x: auto; }
++.page-navigation button { flex: none; height: 32px; padding: 0 16px; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--muted); font-weight: 600; white-space: nowrap; cursor: pointer; transition: scale .3s cubic-bezier(.34, 1.56, .64, 1), translate .2s, box-shadow .2s; }
++.page-navigation button:hover:not(:disabled) { color: var(--ink); }
++.page-navigation button:active:not(:disabled) { scale: .95; transition-duration: .08s; }
++.page-navigation button:focus-visible { outline-offset: -2px; }
++.page-navigation button:disabled { opacity: .55; cursor: default; }
++.tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-ink); box-shadow: var(--shadow); }
++.tab[aria-selected="true"]:hover { translate: 0 -1px; }
++.page-actions { display: flex; gap: 2px; padding: 3px; }
++.page-actions button { display: inline-flex; align-items: center; justify-content: center; width: 32px; padding: 0; }
++#refresh[aria-busy="true"] .icon { animation: spin .8s linear infinite; }
++.panel-intro { margin-bottom: var(--section-gap); color: var(--muted); }
++.panel-intro p { margin: 0 0 8px; }
++.principle-body { padding: 16px 18px; font-size: 13px; line-height: 1.8; }
++.principle-body p { margin: 0 0 10px; }
++.principle-body p:last-child { margin-bottom: 0; }
++.principle-body a { color: var(--accent-ink); text-underline-offset: 3px; }
++
++/* Result metadata */
++.result-meta, .latest-top { display: flex; align-items: center; gap: 4px 8px; min-width: 0; }
++.result-meta { flex-wrap: wrap; }
++.result-meta .metric { flex: none; max-width: 100%; }
++.result-meta .model-meta .meta { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
++.verdict { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px 1px 6px; border-radius: 999px; background: var(--status-bg, var(--control-bg)); color: var(--status-ink, var(--muted)); font-size: 12px; font-weight: 600; }
++.verdict .icon, .metric .icon { width: 13px; height: 13px; }
++.verdict.ok, .outcome.ok, .mt-summary.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
++.verdict.bad, .outcome.bad { --status-ink: var(--danger-ink); --status-bg: var(--danger-soft); }
++.outcome.warn, .mt-summary.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
++.verdict.err, .verdict.skip { border: 1px solid var(--control-line); }
++.meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 12px; }
++.metrics:empty { display: none; }
++.metric { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 20px; white-space: nowrap; }
++.metric > .meta { min-width: 0; line-height: inherit; }
++.model-meta { max-width: 100%; }
++.none { color: var(--faint); }
++
++/* Credential lists and history alignment */
++/* Short columns are fixed. Credential, result and model tracks share the rest equally up to their caps;
++   any remaining space is spread evenly across the gaps. */
++#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
++#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 190px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px 84px var(--switch-width) var(--action-width); }
++#modeltrace-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
++#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px minmax(0, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
++#settings-panel { --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
++.list-head, .list-row, .history-panel { display: grid; grid-template-columns: var(--list-columns); justify-content: space-between; align-items: center; gap: var(--list-gap); padding-inline: var(--list-padding); }
++.list-head { padding-block: 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
++.list-head > :nth-child(2) { padding-left: var(--credential-indent); }
++.list-row { padding-block: 14px; min-height: 80px; }
++.row { border-bottom: 1px solid var(--line); }
++.row:last-child { border-bottom: 0; }
++.row-main { cursor: pointer; }
++.select-cell { align-self: stretch; display: flex; align-items: center; }
++.list-row > .btn { width: var(--action-width); height: 36px; padding: 0; }
++.row-main:hover, .row.open .row-main { background: var(--sunken); }
++.credential { min-width: 0; }
++.toggle { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; font-weight: 600; cursor: pointer; text-align: left; }
++.toggle .chev { color: var(--faint); }
++.toggle .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.credential .api-key, .credential .tags { padding-left: var(--credential-indent); margin-top: 4px; }
++.credential .api-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
++.credential .tags { display: flex; flex-wrap: wrap; gap: 5px; }
++.credential .name { transition: filter .15s; }
++.masked .credential .name { filter: blur(5px); user-select: none; }
++.tag {
++  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 6px; border-radius: 6px; white-space: nowrap;
++  background: var(--tag-soft, var(--tag-neutral-bg)); border: 1px solid var(--tag-line, var(--tag-neutral-line)); color: var(--tag-ink, var(--tag-neutral-ink)); font-size: 11px; font-weight: 500;
++}
++.tag .icon { width: 12px; height: 12px; }
++.tag > span { overflow: hidden; text-overflow: ellipsis; }
++/* Plan badges follow CPAMC's platinum and gold materials. */
++.plan-elite {
++  --tag-ink: #1f2a38; --tag-line: transparent; font-weight: 700;
++  --tag-soft: linear-gradient(#fff, #e3eaf1 26%, #b4c0cd 45%, #8d9aab 54%, #c9d2dc 78%, #f2f6fa) padding-box,
++    linear-gradient(135deg, #fff, rgb(140 158 178 / 60%) 42%, rgb(56 66 80 / 95%)) border-box;
++  box-shadow: 0 1px 3px rgb(30 42 58 / 28%), inset 0 1px 1px rgb(255 255 255 / 90%), 0 0 10px rgb(150 180 220 / 36%);
++  text-shadow: 0 1px 0 rgb(255 255 255 / 65%);
++}
++.plan-premium { --tag-ink: var(--premium-ink); --tag-soft: var(--premium-soft); --tag-line: var(--premium-line); box-shadow: var(--premium-glow); font-weight: 700; }
++.plan-plus { --tag-ink: var(--plus-ink); --tag-soft: var(--plus-soft); --tag-line: var(--plus-line); }
++.plan-go { --tag-ink: var(--go-ink); --tag-soft: var(--go-soft); --tag-line: var(--go-line); }
++.plan-business { --tag-ink: var(--business-ink); --tag-soft: var(--business-soft); --tag-line: var(--business-line); }
++.tag.warn { --tag-ink: var(--warning-ink); --tag-soft: var(--warning-soft); --tag-line: var(--warning-line); cursor: help; }
++.row-meta { display: contents; }
++.latest { min-width: 0; }
++.history-panel { row-gap: 0; padding-block: 4px 20px; background: var(--sunken); }
++.history-panel > .history-title, .history-panel > .result-history { grid-column: 2 / -1; }
++.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: var(--heading-padding, 14px var(--list-padding)); border-bottom: 1px solid var(--line); }
++.section-head h2 { margin: 0; font-size: var(--heading-size, 14px); font-weight: 600; }
++.candy-head { flex-wrap: wrap; }
++.inspection-status { display: flex; flex-wrap: wrap; gap: 4px 12px; min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
++.candy-head > .error { flex-basis: 100%; color: var(--danger-ink); overflow-wrap: anywhere; }
++.credential-enabled-filter { flex: none; white-space: nowrap; }
++.credential-filters { display: flex; flex: 1; gap: 10px; min-width: 0; }
++.credential-filter { flex: 0 1 160px; }
++.credential-filter > select { height: 32px; font-size: 12px; }
++.list-actions { display: flex; gap: 8px; }
++
++/* Candy results */
++.tip .metrics { margin-top: 6px; }
++.tip-text { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
++.tip-text.error { color: var(--danger-ink); }
++.mark { width: 15px; height: 15px; flex: none; }
++.mark.ok { color: var(--success); }
++.mark.bad { color: var(--danger); }
++.mark.skip, .mark.err { color: var(--faint); }
++.mark.dim { opacity: .3; }
++.latest .metrics { margin-top: 5px; }
++.rate b { font-size: 17px; font-weight: 600; }
++.rate small { display: block; color: var(--faint); font-size: 12px; }
++.marks { display: grid; grid-template-columns: repeat(auto-fill, 19px); gap: 2px; align-items: center; width: 100%; min-height: 19px; }
++.mark-hit { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; padding: 2px; border: 0; border-radius: 50%; background: transparent; cursor: help; transition: transform .15s, background .15s, box-shadow .15s; }
++.mark-hit:hover, .mark-hit:focus-visible { position: relative; z-index: 1; background: var(--surface); box-shadow: 0 0 0 2px var(--line); transform: scale(1.2); }
++.mark-hit:hover .mark, .mark-hit:focus-visible .mark { opacity: 1; }
++.answer { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: start; gap: 8px; flex: 1; min-width: 0; line-height: 1.65; }
++.answer-toggle { display: inline-flex; align-items: center; gap: 2px; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
++.answer-toggle:hover { color: var(--accent-ink); background: var(--accent-soft); }
++.answer.expanded .chev { transform: rotate(90deg); }
++.answer-content { overflow: hidden; overflow-wrap: anywhere; }
++.answer-content.error { color: var(--danger-ink); white-space: pre-wrap; }
++/* Expanded answers are as wide as their longest line, so display formulas center on the text. */
++.answer.expanded .markdown { justify-self: start; }
++/* Collapsed answers and result tips flatten into running text. Each formula sits in a line-tall box with
++   the text's strut, so short formulas share the baseline and tall ones, such as cases, are clipped instead
++   of stretching the line. Temml writes display formulas' display inline, hence !important. */
++.answer:not(.expanded) .answer-content { text-overflow: ellipsis; white-space: nowrap; }
++:is(.answer:not(.expanded) .markdown, .tip-text) :not(code, eq, eqn, math, math *) { display: inline; margin: 0; padding: 0; border: 0; background: none; font-size: inherit; white-space: inherit; }
++:is(.answer:not(.expanded) .markdown, .tip-text) br { display: none; }
++:is(.answer:not(.expanded) .markdown, .tip-text) :is(eq, eqn) { display: inline-block; height: 1lh; vertical-align: top; overflow: clip; }
++:is(.answer:not(.expanded) .markdown, .tip-text) math { display: inline !important; display: math !important; }
++.markdown :is(p, ul, ol, pre, table, blockquote, section) { margin: 0 0 8px; }
++.markdown :is(h1, h2, h3, h4, h5, h6) { margin: 12px 0 6px; font-size: 1em; font-weight: 600; }
++.markdown > :first-child { margin-top: 0; }
++.markdown > :last-child { margin-bottom: 0; }
++.markdown :is(ul, ol) { padding-left: 20px; }
++.markdown code { padding: 1px 4px; border-radius: 4px; background: var(--sunken); font-size: .92em; }
++.markdown pre code { padding: 0; background: none; font-size: inherit; }
++.markdown table { display: block; width: fit-content; max-width: 100%; border-collapse: collapse; }
++.markdown blockquote { padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
++.markdown hr { margin: 10px 0; border: 0; border-top: 1px solid var(--line); }
++/* texmath wraps display formulas in <section><eqn>. */
++.markdown eqn { display: block; }
++
++/* Collection results and history */
++.collection-progress { width: 100%; height: 8px; margin-top: 7px; accent-color: var(--accent); }
++.outcome { display: flex; align-items: center; gap: 12px; min-width: 0; }
++.outcome-icon {
++  --size: var(--outcome-size, 38px); display: inline-flex; align-items: center; justify-content: center; width: var(--size); height: var(--size); flex: none;
++  border: 1px solid color-mix(in srgb, var(--status-ink, var(--muted)) 16%, var(--status-bg, var(--control-bg))); border-radius: calc(var(--size) * .3); background: var(--status-bg, var(--control-bg)); color: var(--status-ink, var(--muted));
++}
++.outcome-icon .icon { width: calc(var(--size) * .55); height: calc(var(--size) * .55); }
++.outcome.idle { --status-ink: var(--faint); }
++.outcome.idle .outcome-title { color: var(--muted); font-weight: 500; }
++.outcome-copy { min-width: 0; flex: 1; }
++.outcome-title { font-weight: 600; line-height: 1.5; }
++.outcome-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
++.outcome-detail .icon { width: 12px; height: 12px; }
++.outcome-detail strong { color: var(--ink); font-weight: 500; }
++.fp-mode, .test-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
++.history-title { padding: 0 0 8px; color: var(--muted); font-size: 12px; }
++.result-history { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
++.result-history > .none { grid-column: 1 / -1; padding: 4px 0; text-align: center; }
++.history-card { --outcome-size: 30px; min-width: 0; background: var(--history-bg); border: 1px solid var(--control-line); border-radius: 10px; overflow: clip; }
++.record-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; color: var(--muted); font-size: 12px; }
++.history-card-head { padding: 8px 12px; background: var(--history-head-bg); border-bottom: 1px solid var(--control-line); }
++.history-card-body { display: flex; align-items: center; gap: 12px; padding: 10px 12px; font-size: 13px; }
++.history-card-body > .btn { flex: none; }
++.history-card .outcome { flex: 1; }
++.history-card .outcome-title { font-size: 13px; }
++
++/* Pelican previews */
++/* A preview lays a page out in an 800×600 viewport and scales it by --preview-scale. */
++.preview {
++  position: relative; display: grid; place-items: center; flex: none; width: calc(800px * var(--preview-scale)); aspect-ratio: 4 / 3; overflow: hidden;
++  border: 1px solid var(--control-line); border-radius: 8px; background: var(--sunken); color: var(--faint);
++}
++.preview iframe { position: absolute; top: 0; left: 0; width: 800px; height: 600px; border: 0; background: #fff; scale: var(--preview-scale); transform-origin: 0 0; }
++.preview-open { position: absolute; inset: 0; padding: 0; border: 0; border-radius: inherit; background: none; cursor: zoom-in; }
++.preview-open:hover, .preview-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
++.preview[data-tip] { cursor: help; }
++.history-card .preview { --preview-scale: .3; }
++/* The dialog stage fits on screen; fitPelicanStage scales its page to match. */
++.pelican-stage { width: min(100%, max(280px, calc((100dvh - 310px) * 4 / 3))); margin: 0 auto; }
++
++/* Dialogs */
++dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--dialog-bg); color: var(--ink); box-shadow: var(--float); backdrop-filter: var(--glass); }
++dialog::backdrop { background: rgb(0 0 0 / 35%); }
++.confirm { width: min(400px, calc(100vw - 32px)); padding: 22px; }
++.confirm h2 { margin: 0 0 6px; font-size: 16px; }
++.confirm p { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
++.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
++.dialog-actions .btn { height: 34px; }
++/* Centered dialogs leave 80px above the header for CPA's floating controls. */
++.result-dialog { --dialog-padding: 22px; width: min(920px, calc(100vw - 32px)); max-height: calc(100dvh - 160px); padding: 0; border-radius: 16px; }
++.result-dialog-head { --heading-padding: 18px var(--dialog-padding); --heading-size: 18px; position: sticky; top: 0; z-index: 1; background: var(--dialog-bg); backdrop-filter: var(--glass); }
++.result-dialog-body { padding: var(--dialog-padding); }
++.result-dialog-meta { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
++.result-dialog-section { margin-top: 24px; }
++.result-dialog-section h3 { font-size: 14px; margin: 0 0 10px; }
++.detail-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; line-height: 1.7; }
++.detail-warning { color: var(--danger-ink); overflow-wrap: anywhere; }
++
++/* Fingerprint details */
++.fp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
++.fp-stat { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sunken); }
++.fp-stat dt { margin-bottom: 5px; color: var(--muted); font-size: 12px; }
++.fp-stat dd { margin: 0; font-size: 17px; font-weight: 600; }
++.fp-detail-table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 12px; }
++.fp-detail-table tr.closest { background: var(--accent-soft); }
++.fp-probe-select { max-width: 280px; margin: 14px 0 10px; }
++
++/* ModelTrace results and details */
++.mt-test-model { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
++.mt-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
++.mt-prediction > span:first-child { min-width: 0; }
++.mt-probability { color: var(--status-ink, var(--muted)); font-size: 12px; white-space: nowrap; }
++.mt-summary { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px; gap: 12px; margin: 0 0 20px; }
++.mt-summary > div { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--sunken); }
++.mt-summary > div:first-child { background: var(--status-bg, var(--sunken)); border-color: color-mix(in srgb, var(--status-ink, var(--line)) 25%, var(--line)); }
++.mt-summary > div:first-child dt, .mt-summary > div:first-child small { color: var(--status-ink, var(--muted)); }
++.mt-summary dt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
++.mt-summary dd { margin: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
++.mt-summary small { display: block; font-size: 13px; color: var(--accent-ink); font-weight: 500; margin-top: 4px; }
++.mt-result-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 20px 0 10px; }
++.mt-result-heading h3 { margin: 0; font-size: 14px; }
++.mt-ranking { display: grid; gap: 2px; }
++.mt-rank { display: grid; grid-template-columns: 26px minmax(180px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 12px; }
++.mt-rank:first-child { background: var(--accent-soft); }
++.mt-rank-name { overflow-wrap: anywhere; }
++.mt-rank > :last-child { text-align: right; }
++.mt-bar { height: 7px; overflow: hidden; border-radius: 99px; background: var(--line); }
++.mt-bar span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: var(--accent); }
++.mt-families { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
++.mt-families span { display: inline-flex; gap: 14px; border: 1px solid var(--line); padding: 5px 10px; border-radius: 8px; font-size: 12px; }
++.mt-families b { font-weight: 500; color: var(--accent-ink); }
++.mt-sample { border-top: 1px solid var(--line); padding: 12px 0; }
++.mt-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
++.mt-sample summary .chev { color: var(--muted); }
++.mt-sample[open] summary .chev { transform: rotate(90deg); }
++.mt-sample pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
++
++/* Feedback and login */
++.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--muted); font-size: 12px; line-height: 20px; margin: 0 4px 10px; }
++.legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
++.legend #rate-scope { margin-left: auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
++.empty { padding: 40px 20px; text-align: center; color: var(--muted); }
++.login { max-width: 380px; margin: 12vh auto 0; padding: 24px; }
++.login h2 { margin: 0 0 6px; font-size: 17px; }
++.login p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
++.login form { display: flex; gap: 8px; }
++.login input { flex: 1; }
++.login .error { margin: 10px 0 0; color: var(--danger-ink); }
++.global-flash { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--sunken); color: var(--muted); }
++.global-flash[data-tone="error"] { background: var(--danger-soft); color: var(--danger-ink); border-color: color-mix(in srgb, var(--danger) 25%, var(--line)); }
++.global-flash[data-tone="warning"] { background: var(--warning-soft); color: var(--warning-ink); }
++.notice-symbol { display: inline-flex; flex: none; margin-top: 3px; }
++.notice-message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
++.notice-close { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 3px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
++.notice-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
++
++/* Responsive layout */
++@media (hover: none) { .copy-btn { opacity: 1; } }
++@media (max-width: 1100px) {
++  :root { --marks-width: 104px; }
++}
++@media (max-width: 1000px) {
++  :root { --list-padding: 18px; --list-gap: 10px; }
++  .result-history { grid-template-columns: minmax(0, 1fr); }
++}
++@media (max-width: 768px) {
++  :root { --list-padding: 16px; }
++  .page-navigation .tab { padding: 0 12px; }
++  .list-head { display: none; }
++  .list-row {
++    --outcome-size: 30px; grid-template-columns: var(--list-checkbox) minmax(0, 1fr) auto; row-gap: 14px; padding-block: 16px;
++    grid-template-areas: "select credential action" ". latest latest" ". meta meta";
++  }
++  .list-row > .select-cell { grid-area: select; }
++  .list-row > .credential { grid-area: credential; }
++  .list-row > .latest { grid-area: latest; padding-left: var(--credential-indent); }
++  .list-row > .btn { grid-area: action; }
++  .row-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; padding-left: var(--credential-indent); }
++  .row-meta.untested > :not(.switch) { display: none; }
++  .row-meta > .switch { align-self: flex-end; margin-left: auto; }
++  .row-meta > .switch::before { content: "启用"; }
++  .row-meta > .marks { flex: 1; }
++  .credential-head { flex-wrap: wrap; row-gap: 10px; }
++  .credential-enabled-filter { margin-right: auto; }
++  .candy-head .inspection-status { order: 1; flex-basis: 100%; }
++  .credential-filters { order: 1; flex-basis: 100%; }
++  .credential-filter { flex: 1 1 0; }
++  .rate { display: flex; flex-basis: 100%; align-items: baseline; gap: 5px; white-space: nowrap; }
++  .rate::before { content: "正确率"; color: var(--muted); font-size: 12px; }
++  .rate b { font-size: 14px; } .rate small { display: inline; }
++
++  .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .toolbar > .btn { min-width: 0; width: 100%; }
++  .history-panel { grid-template-columns: var(--list-checkbox) minmax(0, 1fr); padding-block: 0 16px; }
++  .record-meta { gap: 4px 12px; }
++  .record-meta > :is(.result-meta, .metrics) { display: contents; }
++  .history-card-body { flex-wrap: wrap; }
++  .history-card-body > .btn { margin-left: auto; }
++  .history-card .outcome { flex-basis: 100%; }
++  .answer { grid-template-columns: auto minmax(0, 1fr); }
++  .answer-toggle { justify-self: end; }
++  .answer-content { grid-column: 1 / -1; }
++  .fp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .result-dialog { --dialog-padding: 16px; }
++  :is(#mt-toolbar, #pl-toolbar) > .btn { grid-column: 1 / -1; }
++  .mt-summary { grid-template-columns: 1fr 1fr; }
++  .mt-summary > div:first-child { grid-column: 1 / -1; }
++  .mt-rank { grid-template-columns: 18px minmax(0, 1fr) 58px; gap: 8px; padding-inline: 6px; }
++  .mt-rank .mt-bar { display: none; }
++}
++@media (prefers-reduced-motion: reduce) {
++  .spin, #refresh[aria-busy="true"] .icon { animation: none; }
++  .page-navigation button, .mark-hit, .copy-btn, .chev, .credential .name, .switch > input, .switch > input::before { transition: none; }
++}
+diff --git a/backend/internal/codexeval/web/theme.css b/backend/internal/codexeval/web/theme.css
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/theme.css
+@@ -0,0 +1,52 @@
++/* Tokens
++   Components read only these tokens. The panel embedding the page supplies most of them below; data-theme
++   mirrors that panel's theme. */
++:root {
++  --premium-ink: #6b4b00; --premium-line: rgb(217 165 22 / 72%); --premium-glow: 0 1px 3px rgb(133 92 0 / 16%), 0 0 10px rgb(255 214 98 / 28%);
++  --premium-soft: radial-gradient(circle at 18% 24%, rgb(255 255 255 / 96%), rgb(255 255 255 / 0) 42%), linear-gradient(135deg, #fff9e3, #ffe07f 52%, #e0aa14);
++  --plus-ink: #2463b0; --plus-soft: #eaf2fd; --plus-line: #c8dcf6; --go-ink: #0e7773; --go-soft: #e3f5f3; --go-line: #bfe5e0;
++  --business-ink: #6b46c1; --business-soft: #f2edfc; --business-line: #dcd0f5;
++  color-scheme: light;
++}
++:root[data-theme="dark"] {
++  --premium-ink: #fff0a8; --premium-line: rgb(226 180 50 / 70%); --premium-glow: 0 1px 6px rgb(0 0 0 / 28%), 0 0 12px rgb(255 196 44 / 22%);
++  --premium-soft: radial-gradient(circle at 18% 24%, rgb(255 229 138 / 32%), rgb(255 214 98 / 0) 44%), linear-gradient(135deg, #4f3d0b, #6e5510 48%, #8f6d10);
++  --plus-ink: #93c1f7; --plus-soft: #16283d; --plus-line: #2a4868; --go-ink: #7fd6cf; --go-soft: #112f2d; --go-line: #245450;
++  --business-ink: #c4b0f5; --business-soft: #251e3a; --business-line: #45386b;
++  color-scheme: dark;
++}
++
++/* Native Sub2API light/dark colors; original component layout and plan badges. */
++:root {
++  --page-top: 24px; --page-inline: clamp(20px, 3vw, 48px); --section-gap: 24px;
++  --bg: #f9fafb; --bg-image: none; --surface: #fff; --sunken: #f3f4f6; --field: #fff;
++  --line: #e5e7eb; --card-line: var(--line); --ink: #111827; --muted: #6b7280; --faint: #9ca3af;
++  --control-bg: var(--surface); --control-line: #d1d5db; --control-hover: var(--sunken); --control-hover-line: #9ca3af;
++  --history-bg: var(--bg); --history-head-bg: var(--sunken);
++  --tag-neutral-bg: var(--sunken); --tag-neutral-ink: var(--muted); --tag-neutral-line: var(--line);
++  --accent: #14b8a6; --accent-ink: #0d9488; --accent-soft: rgb(20 184 166 / 10%);
++  --accent-soft-hover: rgb(20 184 166 / 16%); --action-line: rgb(20 184 166 / 30%);
++  --success: #10b981; --success-ink: #065f46; --success-soft: #d1fae5;
++  --danger: #ef4444; --danger-ink: #b91c1c; --danger-soft: rgb(239 68 68 / 10%);
++  --danger-soft-hover: rgb(239 68 68 / 18%); --danger-line: rgb(239 68 68 / 30%);
++  --warning-ink: #92400e; --warning-soft: rgb(245 158 11 / 10%); --warning-line: rgb(245 158 11 / 30%);
++  --radius: 12px; --shadow: 0 1px 3px rgb(0 0 0 / 4%), 0 1px 2px rgb(0 0 0 / 6%);
++  --float: 0 12px 26px rgb(0 0 0 / 14%); --glass: none;
++  --tip-bg: #111827; --tip-ink: #f9fafb; --tip-line: transparent;
++  --tip-shadow: var(--float); --tip-radius: 10px; --tip-padding: 9px 12px;
++  --popover-bg: var(--surface); --popover-line: var(--line); --popover-shadow: var(--float); --dialog-bg: var(--surface);
++}
++:root[data-theme="dark"] {
++  --bg: #0f172a; --surface: #1e293b; --sunken: #334155; --field: #0f172a;
++  --line: #334155; --ink: #f1f5f9; --muted: #94a3b8; --faint: #64748b;
++  --control-line: #475569; --control-hover-line: #64748b;
++  --accent: #2dd4bf; --accent-ink: #5eead4;
++  --success-ink: #6ee7b7; --success-soft: rgb(6 78 59 / 30%);
++  --danger-ink: #fca5a5; --danger-soft: rgb(239 68 68 / 20%); --danger-soft-hover: rgb(239 68 68 / 30%);
++  --warning-ink: #fcd34d; --warning-soft: rgb(245 158 11 / 14%);
++  --shadow: 0 1px 3px rgb(0 0 0 / 30%); --float: 0 14px 30px rgb(0 0 0 / 40%);
++  --tip-bg: #334155; --tip-ink: #f1f5f9; --tip-line: #475569;
++}
++@media (max-width: 768px) {
++  :root { --page-inline: 16px; }
++}
+diff --git a/backend/internal/codexeval/web/ui.html b/backend/internal/codexeval/web/ui.html
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web/ui.html
+@@ -0,0 +1,206 @@
++<!doctype html>
++<html lang="zh-CN">
++<!--MODELTRACE_LICENSE-->
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>Codex 降智测试</title>
++  <style>/*APP_STYLES*/</style>
++</head>
++<body>
++  <main>
++    <header>
++      <h1><i data-icon="candy"></i>Codex 降智测试</h1>
++    </header>
++
++    <section id="login" class="card login" hidden><p id="login-error" class="error" hidden></p></section>
++
++    <div id="app" hidden>
++      <div class="page-navigation card">
++        <div class="tabs" role="tablist" aria-label="测试类型">
++          <button id="tab-candy" class="tab" role="tab" aria-selected="true" aria-controls="candy-panel" type="button">糖果</button>
++          <button id="tab-fingerprint" class="tab" role="tab" aria-selected="false" aria-controls="fingerprint-panel" tabindex="-1" type="button">指纹</button>
++          <button id="tab-modeltrace" class="tab" role="tab" aria-selected="false" aria-controls="modeltrace-panel" tabindex="-1" type="button">ModelTrace</button>
++          <button id="tab-pelican" class="tab" role="tab" aria-selected="false" aria-controls="pelican-panel" tabindex="-1" type="button">鹈鹕</button>
++          <button id="tab-settings" class="tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" type="button">设置</button>
++        </div>
++        <div class="page-actions">
++          <button id="clear-all" type="button" aria-label="清空全部测试记录" data-tip disabled><i data-icon="trash-2"></i></button>
++          <button id="refresh" type="button" aria-label="刷新账户和模型" data-tip aria-busy="false"><i data-icon="rotate-cw"></i></button>
++        </div>
++      </div>
++      <div id="notifications"></div>
++      <section id="candy-panel" role="tabpanel" aria-labelledby="tab-candy">
++        <div class="panel-intro">
++          <p>让模型解一道糖果题，答出 <b class="mono">21</b> 即为正确。</p>
++          <details class="problem">
++            <summary><i data-icon="chevron-right" data-class="chev"></i>查看题目</summary>
++            <div class="problem-body"><pre class="mono"><code><!--CANDY_PROMPT--></code></pre>
++              <button class="copy-btn" type="button" aria-label="复制题目" data-tip></button>
++            </div>
++          </details>
++        </div>
++        <form id="toolbar" class="card toolbar">
++          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="group" data-group-select></select></span></label>
++          <div class="field"><label class="field-label" for="model-select">模型</label><span class="native-select"><select id="model-select"></select></span><input id="model" maxlength="200" required aria-label="自定义模型" hidden></div>
++          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="effort"></select></span></label>
++          <label class="field"><span class="field-label">每账户次数</span><input id="runs" class="mono" type="number" min="1" max="10" step="1" value="1" required></label>
++          <button id="run-batch" class="btn" type="submit" disabled>测试全部</button>
++        </form>
++
++        <div class="legend">
++          <span><i data-icon="circle-check" data-class="mark ok"></i>答对</span>
++          <span><i data-icon="circle-x" data-class="mark bad"></i>答错</span>
++          <span><i data-icon="circle-alert" data-class="mark err"></i>请求出错</span>
++          <span><i data-icon="ban" data-class="mark err"></i>已跳过</span>
++          <span><i data-icon="circle-check" data-class="mark ok dim"></i>其他模型或推理强度</span>
++          <span id="rate-scope"></span>
++        </div>
++
++        <section id="candy-credentials" class="card"></section>
++      </section>
++      <section id="fingerprint-panel" role="tabpanel" aria-labelledby="tab-fingerprint" hidden>
++        <div class="panel-intro">
++          <p>采集模型的回答特征，与正常基准对比，判断模型是否被替换。</p>
++          <details class="problem" id="fp-principle">
++            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
++            <div class="problem-body principle-body">
++              <p>即使让模型“随便说一个数字或颜色”，不同模型也会呈现不同的回答偏好。重复提问后，这些偏好就形成了可比较的行为“指纹”。</p>
++              <p>本测试采集多组简短回答，与正常模型的指纹对比，判断是否一致、是否更像其他模型。结果基于统计特征，不能单独证明模型身份或能力。</p>
++              <p>来源论文：Tomas Bruckner，<a href="https://arxiv.org/abs/2607.10252" target="_blank" rel="noopener noreferrer" data-tip="One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions">《One Token Is Enough》</a>（2026）。</p>
++            </div>
++          </details>
++        </div>
++        <form id="fp-toolbar" class="card toolbar">
++          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="fp-group" data-group-select></select></span></label>
++          <div class="field"><label class="field-label" for="fp-model-select">模型</label><span class="native-select"><select id="fp-model-select"></select></span><input id="fp-model" maxlength="200" required aria-label="自定义模型" hidden></div>
++          <label class="field"><span class="field-label">采集模式</span><span class="native-select"><select id="fp-mode"></select></span></label>
++          <label class="field"><span class="field-label">每账户并发</span><input id="fp-concurrency" class="mono" type="number" min="1" step="1" required></label>
++          <button id="fp-run-batch" class="btn" type="submit" disabled>采集全部</button>
++        </form>
++        <div class="legend"><span id="fp-cost"></span></div>
++        <section id="fp-credentials" class="card"></section>
++      </section>
++      <section id="modeltrace-panel" role="tabpanel" aria-labelledby="tab-modeltrace" hidden>
++        <div class="panel-intro">
++          <p>通过三次数字生成挑战，识别最接近的模型家族与版本。</p>
++          <details class="problem" id="mt-principle">
++            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
++            <div class="problem-body principle-body">
++              <p>不同模型生成长整数序列时，会表现出不同的数字偏好与排列特征。本测试自动采集三份回答，提取数字分布和序列特征，与候选模型的指纹对比。</p>
++              <p>比对时先减弱提示词等环境因素的影响，再汇总三份回答的得分，计算各模型的归因概率。同一家族内各模型的概率之和，即为家族概率。</p>
++              <p>方法来源：<a href="https://github.com/xqy2006/ModelTrace" target="_blank" rel="noopener noreferrer">ModelTrace</a>。</p>
++            </div>
++          </details>
++        </div>
++        <form id="mt-toolbar" class="card toolbar">
++          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="mt-group" data-group-select></select></span></label>
++          <div class="field"><label class="field-label" for="mt-model-select">模型</label><span class="native-select"><select id="mt-model-select"></select></span><input id="mt-model" maxlength="200" required aria-label="自定义模型" hidden></div>
++          <label class="field"><span class="field-label">每账户并发</span><input id="mt-concurrency" class="mono" type="number" min="1" step="1" required></label>
++          <button id="mt-run-batch" class="btn" type="submit" disabled>测试全部</button>
++        </form>
++        <div class="legend"><span id="mt-cost"></span></div>
++        <section id="mt-credentials" class="card"></section>
++      </section>
++      <section id="pelican-panel" role="tabpanel" aria-labelledby="tab-pelican" hidden>
++        <div class="panel-intro">
++          <p>让模型写一个 HTML 页面，用 SVG 绘制鹈鹕骑自行车的动画。</p>
++          <details class="problem">
++            <summary><i data-icon="chevron-right" data-class="chev"></i>查看题目</summary>
++            <div class="problem-body"><pre class="mono"><code><!--PELICAN_PROMPT--></code></pre>
++              <button class="copy-btn" type="button" aria-label="复制题目" data-tip></button>
++            </div>
++          </details>
++        </div>
++        <form id="pl-toolbar" class="card toolbar">
++          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="pl-group" data-group-select></select></span></label>
++          <div class="field"><label class="field-label" for="pl-model-select">模型</label><span class="native-select"><select id="pl-model-select"></select></span><input id="pl-model" maxlength="200" required aria-label="自定义模型" hidden></div>
++          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort"></select></span></label>
++          <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
++        </form>
++        <div class="legend"><span>每个账户 1 次请求</span></div>
++        <section id="pl-credentials" class="card"></section>
++      </section>
++      <section id="settings-panel" role="tabpanel" aria-labelledby="tab-settings" hidden>
++        <form id="inspection-settings" class="inspection-settings" aria-busy="false">
++          <section class="card settings-card">
++            <div class="settings-card-header"><h2>自动巡检</h2><label class="switch"><input id="inspection-enabled" type="checkbox" role="switch" aria-label="自动巡检" aria-controls="inspection-auto-fields"></label></div>
++            <div id="inspection-auto-fields" class="settings-card-body" hidden>
++              <div class="settings-grid">
++                <div class="field"><label for="inspection-model-select">模型</label><span class="native-select"><select id="inspection-model-select"></select></span><input id="inspection-model" name="model" maxlength="200" required aria-label="自定义巡检模型" hidden></div>
++                <label class="field"><span>推理强度</span><span class="native-select"><select name="effort"></select></span></label>
++                <label class="field"><span>每账户最多测试次数</span><input name="max_tests_per_account" type="number" min="1" max="10" step="1" required></label>
++                <div class="settings-grid">
++                  <label class="field"><span>最短等待（分钟）</span><input name="min_wait_minutes" type="number" min="1" step="1" required></label>
++                  <label class="field"><span>最长等待（分钟）</span><input name="max_wait_minutes" type="number" min="1" step="1" required></label>
++                </div>
++              </div>
++            </div>
++          </section>
++          <section class="card settings-card">
++            <div class="settings-card-header"><h2>优先级</h2><label class="switch"><input name="adjust_priority" type="checkbox" role="switch" aria-label="自动调整优先级" aria-controls="inspection-priority-fields"></label></div>
++            <div id="inspection-priority-fields" class="settings-card-body settings-grid" hidden>
++              <label class="field"><span>正常优先级</span><input name="normal_priority" type="number" min="1" step="1" value="10" required></label>
++              <label class="field"><span>降级优先级</span><input name="degraded_priority" type="number" step="1" value="99" required></label>
++            </div>
++          </section>
++          <section class="card settings-card">
++            <div class="settings-card-header"><h2>通知</h2></div>
++            <div class="settings-card-body settings-grid">
++              <label class="field"><span>ntfy 服务器</span><input name="ntfy_server" type="url"></label>
++              <label class="field"><span>ntfy 主题</span><input name="ntfy_topic"></label>
++              <label class="field"><span>ntfy 用户名</span><input name="ntfy_username" autocomplete="off"></label>
++              <label class="field"><span>ntfy 密码或访问令牌</span><input name="ntfy_password" type="password" autocomplete="new-password"></label>
++              <label class="field settings-span"><span>Bark 推送地址</span><input name="bark_url" type="password" autocomplete="new-password"></label>
++            </div>
++          </section>
++          <div class="settings-save"><button id="inspection-start" type="button" class="btn ghost">立即巡检</button><button id="inspection-stop" type="button" class="btn ghost danger" disabled>停止当前巡检</button><span id="inspection-save-status" role="status"></span></div>
++        </form>
++      </section>
++    </div>
++
++    <dialog id="confirm-clear" class="confirm">
++      <form method="dialog">
++        <h2 id="clear-title">清空测试记录？</h2>
++        <p>此操作对所有账户生效，删除后无法恢复。正在进行的测试不受影响，完成后仍会保存结果。</p>
++        <div class="dialog-actions">
++          <button class="btn ghost" value="cancel" autofocus>取消</button>
++          <button class="btn danger" value="confirm">清空记录</button>
++        </div>
++      </form>
++    </dialog>
++    <dialog id="fp-detail" class="result-dialog" aria-labelledby="fp-detail-title">
++      <div class="section-head result-dialog-head"><h2 id="fp-detail-title">指纹详情</h2><button id="fp-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭详情"><i data-icon="x"></i></button></div>
++      <div id="fp-detail-body" class="result-dialog-body"></div>
++    </dialog>
++    <dialog id="mt-detail" class="result-dialog" aria-labelledby="mt-detail-title">
++      <div class="section-head result-dialog-head"><h2 id="mt-detail-title">ModelTrace 详情</h2><button id="mt-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭 ModelTrace 详情"><i data-icon="x"></i></button></div>
++      <div id="mt-detail-body" class="result-dialog-body"></div>
++    </dialog>
++    <dialog id="pl-detail" class="result-dialog" aria-labelledby="pl-detail-title">
++      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕动画</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭动画"><i data-icon="x"></i></button></div>
++      <div id="pl-detail-body" class="result-dialog-body"></div>
++    </dialog>
++    <div id="tip" class="tip" role="tooltip" hidden></div>
++  </main>
++  <footer class="page-footer">
++    <span>© 2026 <a href="https://github.com/haowang02/cpa-plugin-codex-candy-eval" target="_blank" rel="noopener noreferrer">CPA Codex Candy Eval</a></span>
++    <span>&thinsp;·&thinsp;<a href="https://github.com/haowang02/cpa-plugin-codex-candy-eval/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT</a></span>
++    <span>&thinsp;·&thinsp;版本 v<!--PLUGIN_VERSION--></span>
++  </footer>
++
++  <script>/*MARKDOWN_SCRIPT*/</script>
++  <script>/*CJK_FRIENDLY_SCRIPT*/</script>
++  <script>/*TEXMATH_SCRIPT*/</script>
++  <script>/*TEMML_SCRIPT*/</script>
++  
++  <script>/*CATALOG_SCRIPT*/</script>
++  <script>/*COMPONENTS_SCRIPT*/</script>
++  <script>/*CANDY_SCRIPT*/</script>
++  <script>/*FINGERPRINT_SCRIPT*/</script>
++  <script>/*MODELTRACE_SCRIPT*/</script>
++  <script>/*PELICAN_SCRIPT*/</script>
++  <script>/*INSPECTION_SCRIPT*/</script>
++  <script>/*APP_SCRIPT*/</script>
++</body>
++</html>
+diff --git a/backend/internal/codexeval/web.go b/backend/internal/codexeval/web.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/codexeval/web.go
+@@ -0,0 +1,86 @@
++package codexeval
++
++import (
++	_ "embed"
++	"encoding/json"
++	"html"
++	"strings"
++)
++
++const pluginVersion = "0.3.14"
++
++//go:embed web/ui.html
++var uiTemplate string
++
++//go:embed web/style.css
++var uiStyles string
++
++//go:embed web/theme.css
++var uiThemes string
++
++//go:embed web/vendor/markdown-it.min.js
++var markdownScript string
++
++//go:embed web/vendor/markdown-it-cjk-friendly.min.js
++var cjkFriendlyScript string
++
++//go:embed web/vendor/texmath.js
++var texmathScript string
++
++//go:embed web/vendor/temml.min.js
++var temmlScript string
++
++//go:embed web/vendor/temml.css
++var temmlStyles string
++
++//go:embed web/app.js
++var appScript string
++
++//go:embed web/catalog.js
++var catalogScript string
++
++//go:embed web/components.js
++var componentsScript string
++
++//go:embed web/candy.js
++var candyScript string
++
++//go:embed web/fingerprint.js
++var fingerprintScript string
++
++//go:embed web/modeltrace.js
++var modelTraceScript string
++
++//go:embed web/pelican.js
++var pelicanScript string
++
++//go:embed web/inspection.js
++var inspectionScript string
++
++var uiHTML = func() []byte {
++	config, _ := json.Marshal(map[string]any{"modes": fingerprintModes, "default_concurrency": fingerprintDefaultConcurrency, "max_concurrency": fingerprintMaxConcurrency})
++	fpScript := strings.Replace(fingerprintScript, `/*FINGERPRINT_CONFIG*/{}`, string(config), 1)
++	traceConfig, _ := json.Marshal(map[string]any{"requests": traceTarget, "default_concurrency": traceDefaultConcurrency, "max_concurrency": traceMaxConcurrency})
++	traceScript := strings.Replace(modelTraceScript, `/*MODELTRACE_CONFIG*/{}`, string(traceConfig), 1)
++	return []byte(strings.NewReplacer(
++		"/*APP_STYLES*/", temmlStyles+"\n"+uiThemes+"\n"+uiStyles,
++		"<!--PLUGIN_VERSION-->", pluginVersion,
++		"<!--CANDY_PROMPT-->", html.EscapeString(candyPrompt),
++		"<!--PELICAN_PROMPT-->", html.EscapeString(pelicanPrompt),
++		"<!--MODELTRACE_LICENSE-->", "<!-- ModelTrace\n"+modelTraceLicense+"-->",
++		"/*MARKDOWN_SCRIPT*/", markdownScript,
++		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
++		"/*TEXMATH_SCRIPT*/", texmathScript,
++		"/*TEMML_SCRIPT*/", temmlScript,
++		"/*CATALOG_SCRIPT*/", catalogScript,
++		"/*COMPONENTS_SCRIPT*/", componentsScript,
++		"/*CANDY_SCRIPT*/", candyScript,
++		"/*FINGERPRINT_SCRIPT*/", fpScript,
++		"/*MODELTRACE_SCRIPT*/", traceScript,
++		"/*PELICAN_SCRIPT*/", pelicanScript,
++		"/*INSPECTION_SCRIPT*/", inspectionScript,
++		"/*APP_SCRIPT*/", appScript,
++	).Replace(uiTemplate))
++}()
++
++func Page() []byte { return uiHTML }
+diff --git a/frontend/src/views/admin/CodexEvalView.vue b/frontend/src/views/admin/CodexEvalView.vue
+new file mode 100644
+--- /dev/null
++++ b/frontend/src/views/admin/CodexEvalView.vue
+@@ -0,0 +1,30 @@
++<template>
++  <AppLayout>
++    <div class="card overflow-hidden">
++      <iframe
++        :src="embeddedUrl"
++        :title="t('nav.accountEvaluation')"
++        class="block w-full border-0"
++        style="height: calc(100dvh - 160px); min-height: 600px"
++      ></iframe>
++    </div>
++  </AppLayout>
++</template>
++
++<script setup lang="ts">
++import { computed, onMounted, onUnmounted, ref } from 'vue'
++import { useI18n } from 'vue-i18n'
++import AppLayout from '@/components/layout/AppLayout.vue'
++import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
++
++const { t, locale } = useI18n()
++const pageTheme = ref<'light' | 'dark'>(detectTheme())
++// Resolve in the browser so a reverse proxy cannot discard the external port.
++const embeddedUrl = computed(() => buildEmbeddedUrl('/codex-eval', undefined, undefined, pageTheme.value, locale.value))
++let themeObserver: MutationObserver | null = null
++onMounted(() => {
++  themeObserver = new MutationObserver(() => { pageTheme.value = detectTheme() })
++  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
++})
++onUnmounted(() => { themeObserver?.disconnect() })
++</script>

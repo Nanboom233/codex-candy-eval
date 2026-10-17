@@ -1,98 +1,81 @@
-# JSON Persistence Guidelines
+# Native Persistence Guidelines
 
-> This plugin stores history in a JSON file. It does not use a database or ORM.
+## Active Sub2API storage
 
----
+Sub2API stores inspection settings in its existing PostgreSQL `settings` table.
+The four evaluation histories remain in one JSON file.
+Tasks, progress, inspection summaries, and the next run time stay in memory.
 
-## Overview
+### 1. Scope / Trigger
 
-<!--
-Document your project's database conventions here.
+Use native settings persistence for Candy inspection configuration.
+Use the existing JSON store for evaluation history only.
 
-Questions to answer:
-- What ORM/query library do you use?
-- How are migrations managed?
-- What are the naming conventions for tables/columns?
-- How do you handle transactions?
--->
+### 2. Signatures
 
-The legacy filename remains for spec-link compatibility. The storage contract lives in [state.go](../../../internal/plugin/state.go), not in a database layer.
+`SettingService.GetCodexInspectionSettings` and `UpdateCodexInspectionSettings` call native `SettingRepository.GetMultiple` and `SetMultiple`.
+Keys use `codex_eval_inspection_` plus each settings field name.
+See [Native Candy Inspection](./native-inspection.md) for fields and administrator API signatures.
 
-`statePath` defaults to `plugins/cpa-codex-candy-eval-state.json`, relative to the host working directory. `persistedState` stores four credential-ID maps: candy, fingerprint, ModelTrace, and pelican history.
+Native history owners are `backend/internal/codexeval/state.go` and `runtime.go` in the applied evaluation-core patch.
+`Initialize` selects `<native-data-directory>/codex-eval/history.json`.
+`loadState`, `saveStateLocked`, and `clearHistoryResponse` own file operations.
 
-Running tasks, configured credential metadata, and inspection tracking are not fields of this snapshot. Do not assume every in-memory map survives restart.
+### 3. Contracts
 
-Evidence: `persistedState`, `currentState`, and `loadState` in [state.go](../../../internal/plugin/state.go).
+Store each inspection setting as its JSON field value under an inspection-specific key.
+Do not add a table, direct SQL path, separate storage service, or `inspection.json`.
+Public reads clear notification secrets and return configured flags.
+Empty secret updates preserve saved values.
+Change active coordinator settings only after the repository write succeeds.
+Initial-read failure must not allow inspection with default settings.
+Keep starts blocked until a successful native settings save configures the coordinator.
 
----
+Keep history keys `results`, `fingerprints`, `modeltraces`, and `pelicans`.
+Each map uses a native account ID as a decimal string.
+Retain the latest 20 records per account and evaluation type.
+Hold `mu` during shared history access and `saveStateLocked`.
+`loadState` acquires its own lock and reads once per process.
+A missing file means no saved history.
+Other read/decode errors prevent later overwrite. A JSON `null` snapshot is invalid.
 
-## Snapshot Access and Writes
+Save all four maps together.
+Write `statePath + ".tmp"` with mode `0600`, then rename it over the destination.
+Keep this temporary file beside the destination.
+Atomic replacement does not provide an fsync durability guarantee.
+Keep memory results and expose save errors.
+A failed clear restores previous history maps. Clear does not cancel running tasks.
+Restart reloads saved history/settings without restoring tasks or the previous inspection schedule.
 
-<!-- How should queries be written? Batch operations? -->
+### 4. Validation & Error Matrix
 
-Hold the package mutex `mu` when accessing shared histories during normal execution. Call `saveStateLocked` only with that lock held.
+| Condition | Result |
+| --- | --- |
+| Missing history file | Start with empty histories |
+| Unreadable, malformed, or null history | Show the error and prevent overwrite |
+| History save fails | Retain memory results and show the error |
+| History clear save fails | Restore previous maps and return failure |
+| Settings read fails | Return the repository error |
+| Settings validation fails | Reject before writing |
+| Settings write fails | Return the error without changing active settings |
 
-`loadState` acquires its own lock and reads once per process. A missing file means no saved history. Other read or decode errors set `stateLoadError` and `storageError`.
+### 5. Good / Base / Bad Cases
 
-`saveStateLocked` serializes all four histories together. It writes `statePath + ".tmp"` with mode `0600`, then renames that file over `statePath`.
+Good: blank notification secret inputs retain existing native settings values.
 
-The temporary file sits beside the destination. Preserve this placement and the read-error guard. Atomic replacement is not a database transaction or an fsync durability guarantee.
+Base: absent history starts empty. Absent inspection keys use defaults.
 
-Existing runner pattern from [runCandy](../../../internal/plugin/candy.go):
+Bad: a null history file must not become an empty snapshot after the next result.
 
-```go
-mu.Lock()
-candyResults[id] = appendRecent(candyResults[id], r)
-candyRunning[id].Done++
-_ = saveStateLocked()
-mu.Unlock()
-```
+### 6. Tests Required
 
-Runner save failures update `storageError`. They do not undo completed evaluations. History removal must restore the previous maps when saving fails.
+Use existing native evaluation persistence tests for load protection, latest-20 retention, saves, and clear rollback.
+Use `tests/backend/internal/service/codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
+Use the disposable native fixture to check PostgreSQL rows and restart loading.
+Tests use temporary files and synthetic data. Do not delete real history or settings.
 
-Evidence: `saveStateLocked` and `clearHistoryResponse` in [state.go](../../../internal/plugin/state.go).
+### 7. Wrong vs Correct
 
----
+Wrong: put inspection credentials in the history snapshot because both features share the evaluation runtime.
 
-## Snapshot Compatibility
-
-<!-- How to create and run migrations -->
-
-There is no migration runner. JSON decoding accepts older snapshots that omit newer history maps. Keep existing JSON field names compatible unless a separate migration is planned.
-
-`loadState` replaces only maps present in the snapshot, then trims each history. A JSON `null` snapshot is invalid and must not trigger replacement of the original file.
-
-Do not treat the plugin registration `schemaVersion` as a persisted-file migration number. It appears in host registration, not in `persistedState`.
-
-Evidence:
-
-- [Load and save tests](../../../internal/plugin/plugin_test.go): `TestStatePersistence` and `TestUnreadableStateIsPreserved`.
-- [Host registration](../../../internal/plugin/plugin.go): `schemaVersion`.
-
----
-
-## Field Names and History Limits
-
-<!-- Table names, column names, index names -->
-
-Keep the JSON keys `results`, `fingerprints`, `modeltraces`, and `pelicans`. Each map uses the CPA credential ID as its key.
-
-Use `appendRecent` to append records. Use `keepRecent` when you restore snapshots. `historyLimit` retains the latest 20 records per credential and test type.
-
-Do not key saved results by display name, email, or a masked API-key preview. Credential identity and display metadata have separate roles.
-
-Evidence: [history helpers](../../../internal/plugin/state.go), [credential types](../../../internal/plugin/credentials.go), and `TestRunAllKeepsRecentHistory` in [plugin tests](../../../internal/plugin/plugin_test.go).
-
----
-
-## Common Mistakes
-
-<!-- Database-related mistakes your team has made -->
-
-- Do not overwrite malformed or unreadable history with a new empty snapshot. `stateLoadError` deliberately blocks saves.
-- Do not clear running-task maps when removing saved history. Existing tests require in-flight work to remain intact.
-- Do not report history removal as successful when persistence failed. Restore the previous histories. Return an error.
-- Do not introduce SQL, an ORM, or a migration dependency for this file-backed store without a separate task.
-- Do not create deployment state files or change production history during tests. Use `setupTest` and its temporary `statePath`.
-
-Verification: `TestStatePersistence`, `TestUnreadableStateIsPreserved`, and `TestFingerprintValidationAndStorageFailure` in [plugin tests](../../../internal/plugin/plugin_test.go) and [fingerprint tests](../../../internal/plugin/fingerprint_test.go).
+Correct: retain history in JSON and save inspection settings through the native settings service.

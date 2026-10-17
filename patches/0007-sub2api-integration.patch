@@ -1,0 +1,97 @@
+--- a/backend/internal/server/router.go
++++ b/backend/internal/server/router.go
+@@ -113,6 +113,10 @@
+ 	cfg *config.Config,
+ 	redisClient *redis.Client,
+ ) {
++	h.Admin.Account.InitializeCodexEval(cfg.Pricing.DataDir)
++	h.Admin.Setting.InitializeCodexInspection(h.Admin.Account)
++	r.GET("/codex-eval", h.Admin.Account.CodexEvalPage)
++	r.GET("/codex-eval/", h.Admin.Account.CodexEvalPage)
+ 	// 通用路由（健康检查、状态等）
+ 	routes.RegisterCommonRoutes(r)
+ 
+--- a/backend/internal/server/routes/admin.go
++++ b/backend/internal/server/routes/admin.go
+@@ -45,6 +45,15 @@
+ 
+ 		// 账号管理
+ 		registerAccountRoutes(admin, h, stepUpAuth)
++		eval := admin.Group("/codex-eval")
++		eval.GET("/state", h.Admin.Account.CodexEvalState)
++		eval.POST("/start", h.Admin.Account.CodexEvalStart)
++		eval.POST("/cancel", h.Admin.Account.CodexEvalCancel)
++		eval.GET("/records/:type/:account_id/:record_id", h.Admin.Account.CodexEvalRecord)
++		eval.POST("/clear-history", h.Admin.Account.CodexEvalClear)
++		eval.GET("/inspection/state", h.Admin.Account.CodexInspectionState)
++		eval.POST("/inspection/start", h.Admin.Account.CodexInspectionStart)
++		eval.POST("/inspection/stop", h.Admin.Account.CodexInspectionStop)
+ 
+ 		// 公告管理
+ 		registerAnnouncementRoutes(admin, h)
+@@ -391,6 +400,8 @@
+ 		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
+ 		accounts.DELETE("/:id", h.Admin.Account.Delete)
+ 		accounts.POST("/:id/test", h.Admin.Account.Test)
++		accounts.POST("/:id/codex-eval", h.Admin.Account.CodexEval)
++		accounts.GET("/:id/codex-eval/models", h.Admin.Account.CodexEvalModels)
+ 		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
+ 		accounts.POST("/:id/refresh", h.Admin.Account.Refresh)
+ 		accounts.POST("/:id/apply-oauth-credentials", h.Admin.Account.ApplyOAuthCredentials)
+@@ -570,0 +582,2 @@
++		adminSettings.GET("/codex-eval-inspection", h.Admin.Setting.GetCodexInspectionSettings)
++		adminSettings.PUT("/codex-eval-inspection", h.Admin.Setting.UpdateCodexInspectionSettings)
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -18,0 +19 @@
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
+@@ -185,0 +187 @@
++	codexeval.StopInspection()
+--- a/backend/internal/web/embed_on.go
++++ b/backend/internal/web/embed_on.go
+@@ -353,6 +353,9 @@
+ }
+ 
+ func shouldBypassEmbeddedFrontend(path string) bool {
++	if path == "/codex-eval" || path == "/codex-eval/" {
++		return true
++	}
+ 	trimmed := strings.TrimSpace(path)
+ 	return strings.HasPrefix(trimmed, "/api/") ||
+ 		strings.HasPrefix(trimmed, "/v1/") ||
+--- a/frontend/src/components/layout/AppSidebar.vue
++++ b/frontend/src/components/layout/AppSidebar.vue
+@@ -479,0 +480,4 @@
++const EvaluationIcon = {
++  render: () => h(Icon, { name: 'beaker' })
++}
++
+@@ -795,0 +800 @@
++    { path: '/admin/codex-eval', label: t('nav.accountEvaluation'), icon: EvaluationIcon },
+--- a/frontend/src/router/index.ts
++++ b/frontend/src/router/index.ts
+@@ -525,0 +526,11 @@
++    }
++  },
++  {
++    path: '/admin/codex-eval',
++    name: 'AdminCodexEval',
++    component: () => import('@/views/admin/CodexEvalView.vue'),
++    meta: {
++      requiresAuth: true,
++      requiresAdmin: true,
++      title: 'Account Evaluation',
++      titleKey: 'nav.accountEvaluation'
+--- a/frontend/src/utils/embedded-url.ts
++++ b/frontend/src/utils/embedded-url.ts
+@@ -25 +25 @@
+-    const url = new URL(baseUrl)
++    const url = new URL(baseUrl, typeof window !== 'undefined' ? window.location.origin : undefined)
+--- a/frontend/src/i18n/locales/en/common.ts
++++ b/frontend/src/i18n/locales/en/common.ts
+@@ -184,0 +185 @@
++    accountEvaluation: 'Account Evaluation',
+--- a/frontend/src/i18n/locales/zh/common.ts
++++ b/frontend/src/i18n/locales/zh/common.ts
+@@ -184,0 +185 @@
++    accountEvaluation: '账户评估',

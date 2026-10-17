@@ -1,97 +1,91 @@
 # Directory Structure
 
-> Place code beside the package that owns its behavior.
+> Keep production changes in functional patches and all tests under `tests/`.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's backend directory structure here.
+Active integration lives in a numbered production patch series under `patches/`.
+The build applies `patches/series` to an existing original Sub2API source tree and uses that tree's Go module.
+This repository has no root Go module or shared-library entry point.
+The user package replaces the server binary without compilation on the installation host.
 
-Questions to answer:
-- How are modules/packages organized?
-- Where does business logic live?
-- Where are API endpoints defined?
-- How are utilities and helpers organized?
--->
-
-This repository contains one Go module: `cpa-codex-candy-eval`. It builds a CPA shared-library plugin, not a standalone HTTP server.
-
-The `main` package owns the C ABI bridge. The `plugin` package owns host dispatch, management responses, evaluation runners, shared state, and embedded assets.
-
-Evidence: [go.mod](../../../go.mod), [C ABI bridge](../../../cmd/cpa-codex-candy-eval/cabi.go), and [plugin entry point](../../../internal/plugin/plugin.go).
+Evidence: [native build](../../../scripts/build.py), [patch order](../../../patches/series), and [installer](../../../scripts/install.py).
 
 ---
 
 ## Directory Layout
 
-<!-- Replace with your actual structure -->
-
 ```text
-cmd/cpa-codex-candy-eval/  Main package and cshared C ABI bridge
-internal/plugin/         Go handlers, runners, algorithms, and adjacent tests
-internal/plugin/web/     Embedded HTML, plain JavaScript, and CSS
-internal/plugin/web/vendor/  Vendored Markdown and math renderers
-internal/plugin/data/    Embedded probes and attribution baselines
-scripts/                Deployment helper and Node UI checks
-docs/                   Usage guides and README images
-examples/               Scheduled inspection script
-.github/workflows/      Release checks, shared-library builds, and packaging
-dist/                   Ignored build artifacts
-.trellis/spec/          Project coding guidelines
+patches/                 Numbered production patches and explicit series order
+scripts/build.py         Apply patches, check, build, and package
+scripts/install.py       Linux binary replacement and failure restoration
+tests/backend/           Go tests and test-only data, matching upstream package paths
+tests/installer/         Installer checks and native fixture
+tests/ui/                Page checks against the patched source tree
+licenses/                License texts and sole third-party notice source
+dist/build/              Fixed ignored executable and installation archive
+README.md AGENTS.md LICENSE  Project documentation and license
+.github/                 Release workflow
+.trellis/                Workflow, specifications, tasks, and session records
+.agents/ .codex/ .claude/ .devin/  Tool integration and skills
 ```
 
-The root installers are `install.sh` and `install.ps1`. Deployment settings stay in ignored `.env`, not in source or specs.
+The packaged installer uses the adjacent prebuilt binary and Docker CLI.
+Users select a running container, retain its backup and open 账户评估 in the native administrator sidebar.
+Builds use the existing original Sub2API tree and installed dependencies in a standard temporary workspace, rebuilding the patched native frontend before embedding it.
+Only the executable, installer and necessary license texts enter the archive.
+
+Private configuration and reusable dependency caches remain outside source and package inputs.
+Keep user instructions in `README.md`. Do not create a separate `docs/` tree or source overlay.
+
+Apply the production patches in this order:
+
+```text
+0001-evaluation-core.patch
+0002-evaluation-data.patch
+0003-vendor-assets.patch
+0004-admin-channel.patch
+0005-inspection.patch
+0006-evaluation-ui.patch
+0007-sub2api-integration.patch
+```
+
+Keep test source and test-only data out of production patches.
+For checks, copy `tests/backend/` into the temporary tree's `backend/` directory to preserve package-private access.
 
 Evidence: [repository layout and private configuration](../../../AGENTS.md).
 
 ---
 
-## Module Organization
+## Native Module Organization
 
-<!-- How should new features/modules be organized? -->
-
-- Keep management registration and routing in `plugin.go`.
-- Keep credential inventory, model execution, run scheduling, and persistence in their existing owner files.
-- Place test-specific request types, results, and runners beside that test's handler.
-- Keep pure attribution algorithms separate from host calls and worker orchestration.
-- Add Go tests beside the implementation with the `_test.go` suffix.
-- Keep browser logic in `web/`. The Go entry point embeds and assembles these assets.
-- Inspect the CPA and management-console source before changing their contracts. Their sibling paths appear in `AGENTS.md`.
+- Keep evaluation tasks and account admission in `codexeval/runtime.go`.
+- Keep each evaluation's request types, results, runner, and algorithm in its existing package.
+- Keep corresponding Go tests under `tests/backend/` with the same package path.
+- Keep history persistence in `codexeval/state.go`.
+- Keep inspection scheduling and notifications in `codexeval/inspection*.go`.
+- Keep native settings persistence and upstream account sending in `internal/service/` additions.
+- Keep administrator HTTP adaptation in `internal/handler/admin/` additions.
+- Keep page logic in `codexeval/web/` and assembly in `codexeval/web.go`.
+- Keep the iframe view with the evaluation UI patch and upstream edits with the integration patch.
 
 Do not create a router framework, service hierarchy, or new package solely to match a generic architecture template.
 
-Examples: [shared run scheduling](../../../internal/plugin/runs.go), [state ownership](../../../internal/plugin/state.go), [fingerprint algorithms](../../../internal/plugin/fingerprint_algorithm.go), and [ModelTrace orchestration](../../../internal/plugin/modeltrace.go).
+Examples: [evaluation core](../../../patches/0001-evaluation-core.patch) and [native inspection](../../../patches/0005-inspection.patch).
 
 ---
 
-## Naming Conventions
+## Native Examples
 
-<!-- File and folder naming rules -->
-
-Use the existing `package plugin` for internal behavior. Use descriptive topic filenames such as `credentials.go`, `model.go`, and `inspection.go`.
-
-Follow adjacent names: `candyRunRequest`, `candyResult`, `candyRunResponse`, and `runCandy`. Shared helpers include `startRuns`, `executeModel`, and `appendRecent`.
-
-Export only symbols needed across package boundaries, such as `HandleMethod`, `SetHostCall`, `Quiesce`, and `ABIVersion`.
-
-Evidence: [candy handler and runner](../../../internal/plugin/candy.go) and [plugin exports](../../../internal/plugin/plugin.go).
-
----
-
-## Examples
-
-<!-- Link to well-organized modules as examples -->
-
-| Work | Owner | Related verification |
+| Work | Owner | Existing verification |
 | --- | --- | --- |
-| Add or change a management route | `plugin.go` registration and `handleManagement` | `TestRegisteredRoutesAreHandled` in `plugin_test.go` |
-| Change candy run behavior | `candy.go` and shared `runs.go` | `plugin_test.go` and `credentials_test.go` |
-| Change persisted history | `state.go` | `TestStatePersistence` and `TestUnreadableStateIsPreserved` |
-| Change embedded page assembly | `plugin.go` and `web/` | `TestScriptsInlineSafely` and `scripts/test-ui.cjs` |
-| Change C buffer ownership | `cmd/cpa-codex-candy-eval/cabi.go` | Inspect the host ABI and use the cshared build flags |
+| Change tasks, cancellation, or history | `runtime.go` and `state.go` | `runtime_test.go` |
+| Change automatic Candy inspection | `inspection*.go` | `inspection_test.go` |
+| Change native account transport | `account_codex_eval_service.go` | Sender and lifetime tests under `tests/backend/internal/service/` |
+| Change settings storage | `codex_inspection_settings.go` | Settings tests under `tests/backend/internal/service/` |
+| Change embedded page behavior | `web.go` and `web/` | `tests/ui/sub2api-dropdowns.cjs` |
 
-References: [plugin tests](../../../internal/plugin/plugin_test.go), [credential tests](../../../internal/plugin/credentials_test.go), and [UI checks](../../../scripts/test-ui.cjs).
-
-When adding an embedded asset, update its Go embed declaration and page assembly. The plugin embeds browser files instead of using a separate development server.
+When adding an embedded asset, update its Go embed declaration and page assembly.
+Keep source, tests, and package ownership aligned with [binary delivery](./minimal-linux-delivery.md).

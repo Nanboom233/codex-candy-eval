@@ -1,0 +1,163 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/codexeval"
+)
+
+type codexInspectionSettingsRepo struct {
+	SettingRepository
+	values   map[string]string
+	fail     bool
+	readFail bool
+	keys     []string
+	writes   int
+}
+
+func (r *codexInspectionSettingsRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	r.keys = append([]string{}, keys...)
+	if r.readFail {
+		return nil, errors.New("fixture database read failure")
+	}
+	out := map[string]string{}
+	for _, key := range keys {
+		if value, ok := r.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+func (r *codexInspectionSettingsRepo) SetMultiple(_ context.Context, values map[string]string) error {
+	r.writes++
+	if r.fail {
+		return errors.New("fixture database failure")
+	}
+	for key, value := range values {
+		r.values[key] = value
+	}
+	return nil
+}
+
+func TestCodexInspectionSettingsLoadFailureBlocksStartUntilSaved(t *testing.T) {
+	repo := &codexInspectionSettingsRepo{values: map[string]string{}, readFail: true}
+	settings := &SettingService{settingRepo: repo}
+	codexeval.InitializeInspection(codexeval.InspectionHooks{
+		Load: settings.GetCodexInspectionSettings,
+		List: func(context.Context, codexeval.InspectionSettings) ([]codexeval.InspectionAccount, error) {
+			return []codexeval.InspectionAccount{}, nil
+		},
+	})
+	defer codexeval.StopInspection()
+	defer codexeval.CancelInspection()
+	if err := codexeval.StartInspection(); err == nil {
+		t.Fatal("inspection started before saved settings loaded")
+	}
+	repo.readFail = false
+	next := codexeval.DefaultInspectionSettings()
+	next.GroupID = 101
+	if _, err := settings.UpdateCodexInspectionSettings(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	if err := codexeval.StartInspection(); err != nil {
+		t.Fatalf("inspection did not start after settings were saved: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for codexeval.CurrentInspectionState().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if state := codexeval.CurrentInspectionState(); state.Running || state.Phase != "completed" {
+		t.Fatalf("inspection did not complete: %+v", state)
+	}
+}
+
+func TestCodexInspectionSettingsPersistence(t *testing.T) {
+	ctx := context.Background()
+	repo := &codexInspectionSettingsRepo{values: map[string]string{}}
+	s := &SettingService{settingRepo: repo}
+	settings, err := s.GetCodexInspectionSettings(ctx)
+	if err != nil || settings.Enabled || settings.MaxTestsPerAccount != 3 || settings.MinWaitMinutes != 15 || settings.MaxWaitMinutes != 35 || settings.NormalPriority != 10 {
+		t.Fatalf("wrong defaults: %+v %v", settings, err)
+	}
+	settings.Enabled = true
+	settings.GroupID = 202
+	settings.AccountType, settings.AccountPlan, settings.EnabledOnly = "oauth", "Pro ALL", true
+	settings.NtfyPassword = "fixture-secret"
+	settings.BarkURL = "https://fixture.invalid/private-key"
+	if _, err = s.UpdateCodexInspectionSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh service reads the same native setting rows.
+	restarted := &SettingService{settingRepo: repo}
+	saved, err := restarted.GetCodexInspectionSettings(ctx)
+	if err != nil || !saved.Enabled || saved.GroupID != 202 || saved.AccountType != "oauth" || saved.AccountPlan != "Pro ALL" || !saved.EnabledOnly || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
+		t.Fatalf("restart lost settings: %+v %v", saved.Public(), err)
+	}
+	public := saved.Public()
+	public.Model = "literal-model"
+	if _, err = s.UpdateCodexInspectionSettings(ctx, public); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = s.GetCodexInspectionSettings(ctx)
+	if err != nil || saved.Model != "literal-model" || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
+		t.Fatal("blank update lost secret")
+	}
+	repo.fail = true
+	public.Model = "unsaved"
+	if _, err = s.UpdateCodexInspectionSettings(ctx, public); err == nil {
+		t.Fatal("database failure hidden")
+	}
+	saved, _ = s.GetCodexInspectionSettings(ctx)
+	if saved.Model != "literal-model" {
+		t.Fatal("failed save changed settings")
+	}
+	invalid := codexeval.DefaultInspectionSettings()
+	invalid.MinWaitMinutes = 36
+	if _, err = s.UpdateCodexInspectionSettings(ctx, invalid); err == nil {
+		t.Fatal("invalid range accepted")
+	}
+}
+
+func TestCodexInspectionSettingsPriorityReadAndWrite(t *testing.T) {
+	ctx := context.Background()
+	for _, stored := range []string{"0", "-3"} {
+		t.Run(stored, func(t *testing.T) {
+			repo := &codexInspectionSettingsRepo{values: map[string]string{
+				codexInspectionSettingPrefix + "normal_priority":   stored,
+				codexInspectionSettingPrefix + "degraded_priority": "5",
+				codexInspectionSettingPrefix + "include_patterns":  "invalid old value",
+				codexInspectionSettingPrefix + "exclude_patterns":  `['unused']`,
+			}}
+			s := &SettingService{settingRepo: repo}
+			settings, err := s.GetCodexInspectionSettings(ctx)
+			if err != nil || settings.NormalPriority != 10 || settings.DegradedPriority != 5 || settings.Validate() == nil {
+				t.Fatalf("old priority did not load the new default: %+v %v", settings.Public(), err)
+			}
+			if repo.writes != 0 || repo.values[codexInspectionSettingPrefix+"normal_priority"] != stored {
+				t.Fatal("settings read wrote the database")
+			}
+			for _, key := range repo.keys {
+				if key == codexInspectionSettingPrefix+"include_patterns" || key == codexInspectionSettingPrefix+"exclude_patterns" {
+					t.Fatal("removed filters are still read")
+				}
+			}
+			settings.NormalPriority = 0
+			if _, err := s.UpdateCodexInspectionSettings(ctx, settings); err == nil || repo.writes != 0 {
+				t.Fatal("new nonpositive priority was accepted or written")
+			}
+			settings.NormalPriority = 1
+			if _, err := s.UpdateCodexInspectionSettings(ctx, settings); err != nil {
+				t.Fatal(err)
+			}
+			if repo.writes != 1 || repo.values[codexInspectionSettingPrefix+"normal_priority"] != "1" {
+				t.Fatal("valid explicit save did not write the selected priority")
+			}
+			if repo.values[codexInspectionSettingPrefix+"include_patterns"] != "invalid old value" || repo.values[codexInspectionSettingPrefix+"exclude_patterns"] != `['unused']` {
+				t.Fatal("save still writes removed filters")
+			}
+		})
+	}
+}
