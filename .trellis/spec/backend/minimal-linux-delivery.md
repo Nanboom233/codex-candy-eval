@@ -58,6 +58,9 @@ Keep installation, manual rollback, and history instructions in `README.md`. The
 Development checks reuse one Docker container named `sub2api-codex-eval-test`.
 Its PostgreSQL and Redis test dependencies run inside the same container.
 Reuse this container for later checks instead of creating random fixture containers.
+Keep this container and its fixture data after checks and task completion.
+Routine cleanup must retain it. Stop it when needed instead of deleting it.
+If absent, create only this fixed-name container when the next runtime check needs it.
 Keep this development layout outside the user package.
 Remove only identified earlier task containers. Preserve unrelated containers, volumes, images, and caches.
 
