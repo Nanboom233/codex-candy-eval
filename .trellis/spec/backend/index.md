@@ -5,7 +5,7 @@
 Active delivery targets Sub2API v0.2.17 Linux/amd64 after the user's approved version update.
 Use the existing original Sub2API source and this repository's native evaluation module.
 Current production code lives in numbered patches under `patches/`. All tests live under `tests/`.
-Installation uses a prebuilt binary and a simple replacement script.
+Installation uses one self-extracting Go executable with an embedded server and numbered container selection.
 
 ## Active guidelines
 

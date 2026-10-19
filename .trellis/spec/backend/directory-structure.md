@@ -11,7 +11,7 @@ The build applies `patches/series` to an existing original Sub2API source tree a
 This repository has no root Go module or shared-library entry point.
 The user package replaces the server binary without compilation on the installation host.
 
-Evidence: [native build](../../../scripts/build.py), [patch order](../../../patches/series), and [installer](../../../scripts/install.py).
+Evidence: [native build](../../../scripts/build.py), [patch order](../../../patches/series), and [installer source](../../../scripts/installer/).
 
 ---
 
@@ -20,22 +20,24 @@ Evidence: [native build](../../../scripts/build.py), [patch order](../../../patc
 ```text
 patches/                 Numbered production patches and explicit series order
 scripts/build.py         Apply patches, check, build, and package
-scripts/install.py       Linux binary replacement and failure restoration
+scripts/installer/       Go self-extracting installation and failure restoration
 tests/backend/           Go tests and test-only data, matching upstream package paths
 tests/installer/         Installer checks and native fixture
 tests/ui/                Page checks against the patched source tree
 licenses/                License texts and sole third-party notice source
-dist/build/              Fixed ignored executable and installation archive
+dist/build/              Fixed ignored server and installer executables
 README.md AGENTS.md LICENSE  Project documentation and license
 .github/                 Release workflow
 .trellis/                Workflow, specifications, tasks, and session records
 .agents/ .codex/ .claude/ .devin/  Tool integration and skills
 ```
 
-The packaged installer uses the adjacent prebuilt binary and Docker CLI.
+The self-extracting installer uses its embedded server and Docker CLI.
 Users select a running container, retain its backup and open 账户评估 in the native administrator sidebar.
 Builds use the existing original Sub2API tree and installed dependencies in a standard temporary workspace, rebuilding the patched native frontend before embedding it.
-Only the executable, installer and necessary license texts enter the archive.
+Only the compressed server and required license texts enter the installer payload.
+The build assembles the installer in a temporary Go module. Installer checks copy `tests/installer/` Go tests into that module.
+Keep installer tests out of production source and keep the raw server as a local build output.
 
 Private configuration and reusable dependency caches remain outside source and package inputs.
 Keep user instructions in `README.md`. Do not create a separate `docs/` tree or source overlay.

@@ -11,15 +11,18 @@ const settings = () => ({ enabled: false, group_id: 101, account_type: "all", ac
   model: "saved/literal", effort: "low", max_tests_per_account: 3,
   min_wait_minutes: 15, max_wait_minutes: 35,
   adjust_priority: false, normal_priority: 10, degraded_priority: 99,
+  control_models: false, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"],
   ntfy_server: "https://ntfy.sh", ntfy_topic: "", ntfy_username: "", ntfy_password: "", bark_url: "",
   ntfy_password_configured: true, bark_url_configured: false });
 const idle = { phase: "idle", enabled: false, running: false, results: [] };
 const emptyState = () => ({ active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function harness(preferences = {}) {
+function harness(preferences = {}, { initializePage = false, api } = {}) {
   const dom = new JSDOM(read("ui.html"), { url: "http://127.0.0.1:60198/codex-eval", runScripts: "outside-only" });
   const w = dom.window;
+  w.matchMedia = () => ({ matches: false, addEventListener() {} });
+  w.fixtureAPI = api;
   w.localStorage.setItem("sub2api-codex-eval.prefs", JSON.stringify({ model: "saved/literal" }));
   for (const [key, value] of Object.entries(preferences)) w.localStorage.setItem(key, value);
   w.eval([read("vendor/markdown-it.min.js"), read("vendor/markdown-it-cjk-friendly.min.js"),
@@ -27,9 +30,12 @@ function harness(preferences = {}) {
     read("candy.js"), read("fingerprint.js").replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({ modes: [
       { id: "quick", name: "快速", cells: 1, samples_per_cell: 1 }], default_concurrency: 1, max_concurrency: 32 })),
     read("modeltrace.js").replace('/*MODELTRACE_CONFIG*/{}', JSON.stringify({ requests: 1, default_concurrency: 1, max_concurrency: 32 })),
-    read("pelican.js"), read("inspection.js"), read("app.js").split("// Events and initialization.")[0], `
-    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializeModelTrace(); initializePelican(); initializeInspection();
+    read("pelican.js"), read("inspection.js"), initializePage
+      ? read("app.js").replace("// Events and initialization.", "api = window.fixtureAPI;\n// Events and initialization.")
+      : read("app.js").split("// Events and initialization.")[0], initializePage ? "" : `
+    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializeModelTrace(); initializePelican(); initializeInspection();`, `
     window.test = {fillModels,fillInspectionSettings,loadInspectionSettings,saveInspectionSettings,markInspectionEdit,
+      inspectionRemovedModels,setInspectionRemovedModels,
       updateModelPicker,renderInspectionState,validateInspectionFields,loadInspectionState,
       refreshCatalog,resetCatalogCache,stateCredentials,visibleCredentials,targetsFor,fillCredentialTypes,fillPlanFilter,renderCandyRow,renderList,render,
       batchCredentials,runCandy,runFingerprint,runModelTrace,runPelican,candyTip,showLogin,load,
@@ -76,7 +82,39 @@ function groupFixture() {
 }
 
 (async () => {
-  let ctx = harness();
+  const entryFixture = groupFixture();
+  const initialSettings = deferred(), initialGroups = deferred();
+  let settingsReads = 0;
+  let ctx = harness({ auth_token: "synthetic-session", "sub2api-codex-eval.prefs.tab": JSON.stringify("settings") }, {
+    initializePage: true,
+    async api(url) {
+      if (url.includes("/settings/")) { settingsReads++; return initialSettings.promise; }
+      if (url.includes("/groups/all")) { await initialGroups.promise; }
+      return entryFixture.api(url);
+    },
+  });
+  try {
+    await tick();
+    assert.equal(ctx.$("settings-panel").hidden, false);
+    initialSettings.resolve({ ...settings(), group_id: 202 });
+    await tick();
+    initialGroups.resolve();
+    await tick();
+    await tick();
+    for (const [tab, prefix] of [["candy", ""], ["fingerprint", "fp-"], ["modeltrace", "mt-"], ["pelican", "pl-"]]) {
+      ctx.$("tab-" + tab).click();
+      assert.equal(ctx.$(tab + "-panel").hidden, false);
+      assert.deepEqual([...ctx.$(prefix + "group").options].map((option) => option.textContent), ["A", "B"]);
+      assert.equal(ctx.$(prefix + "group").value, "202");
+      assert.deepEqual([...ctx.$(prefix + "rows").querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)).sort((a, b) => a - b), [22, 33, 55, 66, 77]);
+    }
+    assert.equal(settingsReads, 1, "Startup must finish one settings read before loading the catalog");
+    ctx.$("tab-settings").click();
+    await tick();
+    assert.equal(settingsReads, 2, "Later Settings entry must still refresh native settings");
+  } finally { ctx.close(); }
+
+  ctx = harness();
   try {
     ctx.h.setModels(["provider/raw", "gpt-6.1-sol"]);
     ctx.h.fillModels();
@@ -143,6 +181,7 @@ function groupFixture() {
     });
     await ctx.h.loadInspectionSettings();
     const form = ctx.$("inspection-settings");
+    ctx.h.setInspectionRemovedModels(["saved/absent-model"]);
     for (const [name, value] of [["ntfy_topic", "saved-topic"], ["ntfy_password", "fixture-secret"]]) {
       const field = form.elements.namedItem(name);
       field.value = value;
@@ -153,15 +192,19 @@ function groupFixture() {
     const wait = form.elements.namedItem("min_wait_minutes");
     wait.value = "22";
     wait.dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
+    ctx.h.setInspectionRemovedModels(["newer/absent-model"]);
     saveResponse.resolve({ ...persisted });
     await tick();
     assert.equal(wait.value, "22", "A save response must preserve a later edit to another field");
+    assert.deepEqual([...persisted.degraded_remove_models], ["saved/absent-model"]);
+    assert.deepEqual([...ctx.h.inspectionRemovedModels()], ["newer/absent-model"], "A save must preserve newer model-list edits");
     assert.equal(form.elements.namedItem("ntfy_password").value, "", "A saved secret must clear even when another field changes");
     assert.equal(ctx.$("inspection-save-status").textContent, "");
     persisted.ntfy_topic = "saved-in-another-session";
     await ctx.h.loadInspectionSettings();
     assert.equal(form.elements.namedItem("ntfy_topic").value, persisted.ntfy_topic, "A submitted field must no longer remain dirty");
     assert.equal(wait.value, "22");
+    assert.deepEqual([...ctx.h.inspectionRemovedModels()], ["newer/absent-model"], "A reread must preserve unsaved model-list edits");
   } finally { ctx.close(); }
 
   ctx = harness();
@@ -316,10 +359,47 @@ function groupFixture() {
     const enabled = ctx.$("inspection-enabled");
     const fields = ctx.$("inspection-auto-fields");
     assert.equal(fields.hidden, true);
-    for (const input of [enabled, form.elements.namedItem("adjust_priority")]) {
+    for (const input of [enabled, form.elements.namedItem("adjust_priority"), form.elements.namedItem("control_models")]) {
       assert.ok(input.getAttribute("aria-label"));
       assert.equal(input.closest("label").textContent.trim(), "", "Header switches must have no visible captions");
     }
+    const modelSwitch = form.elements.namedItem("control_models"), modelFields = ctx.$("inspection-model-fields");
+    assert.equal(modelFields.hidden, true);
+    assert.equal(modelSwitch.closest("section").previousElementSibling.querySelector("h2").textContent, "优先级");
+    assert.equal(modelFields.querySelectorAll("small,[title]").length, 0);
+    assert.deepEqual([...ctx.$("inspection-model-tags").querySelectorAll(".model-tag > span")].map((node) => node.textContent), settings().degraded_remove_models);
+    modelSwitch.checked = true;
+    modelSwitch.dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(modelFields.hidden, false);
+    assert.equal(fields.hidden, true, "Model control is independent from automatic scheduling");
+    ctx.h.setModels(["catalog/extra", "gpt-6.1-sol"]);
+    ctx.h.fillModels();
+    ctx.$("inspection-model-trigger").click();
+    assert.equal(ctx.$("inspection-model-dropdown").hidden, false);
+    assert.equal(ctx.$("inspection-model-trigger").getAttribute("aria-expanded"), "true");
+    assert.ok(modelFields.querySelector('[data-inspection-model="gpt-6-astra"]'), "Saved models absent from the catalog remain options");
+    ctx.$("inspection-model-search").value = "catalog";
+    ctx.$("inspection-model-search").dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
+    assert.equal(ctx.$("inspection-model-options").children.length, 1);
+    ctx.$("inspection-model-options").firstElementChild.click();
+    assert.ok(ctx.h.inspectionRemovedModels().includes("catalog/extra"));
+    modelFields.querySelector('[data-remove-model="catalog/extra"]').click();
+    assert.ok(!ctx.h.inspectionRemovedModels().includes("catalog/extra"));
+    ctx.$("inspection-model-search").dispatchEvent(new ctx.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert.equal(ctx.$("inspection-model-dropdown").hidden, true);
+    assert.equal(ctx.w.document.activeElement, ctx.$("inspection-model-trigger"));
+    ctx.$("inspection-model-trigger").click();
+    ctx.$("inspection-save-status").click();
+    assert.equal(ctx.$("inspection-model-dropdown").hidden, true);
+    ctx.h.setModels([]);
+    ctx.h.fillModels();
+    ctx.$("inspection-model-custom").value = " custom/absent ";
+    ctx.$("inspection-model-custom").dispatchEvent(new ctx.w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    assert.ok(ctx.h.inspectionRemovedModels().includes("custom/absent"), "An empty catalog permits custom models");
+    assert.equal(ctx.$("inspection-model-custom").value, "");
+    modelSwitch.checked = false;
+    modelSwitch.dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(modelFields.hidden, true);
     for (const [id, panel] of [["inspection-start", "settings"], ["inspection-stop", "settings"], ["inspection-status", "candy"]]) {
       assert.equal(fields.contains(ctx.$(id)), false, id + " must remain outside collapsed configuration");
       assert.equal(ctx.$(panel + "-panel").contains(ctx.$(id)), true, id + " belongs to " + panel);
@@ -341,6 +421,8 @@ function groupFixture() {
     assert.equal(saved.min_wait_minutes, 22);
     assert.equal(saved.max_wait_minutes, 31);
     assert.equal(saved.max_tests_per_account, 2);
+    assert.equal(saved.control_models, false);
+    assert.deepEqual([...saved.degraded_remove_models], [...settings().degraded_remove_models, "custom/absent"]);
     assert.equal(fields.hidden, true);
     assert.equal(ctx.$("inspection-start").disabled, false);
     ctx.$("inspection-start").click();

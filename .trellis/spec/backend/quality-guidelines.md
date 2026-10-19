@@ -25,7 +25,10 @@ Report actual failures, skipped checks, and execution limits.
 Use `tests/ui/sub2api-dropdowns.cjs` for existing native page assertions.
 Use `tests/installer/native_inspection_fixture.py` with the retained `sub2api-codex-eval-test` container for approved runtime checks.
 Its support files are `native_fixture_start.sh` and `native_fixture_supplier.py` in the same directory.
-Use `tests/installer/test_native_version.py` for installer version behavior.
+Use [the focused Go installer tests](../../../tests/installer/installer_test.go) for self-extraction and the Docker transaction.
+Run these tests in the build's temporary host-platform installer module. Keep Linux/amd64 release flags separate.
+Reuse the existing fake-Docker and local HTTP harness for changed installer behavior.
+Do not overwrite the retained container's `/app/sub2api` fixture launcher for installer checks.
 Do not create another suite for retired interfaces.
 
 Preserve native administrator authentication, account transport, cancellation, history errors, and settings storage.

@@ -2,7 +2,7 @@
 
 ## References and Scope
 
-Active delivery targets Sub2API v0.2.17 on Linux/amd64. Use `scripts/install.py` and
+Active delivery targets Sub2API v0.2.17 on Linux/amd64. Use `scripts/installer/` and
 the current Trellis task/spec contracts.
 
 - Build and release conventions: `.github/workflows/release.yml`.
@@ -14,12 +14,12 @@ the current Trellis task/spec contracts.
 ```text
 patches/                 Ordered production patches and series list
 scripts/build.py         Build, check, and package entry
-scripts/install.py       Linux binary replacement and failure restoration
+scripts/installer/       Go self-extracting installer and failure restoration
 tests/backend/           Go tests and test data, by upstream package path
 tests/installer/         Installer tests and retained-container fixtures
 tests/ui/                Page checks against the patched upstream tree
 licenses/                Required license texts and the sole third-party notice
-dist/build/              Fixed ignored executable and archive outputs
+dist/build/              Fixed ignored server and installer outputs
 README.md                User and developer commands
 AGENTS.md                Repository instructions
 LICENSE                  Project MIT license
@@ -32,8 +32,8 @@ Production code, runtime data, assets, and integration edits live in seven patch
 Apply them in `patches/series` order. Keep tests and test-only data outside production patches.
 `scripts/build.py --check` copies Go tests into temporary upstream packages before the existing checks.
 The UI harness reads the effective patched tree. Keep the original source tree unchanged.
-The build entry creates the binary and archive without a separate packaging command.
-Fixed outputs are `dist/build/sub2api-codex-eval` and `dist/build/sub2api-codex-eval.tar.gz`.
+The build entry creates the server and installer without a separate packaging command.
+Fixed outputs are `dist/build/sub2api-codex-eval` and `dist/build/sub2api-codex-eval-installer`.
 
 ## Sub2API Test Container
 
@@ -58,6 +58,9 @@ need affected reference and syntax checks. They do not require another product b
 
 The build uses the existing upstream Go module and compiles with CGO disabled.
 There is no root Go module or shared-library entry point.
+The installer uses a temporary standard-library module with the upstream Go version.
+The build's `--check` path copies `tests/installer/*_test.go` into that module and runs host-platform `go test .`.
+Keep host test flags separate from the Linux/amd64 release build flags.
 Run `gofmt` on changed Go files. Check changed behavior through existing focused tests.
 Do not add race, coverage, or full-suite gates.
 
@@ -71,9 +74,12 @@ commits, or reports.
 
 ## Installation and Verification
 
-The archive places `install.py` beside the executable. Run `python3 install.py` after extraction.
-Its repository source is `scripts/install.py`. It replaces the selected
-container executable, retains a backup, and restores that backup after failure.
+Run `./sub2api-codex-eval-installer` without arguments and select a numbered container.
+It first shows case-insensitive `sub2api` name matches, with a numbered `More` option for other running containers.
+It uses an embedded server, private `/tmp` backups, and a fixed 120-second readiness deadline.
+It retains the backup and restores it after failure or interruption. It removes the separate temporary extracted server.
+Installer tests use fake Docker commands and local HTTP responses.
+Do not run the installer against the retained fixture's `/app/sub2api` dependency launcher.
 Use the active task and native delivery spec for approved runtime checks.
 Keep production data and provider quota outside local fixture checks.
 

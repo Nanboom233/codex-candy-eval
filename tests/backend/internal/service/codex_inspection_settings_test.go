@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ type codexInspectionSettingsRepo struct {
 func TestCodexInspectionParticipationSurvivesAccountEdit(t *testing.T) {
 	repo := &accountBillingSettingsAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
 		20: {ID: 20, Name: "before", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive,
-			Extra: map[string]any{"codex_eval_inspection_enabled": false, "codex_eval_inspection_verdict": "degraded"}},
+			Extra: map[string]any{"codex_eval_inspection_enabled": false, "codex_eval_inspection_verdict": "degraded", "codex_eval_inspection_removed_models": []any{"gpt-6.1-sol"}}},
 	}}}
 	svc := &adminServiceImpl{accountRepo: repo}
 	updated, err := svc.UpdateAccount(context.Background(), 20, &UpdateAccountInput{Name: "after", Extra: map[string]any{"unrelated": "new value"}})
@@ -30,6 +31,9 @@ func TestCodexInspectionParticipationSurvivesAccountEdit(t *testing.T) {
 	}
 	if updated.Extra["codex_eval_inspection_enabled"] != false || updated.Extra["codex_eval_inspection_verdict"] != "degraded" || updated.Extra["unrelated"] != "new value" {
 		t.Fatalf("full edit lost inspection metadata: %+v", updated.Extra)
+	}
+	if !reflect.DeepEqual(updated.Extra["codex_eval_inspection_removed_models"], []any{"gpt-6.1-sol"}) {
+		t.Fatal("full edit lost pending model restoration")
 	}
 }
 
@@ -97,7 +101,12 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	if err != nil || settings.Enabled || settings.MaxTestsPerAccount != 3 || settings.MinWaitMinutes != 15 || settings.MaxWaitMinutes != 35 || settings.NormalPriority != 10 {
 		t.Fatalf("wrong defaults: %+v %v", settings, err)
 	}
+	if settings.ControlModels || !reflect.DeepEqual(settings.DegradedRemoveModels, []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"}) {
+		t.Fatalf("wrong model control defaults: %+v", settings)
+	}
 	settings.Enabled = true
+	settings.ControlModels = true
+	settings.DegradedRemoveModels = []string{" gpt-6-sol ", "custom/model", "gpt-6-sol"}
 	settings.GroupID = 202
 	settings.AccountType, settings.AccountPlan, settings.EnabledOnly = "oauth", "Pro ALL", true
 	settings.NtfyPassword = "fixture-secret"
@@ -112,6 +121,18 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 		t.Fatalf("restart lost settings: %+v %v", saved.Public(), err)
 	}
 	public := saved.Public()
+	if !saved.ControlModels || !reflect.DeepEqual(saved.DegradedRemoveModels, []string{"gpt-6-sol", "custom/model"}) {
+		t.Fatalf("model controls did not normalize or persist: %+v", saved)
+	}
+	for _, name := range []string{"", "wild*", "wild?", "blacklist", "bad\nname"} {
+		invalid := public
+		invalid.DegradedRemoveModels = []string{name}
+		writes := repo.writes
+		if _, err := s.UpdateCodexInspectionSettings(ctx, invalid); err == nil || repo.writes != writes {
+			t.Fatalf("invalid removal model was accepted: %q", name)
+		}
+	}
+	public.DegradedRemoveModels = []string{}
 	public.Model = "literal-model"
 	if _, err = s.UpdateCodexInspectionSettings(ctx, public); err != nil {
 		t.Fatal(err)
@@ -119,6 +140,9 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	saved, err = s.GetCodexInspectionSettings(ctx)
 	if err != nil || saved.Model != "literal-model" || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
 		t.Fatal("blank update lost secret")
+	}
+	if saved.DegradedRemoveModels == nil || len(saved.DegradedRemoveModels) != 0 {
+		t.Fatal("explicit empty removal list selected defaults")
 	}
 	repo.fail = true
 	public.Model = "unsaved"

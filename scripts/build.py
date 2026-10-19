@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Apply the production patches, check changes, build, and package Sub2API v0.2.17."""
 import argparse
+import gzip
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
-import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +49,6 @@ def build(source, workspace, check=False):
     run(["pnpm", "build"], tree / "frontend", env)
     env["GOFLAGS"] = "-mod=readonly"
     if check:
-        run([sys.executable, ROOT / "tests/installer/test_native_version.py"], ROOT, env)
         run(["node", ROOT / "tests/ui/sub2api-dropdowns.cjs", tree], ROOT, env)
         run(["go", "test", "-tags=unit", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "-run", "Codex|FingerprintNormalization|FingerprintStatistics|FingerprintAttribution|ModelTraceUpstreamParity|ModelTraceParseAndThreshold|ExtractHTML|HasStandalone21"], backend, env)
         run(["go", "vet", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "./internal/server", "./internal/server/routes", "./internal/web"], backend, env)
@@ -61,16 +59,39 @@ def build(source, workspace, check=False):
     return output
 
 
-def package(binary):
-    output = ROOT / "dist/build/sub2api-codex-eval.tar.gz"
+def prepare_installer(binary, workspace, source):
+    staging = workspace / "installer"
+    shutil.copytree(ROOT / "scripts/installer", staging)
+    module_lines = (source / "backend/go.mod").read_text().splitlines()
+    go_version = next(line for line in module_lines if line.startswith("go "))
+    toolchain = [line for line in module_lines if line.startswith("toolchain ")]
+    (staging / "go.mod").write_text("module sub2api-codex-eval-installer\n\n" + go_version + "\n" + "\n".join(toolchain) + "\n")
+    with binary.open("rb") as original, gzip.open(staging / "payload.gz", "wb") as compressed:
+        shutil.copyfileobj(original, compressed)
+    license_dir = staging / "LICENSE"
+    license_dir.mkdir()
+    shutil.copyfile(ROOT / "LICENSE", license_dir / "Project-MIT.txt")
+    for text in sorted((ROOT / "licenses").glob("*.txt")):
+        shutil.copyfile(text, license_dir / text.name)
+    return staging
+
+
+def package(binary, workspace, source, check=False):
+    output = ROOT / "dist/build/sub2api-codex-eval-installer"
     if not binary.is_file():
         raise RuntimeError("Build dist/build/sub2api-codex-eval first.")
-    with tarfile.open(output, "w:gz") as archive:
-        for source, target in [(binary, "sub2api-codex-eval"), (ROOT / "scripts/install.py", "install.py"),
-                               (ROOT / "LICENSE", "LICENSE/Project-MIT.txt")]:
-            archive.add(source, arcname="sub2api-codex-eval/" + target)
-        for source in sorted((ROOT / "licenses").glob("*.txt")):
-            archive.add(source, arcname="sub2api-codex-eval/LICENSE/" + source.name)
+    staging = prepare_installer(binary, workspace, source)
+    env = os.environ.copy()
+    env["GOFLAGS"] = "-mod=readonly"
+    if check:
+        for test in sorted((ROOT / "tests/installer").glob("*_test.go")):
+            shutil.copyfile(test, staging / test.name)
+        host_env = env.copy()
+        for name in ("GOOS", "GOARCH"):
+            host_env.pop(name, None)
+        run(["go", "test", "."], staging, host_env)
+    env.update(GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
+    run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", output, "."], staging, env)
     return output
 
 
@@ -83,7 +104,7 @@ def main():
         print(f"Build workspace: {temporary}", flush=True)
         binary = build(args.source.resolve(), Path(temporary), args.check)
         print(binary, flush=True)
-        print(package(binary), flush=True)
+        print(package(binary, Path(temporary), args.source.resolve(), args.check), flush=True)
 
 
 if __name__ == "__main__":

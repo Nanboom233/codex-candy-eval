@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexev
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
-@@ -0,0 +1,672 @@
+@@ -0,0 +1,681 @@
 +package codexeval
 +
 +import (
@@ -39,7 +39,7 @@ new file mode 100644
 +	Load           func(context.Context) (InspectionSettings, error)
 +	List           func(context.Context, InspectionSettings) ([]InspectionAccount, error)
 +	Get            func(context.Context, int64) (InspectionAccount, error)
-+	PersistVerdict func(context.Context, int64, InspectionVerdict) error
++	PersistVerdict func(context.Context, int64, InspectionVerdict, InspectionSettings) error
 +	UpdatePriority func(context.Context, int64, int) error
 +	Notify         func(context.Context, InspectionSettings, string, string) error
 +}
@@ -393,38 +393,45 @@ new file mode 100644
 +		i.state.Results = append(i.state.Results, InspectionResult{AccountID: a.AccountID, AccountName: a.Name, Priority: a.Priority, RunIDs: []string{}, Outcome: "testing"})
 +	}
 +	i.mu.Unlock()
-+	first := i.testPhase(ctx, s, eligible, 1, false)
-+	if ctx.Err() != nil {
-+		return
-+	}
 +	groups := map[int][]InspectionAccount{s.DegradedPriority: {}, s.NormalPriority: {}}
 +	indexes := map[int64]int{}
 +	baselines := map[int64]int{}
 +	for n, a := range eligible {
 +		indexes[a.AccountID] = n
-+		answers := first[a.AccountID]
-+		if len(answers) != 1 {
-+			continue
++	}
++	changed := map[int][]int{}
++	apply := func(a InspectionAccount, target int) {
++		n := indexes[a.AccountID]
++		if i.applyAccount(ctx, s, n, a, baselines[a.AccountID], target) {
++			changed[target] = append(changed[target], n)
 +		}
++	}
++	first := i.testPhase(ctx, s, eligible, 1, false, func(a InspectionAccount, answers []bool) {
++		n := indexes[a.AccountID]
 +		i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged" })
 +		current, err := i.hooks.Get(ctx, a.AccountID)
 +		if err != nil {
 +			i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
-+			continue
++			return
 +		}
 +		if !inspectionEligible(current, s) {
-+			continue
++			return
 +		}
 +		a.Priority = current.Priority
 +		baselines[a.AccountID] = current.Priority
-+		if current.Verdict != InspectionVerdictDegraded && !answers[0] {
-+			groups[s.DegradedPriority] = append(groups[s.DegradedPriority], a)
++		target := s.DegradedPriority
++		if answers[0] {
++			target = s.NormalPriority
 +		}
-+		if current.Verdict == InspectionVerdictDegraded && answers[0] {
-+			groups[s.NormalPriority] = append(groups[s.NormalPriority], a)
++		if (current.Verdict == InspectionVerdictDegraded) == !answers[0] {
++			apply(a, target)
++			return
 +		}
++		groups[target] = append(groups[target], a)
++	})
++	if ctx.Err() != nil {
++		return
 +	}
-+	changed := map[int][]int{}
 +	for _, target := range []int{s.DegradedPriority, s.NormalPriority} {
 +		group := groups[target]
 +		if len(group) == 0 {
@@ -436,19 +443,11 @@ new file mode 100644
 +				return
 +			}
 +		}
-+		confirmation := map[int64][]bool{}
-+		if s.MaxTestsPerAccount > 1 {
-+			i.phase("testing")
-+			confirmation = i.testPhase(ctx, s, group, s.MaxTestsPerAccount-1, true)
-+		}
-+		if ctx.Err() != nil {
-+			return
-+		}
-+		for _, a := range group {
++		confirmed := func(a InspectionAccount, confirmation []bool) {
 +			n := indexes[a.AccountID]
-+			answers := append(append([]bool{}, first[a.AccountID]...), confirmation[a.AccountID]...)
++			answers := append(append([]bool{}, first[a.AccountID]...), confirmation...)
 +			if len(answers) != s.MaxTestsPerAccount {
-+				continue
++				return
 +			}
 +			expected := target == s.NormalPriority
 +			consistent := true
@@ -457,66 +456,22 @@ new file mode 100644
 +			}
 +			if !consistent {
 +				i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged" })
-+				continue
++				return
 +			}
 +			i.result(n, func(r *InspectionResult) { p := target; r.TargetPriority = &p; r.Outcome = "recommended" })
++			apply(a, target)
++		}
++		if s.MaxTestsPerAccount > 1 {
++			i.phase("testing")
++			i.testPhase(ctx, s, group, s.MaxTestsPerAccount-1, true, confirmed)
++		} else {
++			for _, a := range group {
++				confirmed(a, nil)
++			}
 +		}
 +	}
 +	if ctx.Err() != nil {
 +		return
-+	}
-+	for n, a := range eligible {
-+		r := i.snapshot().Results[n]
-+		if r.Outcome != "recommended" {
-+			continue
-+		}
-+		target := *r.TargetPriority
-+		current, err := i.hooks.Get(ctx, a.AccountID)
-+		if err == nil && !current.AutoInspectionEnabled {
-+			i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
-+			continue
-+		}
-+		if ctx.Err() != nil {
-+			return
-+		}
-+		if err == nil {
-+			verdict := InspectionVerdictDegraded
-+			if target == s.NormalPriority {
-+				verdict = InspectionVerdictNormal
-+			}
-+			err = i.hooks.PersistVerdict(ctx, a.AccountID, verdict)
-+		}
-+		if err != nil {
-+			i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
-+			continue
-+		}
-+		if !s.AdjustPriority {
-+			continue
-+		}
-+		if err == nil && (!inspectionEligible(current, s) || current.Priority != baselines[a.AccountID]) {
-+			err = fmt.Errorf("账户状态或优先级已改变")
-+		}
-+		mu.Lock()
-+		busy := active[strconv.FormatInt(a.AccountID, 10)] != nil
-+		mu.Unlock()
-+		if err == nil && busy {
-+			err = fmt.Errorf("账户正在测试")
-+		}
-+		if err == nil && current.Priority == target {
-+			continue
-+		}
-+		if err == nil && ctx.Err() == nil {
-+			err = i.hooks.UpdatePriority(ctx, a.AccountID, target)
-+		}
-+		if ctx.Err() != nil {
-+			return
-+		}
-+		if err != nil {
-+			i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
-+			continue
-+		}
-+		i.result(n, func(r *InspectionResult) { r.Outcome = "updated" })
-+		changed[target] = append(changed[target], n)
 +	}
 +	for _, target := range []int{s.NormalPriority, s.DegradedPriority} {
 +		indexes := changed[target]
@@ -529,7 +484,7 @@ new file mode 100644
 +			title = "账号恢复正常"
 +			verdict = "答对"
 +		}
-+		lines := []string{fmt.Sprintf("糖果测试 · %s\n判定：连续 %d 次%s", s.Model, s.MaxTestsPerAccount, verdict)}
++		lines := []string{fmt.Sprintf("糖果测试 · %s\n确认状态：%s", s.Model, verdict)}
 +		snapshot := i.snapshot()
 +		for _, n := range indexes {
 +			r := snapshot.Results[n]
@@ -546,6 +501,55 @@ new file mode 100644
 +	i.mu.Unlock()
 +}
 +
++func (i *inspector) applyAccount(ctx context.Context, s InspectionSettings, n int, a InspectionAccount, baseline, target int) bool {
++	current, err := i.hooks.Get(ctx, a.AccountID)
++	if err == nil && !current.AutoInspectionEnabled {
++		i.result(n, func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
++		return false
++	}
++	if ctx.Err() != nil {
++		return false
++	}
++	if err == nil {
++		verdict := InspectionVerdictDegraded
++		if target == s.NormalPriority {
++			verdict = InspectionVerdictNormal
++		}
++		err = i.hooks.PersistVerdict(ctx, a.AccountID, verdict, s)
++	}
++	if err != nil {
++		i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++		return false
++	}
++	if !s.AdjustPriority {
++		return false
++	}
++	if !inspectionEligible(current, s) || current.Priority != baseline {
++		err = fmt.Errorf("账户状态或优先级已改变")
++	}
++	mu.Lock()
++	busy := active[strconv.FormatInt(a.AccountID, 10)] != nil
++	mu.Unlock()
++	if err == nil && busy {
++		err = fmt.Errorf("账户正在测试")
++	}
++	if err == nil && current.Priority == target {
++		return false
++	}
++	if err == nil && ctx.Err() == nil {
++		err = i.hooks.UpdatePriority(ctx, a.AccountID, target)
++	}
++	if ctx.Err() != nil {
++		return false
++	}
++	if err != nil {
++		i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++		return false
++	}
++	i.result(n, func(r *InspectionResult) { p := target; r.TargetPriority = &p; r.Outcome = "updated" })
++	return true
++}
++
 +func waitInspection(ctx context.Context, d time.Duration) bool {
 +	timer := time.NewTimer(d)
 +	defer timer.Stop()
@@ -557,16 +561,18 @@ new file mode 100644
 +	}
 +}
 +
-+func (i *inspector) testPhase(ctx context.Context, s InspectionSettings, accounts []InspectionAccount, runs int, confirmation bool) map[int64][]bool {
++func (i *inspector) testPhase(ctx context.Context, s InspectionSettings, accounts []InspectionAccount, runs int, confirmation bool, completed func(InspectionAccount, []bool)) map[int64][]bool {
 +	answers := map[int64][]bool{}
 +	tracked := map[int64]string{}
 +	index := map[int64]int{}
++	byID := map[int64]InspectionAccount{}
 +	i.mu.Lock()
 +	for n, r := range i.state.Results {
 +		index[r.AccountID] = n
 +	}
 +	i.mu.Unlock()
 +	for _, a := range accounts {
++		byID[a.AccountID] = a
 +		if ctx.Err() != nil {
 +			break
 +		}
@@ -600,50 +606,7 @@ new file mode 100644
 +		tracked[a.AccountID] = id
 +		i.result(index[a.AccountID], func(r *InspectionResult) { r.RunIDs = append(r.RunIDs, id) })
 +	}
-+	phaseCtx, cancel := context.WithTimeout(ctx, i.phaseLimit)
-+	defer cancel()
-+	for {
-+		busy := false
-+		busyCount := 0
-+		mu.Lock()
-+		for id, runID := range tracked {
-+			if r := active[strconv.FormatInt(id, 10)]; r != nil && r.ID == runID {
-+				busy = true
-+				busyCount++
-+			}
-+		}
-+		mu.Unlock()
-+		i.mu.Lock()
-+		i.state.Done = i.state.Total - busyCount
-+		i.mu.Unlock()
-+		if !busy {
-+			break
-+		}
-+		if !waitInspection(phaseCtx, i.poll) {
-+			for _, id := range tracked {
-+				Cancel(id)
-+			}
-+			// Keep the round busy until its actual workers exit.
-+			for busy {
-+				busy = false
-+				mu.Lock()
-+				for id, runID := range tracked {
-+					if r := active[strconv.FormatInt(id, 10)]; r != nil && r.ID == runID {
-+						busy = true
-+					}
-+				}
-+				mu.Unlock()
-+				if busy {
-+					time.Sleep(time.Millisecond * 10)
-+				}
-+			}
-+			for id := range tracked {
-+				i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = phaseCtx.Err().Error() })
-+			}
-+			return answers
-+		}
-+	}
-+	for id, runID := range tracked {
++	collect := func(id int64, runID string) {
 +		mu.Lock()
 +		results := []candyResult{}
 +		for _, r := range candyResults[strconv.FormatInt(id, 10)] {
@@ -669,8 +632,54 @@ new file mode 100644
 +				r.Error = errorText
 +			}
 +		})
-+		if valid {
++		if valid && ctx.Err() == nil {
 +			answers[id] = out
++			completed(byID[id], out)
++		}
++	}
++	phaseCtx, cancel := context.WithTimeout(ctx, i.phaseLimit)
++	defer cancel()
++	for len(tracked) > 0 {
++		finished := map[int64]string{}
++		mu.Lock()
++		for id, runID := range tracked {
++			if r := active[strconv.FormatInt(id, 10)]; r == nil || r.ID != runID {
++				finished[id] = runID
++			}
++		}
++		mu.Unlock()
++		i.mu.Lock()
++		i.state.Done = i.state.Total - len(tracked) + len(finished)
++		i.mu.Unlock()
++		for id, runID := range finished {
++			collect(id, runID)
++			delete(tracked, id)
++		}
++		if len(tracked) == 0 {
++			break
++		}
++		if !waitInspection(phaseCtx, i.poll) {
++			for _, id := range tracked {
++				Cancel(id)
++			}
++			// Keep the round busy until its actual workers exit.
++			for busy := true; busy; {
++				busy = false
++				mu.Lock()
++				for id, runID := range tracked {
++					if r := active[strconv.FormatInt(id, 10)]; r != nil && r.ID == runID {
++						busy = true
++					}
++				}
++				mu.Unlock()
++				if busy {
++					time.Sleep(time.Millisecond * 10)
++				}
++			}
++			for id := range tracked {
++				i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = phaseCtx.Err().Error() })
++			}
++			return answers
 +		}
 +	}
 +	return answers
@@ -734,7 +743,7 @@ diff --git a/backend/internal/codexeval/inspection_settings.go b/backend/interna
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection_settings.go
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,112 @@
 +package codexeval
 +
 +import (
@@ -745,31 +754,54 @@ new file mode 100644
 +)
 +
 +type InspectionSettings struct {
-+	Enabled                bool   `json:"enabled"`
-+	GroupID                int64  `json:"group_id"`
-+	AccountType            string `json:"account_type"`
-+	AccountPlan            string `json:"account_plan"`
-+	EnabledOnly            bool   `json:"enabled_only"`
-+	Model                  string `json:"model"`
-+	Effort                 string `json:"effort"`
-+	MaxTestsPerAccount     int    `json:"max_tests_per_account"`
-+	MinWaitMinutes         int    `json:"min_wait_minutes"`
-+	MaxWaitMinutes         int    `json:"max_wait_minutes"`
-+	AdjustPriority         bool   `json:"adjust_priority"`
-+	NormalPriority         int    `json:"normal_priority"`
-+	DegradedPriority       int    `json:"degraded_priority"`
-+	NtfyServer             string `json:"ntfy_server"`
-+	NtfyTopic              string `json:"ntfy_topic"`
-+	NtfyUsername           string `json:"ntfy_username"`
-+	NtfyPassword           string `json:"ntfy_password"`
-+	BarkURL                string `json:"bark_url"`
-+	NtfyPasswordConfigured bool   `json:"ntfy_password_configured"`
-+	BarkURLConfigured      bool   `json:"bark_url_configured"`
++	Enabled                bool     `json:"enabled"`
++	GroupID                int64    `json:"group_id"`
++	AccountType            string   `json:"account_type"`
++	AccountPlan            string   `json:"account_plan"`
++	EnabledOnly            bool     `json:"enabled_only"`
++	Model                  string   `json:"model"`
++	Effort                 string   `json:"effort"`
++	MaxTestsPerAccount     int      `json:"max_tests_per_account"`
++	MinWaitMinutes         int      `json:"min_wait_minutes"`
++	MaxWaitMinutes         int      `json:"max_wait_minutes"`
++	AdjustPriority         bool     `json:"adjust_priority"`
++	ControlModels          bool     `json:"control_models"`
++	DegradedRemoveModels   []string `json:"degraded_remove_models"`
++	NormalPriority         int      `json:"normal_priority"`
++	DegradedPriority       int      `json:"degraded_priority"`
++	NtfyServer             string   `json:"ntfy_server"`
++	NtfyTopic              string   `json:"ntfy_topic"`
++	NtfyUsername           string   `json:"ntfy_username"`
++	NtfyPassword           string   `json:"ntfy_password"`
++	BarkURL                string   `json:"bark_url"`
++	NtfyPasswordConfigured bool     `json:"ntfy_password_configured"`
++	BarkURLConfigured      bool     `json:"bark_url_configured"`
 +}
 +
 +func DefaultInspectionSettings() InspectionSettings {
 +	return InspectionSettings{Model: "gpt-6.1-sol", Effort: "low", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35,
-+		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NtfyServer: "https://ntfy.sh"}
++		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NtfyServer: "https://ntfy.sh",
++		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"}}
++}
++
++func (s *InspectionSettings) NormalizeModels() {
++	if s.DegradedRemoveModels == nil {
++		s.DegradedRemoveModels = DefaultInspectionSettings().DegradedRemoveModels
++	}
++	models := make([]string, 0, len(s.DegradedRemoveModels))
++	seen := make(map[string]bool)
++	for _, model := range s.DegradedRemoveModels {
++		model = strings.TrimSpace(model)
++		if !seen[model] {
++			models = append(models, model)
++			seen[model] = true
++		}
++	}
++	s.DegradedRemoveModels = models
++}
++
++func ValidInspectionRemovalModel(model string) bool {
++	return validModelName(model, true) && !strings.ContainsAny(model, "*?") && model != "blacklist"
 +}
 +
 +func (s InspectionSettings) Public() InspectionSettings {
@@ -780,6 +812,11 @@ new file mode 100644
 +}
 +
 +func (s InspectionSettings) Validate() error {
++	for _, model := range s.DegradedRemoveModels {
++		if !ValidInspectionRemovalModel(strings.TrimSpace(model)) {
++			return fmt.Errorf("请输入有效的降级移除模型")
++		}
++	}
 +	if s.GroupID < 0 || s.Enabled && s.GroupID == 0 {
 +		return fmt.Errorf("请选择糖果测试分组")
 +	}
@@ -823,7 +860,7 @@ diff --git a/backend/internal/handler/admin/codex_inspection_handler.go b/backen
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/handler/admin/codex_inspection_handler.go
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,155 @@
 +package admin
 +
 +import (
@@ -896,8 +933,8 @@ new file mode 100644
 +	return out
 +}
 +
-+func (h *AccountHandler) persistInspectionVerdict(ctx context.Context, id int64, verdict codexeval.InspectionVerdict) error {
-+	return h.adminService.UpdateAccountExtra(ctx, id, map[string]any{"codex_eval_inspection_verdict": string(verdict)})
++func (h *AccountHandler) persistInspectionVerdict(ctx context.Context, id int64, verdict codexeval.InspectionVerdict, settings codexeval.InspectionSettings) error {
++	return h.accountTestService.PersistCodexInspectionVerdict(ctx, id, verdict, settings)
 +}
 +
 +func (h *SettingHandler) InitializeCodexInspection(accounts *AccountHandler) {
@@ -953,6 +990,7 @@ new file mode 100644
 +		response.BadRequest(c, err.Error())
 +		return
 +	}
++	req.NormalizeModels()
 +	if err := req.Validate(); err != nil {
 +		response.BadRequest(c, err.Error())
 +		return
@@ -982,7 +1020,7 @@ diff --git a/backend/internal/service/codex_inspection_settings.go b/backend/int
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/service/codex_inspection_settings.go
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,76 @@
 +package service
 +
 +import (
@@ -1030,10 +1068,12 @@ new file mode 100644
 +	if out.NormalPriority < 1 {
 +		out.NormalPriority = codexeval.DefaultInspectionSettings().NormalPriority
 +	}
++	out.NormalizeModels()
 +	return out, nil
 +}
 +
 +func (s *SettingService) UpdateCodexInspectionSettings(ctx context.Context, next codexeval.InspectionSettings) (codexeval.InspectionSettings, error) {
++	next.NormalizeModels()
 +	current, err := s.GetCodexInspectionSettings(ctx)
 +	if err != nil {
 +		return current, err
@@ -1056,4 +1096,103 @@ new file mode 100644
 +	}
 +	codexeval.UpdateInspectionSettings(next)
 +	return next, nil
++}
+diff --git a/backend/internal/service/codex_inspection_models.go b/backend/internal/service/codex_inspection_models.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/service/codex_inspection_models.go
+@@ -0,0 +1,94 @@
++package service
++
++import (
++	"context"
++	"maps"
++
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
++)
++
++const codexInspectionRemovedModels = "codex_eval_inspection_removed_models"
++const codexInspectionVerdict = "codex_eval_inspection_verdict"
++
++func (s *AccountTestService) PersistCodexInspectionVerdict(ctx context.Context, id int64, verdict codexeval.InspectionVerdict, settings codexeval.InspectionSettings) error {
++	account, err := s.accountRepo.GetByID(ctx, id)
++	if err != nil {
++		return err
++	}
++	mapping, _ := account.Credentials["model_mapping"].(map[string]any)
++	mapping = maps.Clone(mapping)
++	removed := []string{}
++	seen := map[string]bool{}
++	switch saved := account.Extra[codexInspectionRemovedModels].(type) {
++	case []string:
++		removed = append(removed, saved...)
++	case []any:
++		for _, value := range saved {
++			if name, ok := value.(string); ok {
++				removed = append(removed, name)
++			}
++		}
++	}
++	changed := false
++	unique := make([]string, 0, len(removed))
++	for _, name := range removed {
++		if !seen[name] {
++			unique = append(unique, name)
++			seen[name] = true
++		}
++	}
++	removed = unique
++	switch verdict {
++	case codexeval.InspectionVerdictDegraded:
++		if settings.ControlModels && !account.IsOpenAIPassthroughEnabled() {
++			for _, name := range settings.DegradedRemoveModels {
++				if target, ok := mapping[name].(string); ok && target == name {
++					delete(mapping, name)
++					if !seen[name] {
++						removed = append(removed, name)
++						seen[name] = true
++					}
++					changed = true
++				}
++			}
++			if changed && len(mapping) == 0 {
++				mapping["blacklist"] = "blacklist"
++			}
++		}
++	case codexeval.InspectionVerdictNormal:
++		if len(removed) > 0 {
++			if mapping == nil {
++				mapping = make(map[string]any)
++			}
++			for _, name := range removed {
++				if _, exists := mapping[name]; !exists {
++					mapping[name] = name
++				}
++			}
++			if mapping["blacklist"] == "blacklist" {
++				delete(mapping, "blacklist")
++			}
++			removed = []string{}
++			changed = true
++		}
++	}
++	if !changed {
++		current := codexeval.InspectionVerdictNormal
++		if account.Extra[codexInspectionVerdict] == string(codexeval.InspectionVerdictDegraded) {
++			current = codexeval.InspectionVerdictDegraded
++		}
++		if current == verdict {
++			return nil
++		}
++		return s.accountRepo.UpdateExtra(ctx, id, map[string]any{codexInspectionVerdict: string(verdict)})
++	}
++	next := *account
++	next.Credentials = make(map[string]any, len(account.Credentials)+1)
++	maps.Copy(next.Credentials, account.Credentials)
++	next.Credentials["model_mapping"] = mapping
++	next.Extra = make(map[string]any, len(account.Extra)+2)
++	maps.Copy(next.Extra, account.Extra)
++	next.Extra[codexInspectionRemovedModels] = removed
++	next.Extra[codexInspectionVerdict] = string(verdict)
++	return s.accountRepo.Update(ctx, &next)
 +}

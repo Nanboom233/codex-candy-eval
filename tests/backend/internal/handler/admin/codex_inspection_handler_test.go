@@ -103,10 +103,4 @@ func TestCodexInspectionAccountSwitch(t *testing.T) {
 	if rec.Code != http.StatusOK || len(s.updates) != 1 || s.updates["codex_eval_inspection_enabled"] != false || s.account.Extra["unrelated"] != "preserve" || !s.account.Schedulable || inspectionAccount(s.account).AutoInspectionEnabled {
 		t.Fatalf("switch save changed unrelated state: %d %s %+v", rec.Code, rec.Body, s.account)
 	}
-	if err := h.persistInspectionVerdict(context.Background(), 20, codexeval.InspectionVerdictDegraded); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.updates) != 1 || s.updates["codex_eval_inspection_verdict"] != "degraded" || s.account.Extra["unrelated"] != "preserve" || s.account.Extra["codex_eval_inspection_enabled"] != false || inspectionAccount(s.account).Verdict != codexeval.InspectionVerdictDegraded {
-		t.Fatalf("verdict save changed unrelated metadata: %+v", s.account.Extra)
-	}
 }

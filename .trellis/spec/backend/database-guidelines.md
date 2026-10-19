@@ -9,7 +9,7 @@ Tasks, progress, inspection summaries, and the next run time stay in memory.
 ### 1. Scope / Trigger
 
 Use native settings persistence for Candy inspection configuration.
-Use native account `extra` for each account's inspection participation and verdict.
+Use native account `extra` for inspection participation, verdict, and actual removed-model names.
 Use the existing JSON store for evaluation history only.
 
 ### 2. Signatures
@@ -38,10 +38,24 @@ Native account storage supplies cross-group and restart persistence. Keep it sep
 
 Store account verdict as `normal` or `degraded` in `extra.codex_eval_inspection_verdict`. An absent verdict means normal.
 Actual priority does not initialize the verdict. Do not add old-priority inference or migration.
-Use the same key-only atomic merge and full-edit preservation for the verdict key.
-Save only confirmed transitions. A stable default normal state needs no initialization write.
+Use a key-only atomic merge for verdict transitions without model changes. Preserve the key during unrelated full account edits.
+Apply model control after each completed detection establishes the account state, including stable states.
+Skip writes when model data, pending removals, and verdict already match. An absent normal verdict needs no initialization write.
 Persist the verdict before an optional actual-priority update. A failed priority write does not reverse the saved verdict.
 Keep verdicts out of the evaluation history snapshot and global settings.
+
+Store actual removed model names in `extra.codex_eval_inspection_removed_models` as a string array.
+Merge new actual removals without duplicate names.
+An absent or empty array means no pending restoration. Ordinary full account edits preserve this key.
+Whitelist identity entries use `credentials.model_mapping` with equal keys and values.
+Save changed model mappings, pending removals, and verdict through one native `AccountRepository.Update`.
+Copy mutable maps and preserve unrelated credentials and metadata before that call.
+Use the existing repository transaction, scheduler outbox, and snapshot refresh.
+Do not send a partial credentials object through generic administrator updates. They preserve omitted sensitive fields only.
+Recovery reads the saved removal list even when the global list changes or model control becomes off.
+Keep current administrator mappings, remove the reserved identity placeholder, and clear pending removals in the same write.
+No extra table, snapshot, scheduling flag, original scheduling value, or restore phase is necessary.
+See [Native Candy Inspection](./native-inspection.md) for confirmed-state application and placeholder behavior.
 
 Keep history keys `results`, `fingerprints`, `modeltraces`, and `pelicans`.
 Each map uses a native account ID as a decimal string.
@@ -71,10 +85,13 @@ Restart reloads saved history/settings without restoring tasks or the previous i
 | Settings validation fails | Reject before writing |
 | Settings write fails | Return the error without changing active settings |
 | Account verdict save fails | Keep the previous verdict and prevent the optional priority write |
+| Compound account update fails | Keep stored mapping, removed-model list, and verdict unchanged. Prevent the optional priority write. |
 
 ### 5. Good / Base / Bad Cases
 
 Good: blank notification secret inputs retain existing native settings values.
+
+Good: one account update saves the changed mapping, actual removal list, and degraded verdict together.
 
 Base: absent history starts empty. Absent inspection keys use defaults.
 
@@ -87,6 +104,7 @@ Use `tests/backend/internal/service/codex_inspection_settings_test.go` for setti
 Reuse existing persistence evidence. Add focused checks only for changed storage behavior without coverage.
 Account participation needs key-only-save and full-edit-preservation assertions, without a separate restart or copy test matrix.
 Extend the same metadata fixtures for the verdict key and absent-state normal default.
+Extend the full-edit fixture for pending removals. Use account-helper tests for compound model writes and recovery.
 Use the focused coordinator tests for verdict-save failure. Do not repeat lifecycle checks in storage tests.
 Tests use temporary files and synthetic data. Do not delete real history or settings.
 

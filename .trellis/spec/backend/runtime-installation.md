@@ -77,6 +77,9 @@ Candy results remain inline in state.
 Serve the original page and renderers through the standalone shell.
 Read native same-origin `auth_token` for authenticated API calls.
 Use native groups/accounts and evaluation-specific raw model suggestions directly.
+When the saved tab is Settings, let `start()` own the initial settings read before refreshing shared groups.
+Restoring the tab must not start a competing settings read that later invalidates the first group response.
+Later user entries to Settings still refresh saved settings through the existing owner.
 Manual account inventories must contain only selected-group members on every page.
 Read `/api/v1/admin/accounts?platform=openai&group=<id>&lite=1&page=<n>&page_size=100` and its `group_ids` field.
 Refresh account membership on ordinary polls and reject obsolete group responses before updating the catalog.
@@ -129,6 +132,7 @@ Use native light/dark theme variables.
 | Account `schedulable:false` | Show disabled and switch off; use native schedulable POST to toggle |
 | Disabled account would fail model lookup | Skip its discovery request and error notice; retain its row/control |
 | Enabled account model lookup fails | Show its actual error, including after subsequent polling |
+| Native entry restores Settings before a test-tab switch | Load shared groups after initial settings, then show the selected group's accounts |
 | Background inventory refresh has a valid same-group snapshot | Keep unchanged controls usable without a readiness flash |
 | Manual account inventory refresh fails | Block row and batch starts until a successful inventory refresh |
 | Inventory refresh succeeds but evaluation state fails | Keep the state error. Remove moved accounts from rows and targets. |
@@ -153,6 +157,8 @@ Use existing relevant tests for changed code and add focused assertions only for
 The focused UI checks use two groups with exclusive and shared accounts, membership moves, pagination, and obsolete responses.
 Check submitted targets after inventory failures and after successful inventory refresh followed by evaluation-state failure.
 Check manual preference reload before blur through actual input events.
+Use the existing UI initialization harness for Settings-first entry followed by an evaluation-tab switch.
+Check the selected group and account rows without a manual refresh. Exercise that flow in an actual browser.
 The native delayed-stream lifetime test covers start/state request completion and explicit stop through both supported response protocols.
 Normal HTTP request completion preserves background work. Explicit stop cancels supplier work and retains the actual history outcome.
 [Runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go) cover admission, cancellation, history and stream outcomes.

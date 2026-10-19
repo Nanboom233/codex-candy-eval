@@ -1,13 +1,17 @@
 # Third-party notices
 
-The project-specific evaluation sources and installer use the MIT license, included as `LICENSE/Project-MIT.txt` in the package.
+The project-specific evaluation sources and installer use the MIT license, embedded as `LICENSE/Project-MIT.txt` in the installer.
 
 The prebuilt server incorporates Sub2API v0.2.17 under GNU LGPL version 3.
-Its license is included as `LICENSE/Sub2API-LGPL-3.0.txt`.
+Its license is embedded as `LICENSE/Sub2API-LGPL-3.0.txt` in the installer.
 Original source: https://github.com/Wei-Shaw/sub2api/tree/v0.2.17.
 The production patches are in `patches/`. Apply them in the order listed in `patches/series`.
 Build instructions are in README.md. Keep these notices with redistributed binaries.
 
-ModelTrace's candidate bank and attribution method are copyright (c) 2026 xqy2006 and MIT licensed. The notice is included as `LICENSE/ModelTrace-MIT.txt` and in the embedded page. Original project: https://github.com/xqy2006/ModelTrace.
+ModelTrace's candidate bank and attribution method are copyright (c) 2026 xqy2006 and MIT licensed.
+The notice is embedded as `LICENSE/ModelTrace-MIT.txt` in the installer and included in the page.
+Original project: https://github.com/xqy2006/ModelTrace.
 
-The page uses markdown-it, markdown-it-cjk-friendly, get-east-asian-width, markdown-it-texmath and Temml under their MIT notices. Full notices are included as `LICENSE/Renderers-MIT.txt`; vendor copyright banners remain in the embedded assets. Projects: https://github.com/markdown-it/markdown-it, https://github.com/tats-u/markdown-cjk-friendly, https://github.com/sindresorhus/get-east-asian-width, https://github.com/goessner/markdown-it-texmath and https://github.com/ronkok/Temml.
+The page uses markdown-it, markdown-it-cjk-friendly, get-east-asian-width, markdown-it-texmath and Temml under their MIT notices.
+Full notices are embedded as `LICENSE/Renderers-MIT.txt` in the installer. Vendor copyright banners remain in the embedded assets.
+Projects: https://github.com/markdown-it/markdown-it, https://github.com/tats-u/markdown-cjk-friendly, https://github.com/sindresorhus/get-east-asian-width, https://github.com/goessner/markdown-it-texmath and https://github.com/ronkok/Temml.
