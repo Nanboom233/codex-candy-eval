@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-10-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~184 | Active |
+| `journal-1.md` | ~219 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-10-19 | Commit remaining account tags and repository guidance | `47e8406`, `a2c212c` | `main` |
 | 5 | 2026-10-19 | Complete model control and Go installer delivery | `c4cc8e8` | `feat/inspection-model-control` |
 | 4 | 2026-10-18 | Independent inspection verdict state | `8c22806`, `aecf699` | `fix/inspection-controls` |
 | 3 | 2026-10-18 | Fix account refresh and inspection controls | `75f5a3f` | `fix/inspection-controls` |

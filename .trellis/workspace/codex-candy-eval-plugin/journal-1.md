@@ -182,3 +182,38 @@ Complete confirmed-state model control, Go installer delivery, Settings entry, a
 ### Next Steps
 
 - Fast-forward local main to the completed task commits and preserve unrelated working changes.
+
+
+## Session 6: Commit remaining account tags and repository guidance
+<!-- trellis-session: v=2 fp=8d132af266d75c34 -->
+
+**Date**: 2026-10-19
+**Task**: Commit remaining account tags and repository guidance
+**Branch**: `main`
+
+### Summary
+
+Commit the saved-verdict account tags and the remaining repository guidance after final user approval.
+
+### Main Changes
+
+- Show degraded account tags from saved inspection verdicts in all four evaluation lists.
+- Commit the existing recovery-refresh assertions and account-display contract.
+- Keep the Trellis entry guide and record the return to local main rule.
+- Remove the old degraded-tag task directory and clear its active pointer at the user request.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47e8406` | feat(codex-eval): show saved degraded account verdicts |
+| `a2c212c` | docs: streamline repository instructions and finish rules |
+
+### Testing
+
+- [OK] Reuse passing UI, build, and normal-width and narrow-width visual evidence for unchanged inputs.
+- [OK] Pass the staged diff check and verify both work commit signatures.
+
+### Status
+
+[OK] **Completed**
