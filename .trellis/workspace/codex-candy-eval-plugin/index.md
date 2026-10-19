@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-10-19
+- **Total Sessions**: 8
+- **Last Active**: 2026-10-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~254 | Active |
+| `journal-1.md` | ~292 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-10-20 | Adapt native Pelican variants | `b67452e` | `feat/pelican-variants` |
 | 7 | 2026-10-19 | Sync upstream fingerprint detection | `97bdc25` | `sync/upstream-main-2026-10-19` |
 | 6 | 2026-10-19 | Commit remaining account tags and repository guidance | `47e8406`, `a2c212c` | `main` |
 | 5 | 2026-10-19 | Complete model control and Go installer delivery | `c4cc8e8` | `feat/inspection-model-control` |

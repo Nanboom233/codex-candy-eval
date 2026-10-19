@@ -252,3 +252,41 @@ Merged approved upstream evaluation changes into native Sub2API. Replaced retire
 ### Next Steps
 
 - Fast-forward local main and push normally to the approved fork.
+
+
+## Session 8: Adapt native Pelican variants
+<!-- trellis-session: v=2 fp=c56bd621bec779de -->
+
+**Date**: 2026-10-20
+**Task**: Adapt native Pelican variants
+**Branch**: `feat/pelican-variants`
+
+### Summary
+
+Added selectable Pelican variants, saved version labels, and schema 2 history recovery copies. Standard checks, browser inspection, and independent review passed.
+
+### Main Changes
+
+- Kept exact upstream prompts and tolerant markup extraction in the native runtime.
+- Added persistent version selection and record-derived labels. Fixed narrow toolbar layout.
+- Saved original history before migration and enforced mode 0600 for recovery copies.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b67452e` | feat(codex-eval)!: let users choose Pelican task variants |
+
+### Testing
+
+- [OK] Passed the standard build/check entry. Reused shared retry tests and existing UI/runtime fixtures.
+- [OK] Passed affected checks after layout and backup-permission repairs. Rebuilt the server and installer.
+- [OK] Inspected previews, detail animation, and normal/narrow layouts in Chrome. Independent review passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Use the built installer when a deployment is authorized.
