@@ -984,7 +984,7 @@ new file mode 100644
 +  const plan = credentialPlan(a);
 +  const label = a.name;
 +  return `<div class="credential"><button class="toggle" type="button" data-toggle="${esc(a.id)}" aria-expanded="${open}">${icon("chevron-right", "chev")}<span class="name">${esc(label)}</span></button>
-+    <div class="tags"><span class="tag" aria-label="${esc(credentialTypeLabel(a))}" data-tip>${icon(a.type === "oauth" ? "file-key" : "key")}<span>${esc(providerType(a))}</span></span>${plan ? `<span class="tag ${plan.badge ? "plan-" + plan.badge : ""}"><span>${esc(plan.label)}</span></span>` : ""}<span class="tag"><span>${a.priority == null ? "—" : "P" + esc(a.priority)}</span></span>${a.disabled ? '<span class="tag"><span>已停用</span></span>' : ""}${(a.restrictions || []).map((r) => `<span class="tag warn" data-tip="${esc(r.message)}"><span>${esc(r.label)}</span></span>`).join("")}</div></div>`;
++    <div class="tags"><span class="tag" aria-label="${esc(credentialTypeLabel(a))}" data-tip>${icon(a.type === "oauth" ? "file-key" : "key")}<span>${esc(providerType(a))}</span></span>${plan ? `<span class="tag ${plan.badge ? "plan-" + plan.badge : ""}"><span>${esc(plan.label)}</span></span>` : ""}<span class="tag"><span>${a.priority == null ? "—" : "P" + esc(a.priority)}</span></span>${a.extra?.codex_eval_inspection_verdict === "degraded" ? '<span class="tag"><span>降级</span></span>' : ""}${a.disabled ? '<span class="tag"><span>已停用</span></span>' : ""}${(a.restrictions || []).map((r) => `<span class="tag warn" data-tip="${esc(r.message)}"><span>${esc(r.label)}</span></span>`).join("")}</div></div>`;
 +}
 +function unavailableReason(a) {
 +  return (a.restrictions || []).map((r) => r.message).join("\n");

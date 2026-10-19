@@ -717,6 +717,8 @@ function groupFixture() {
   ctx = harness();
   try {
     const fixture = groupFixture();
+    fixture.accounts.find((a) => a.id === 11).priority = 99;
+    fixture.accounts.find((a) => a.id === 33).extra = { codex_eval_inspection_verdict: "degraded" };
     fixture.data.candy["33"] = [{ run_id: "retained:1", time: "2026-10-17T12:00:00Z", model: "saved/literal",
       effort: "low", ok: true, answer: "retained Candy record", duration_ms: 20, input_tokens: 10, output_tokens: 4 }];
     let stateFailed = false;
@@ -728,8 +730,16 @@ function groupFixture() {
       return fixture.api(url);
     });
     await ctx.h.load();
+    for (const prefix of ["", "fp-", "mt-", "pl-"]) {
+      const list = ctx.$(prefix + "rows");
+      const tags = [...list.querySelectorAll('[data-row="33"] .tag')];
+      assert.equal(tags.filter((tag) => tag.textContent === "降级").length, 1);
+      assert.ok(tags.some((tag) => tag.textContent === "P10"));
+      assert.equal([...list.querySelectorAll('[data-row="11"] .tag')].some((tag) => tag.textContent === "降级"), false);
+    }
     fixture.accounts.find((a) => a.id === 11).group_ids = [202];
-    Object.assign(fixture.accounts.find((a) => a.id === 33), { name: "shared updated", priority: 99 });
+    Object.assign(fixture.accounts.find((a) => a.id === 33), { name: "shared updated", priority: 99,
+      extra: { codex_eval_inspection_verdict: "normal" } });
     stateFailed = true;
     await ctx.h.load();
     assert.equal(ctx.$("load-error").hidden, false);
@@ -739,6 +749,7 @@ function groupFixture() {
       assert.deepEqual([...list.querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)), [33]);
       assert.equal(list.querySelector(".name").textContent, "shared updated");
       assert.ok(list.textContent.includes("P99"));
+      assert.equal([...list.querySelectorAll(".tag")].some((tag) => tag.textContent === "降级"), false);
       assert.deepEqual([...ctx.h.batchCredentials(prefix, new Set())].map((a) => Number(a.id)), [33]);
     }
     assert.deepEqual([...ctx.h.targetsFor(["11", "33"])].map((target) => target.account_id), [33]);

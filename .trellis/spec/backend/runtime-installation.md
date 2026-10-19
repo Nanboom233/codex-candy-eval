@@ -88,6 +88,10 @@ Block starts before the initial successful read, after a group/session change, o
 Keep an inventory error visible until recovery. Do not clear valid readiness merely because another request starts.
 Current inventory determines rows and targets even when the subsequent evaluation-state request fails.
 An evaluation-state failure must not restore accounts removed from the current inventory.
+In all four evaluation lists, `credentialView` adds one `降级` tag after priority when `extra.codex_eval_inspection_verdict === "degraded"`.
+Use the existing neutral `.tag` style for matching alignment and wrapping.
+Normal or absent verdicts show no degraded tag, regardless of actual priority or automatic priority adjustment.
+The existing account inventory refresh removes the tag after a saved recovery.
 Reuse raw model suggestions while enabled account IDs stay unchanged.
 Model discovery errors must not block a literal model when the account inventory is current.
 Scheduled Candy uses the Candy page's persisted group and filters for account selection.
