@@ -217,3 +217,38 @@ Commit the saved-verdict account tags and the remaining repository guidance afte
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Sync upstream fingerprint detection
+<!-- trellis-session: v=2 fp=5efbf1743f3c7a7c -->
+
+**Date**: 2026-10-19
+**Task**: Sync upstream fingerprint detection
+**Branch**: `sync/upstream-main-2026-10-19`
+
+### Summary
+
+Merged approved upstream evaluation changes into native Sub2API. Replaced retired fingerprint and ModelTrace with the LM detector. Added bounded shared retries and immediate Candy/Pelican history migration.
+
+### Main Changes
+
+- Retain native Settings, inspection, account controls, model recovery, and the Go installer.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97bdc25` | feat(codex-eval)!: adopt upstream fingerprint detection |
+
+### Testing
+
+- [OK] Final build --check passed focused Go tests, vet, UI, frontend, and installer checks. The final markup repair passed the existing UI harness and rebuilt both outputs.
+- [OK] Chrome inspected native Settings-first navigation, detector results, null probabilities, challenge details, and the final Pelican caption removal with synthetic data.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Fast-forward local main and push normally to the approved fork.
