@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Current native scope and acceptance checks."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Patch and test ownership."}
+{"file":".trellis/spec/backend/runtime-installation.md","reason":"Native API, controls, and result contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Preserve schema-1 fingerprint data and storage protection."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Preserve retries and cancellation across both variants."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Use valid focused evidence and identify material gaps."}
+{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/upstream-comparison.md","reason":"Source-backed upstream delta and native compatibility requirements."}
+{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/plan-review.md","reason":"Check approved item decisions and distinguish them from pending proposals."}
+{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/task-audit.md","reason":"Audit against approved scope, reuse passing evidence, and reject redundant checks or new requirements."}
