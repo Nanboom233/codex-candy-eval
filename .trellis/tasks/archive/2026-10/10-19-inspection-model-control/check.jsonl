@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required build entry, focused checks, evidence reuse, and separate commit approval."}
+{"file": ".trellis/spec/backend/runtime-installation.md", "reason": "Check Settings-first native entry, group refresh, evaluation readiness, and unchanged session/filter behavior."}
+{"file": ".trellis/spec/backend/native-inspection.md", "reason": "Verify confirmed-state application against unchanged confirmation and participation rules. Active task supersedes transition-only wording."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify native writes, unchanged-write suppression, and pending model removals."}
+{"file": ".trellis/tasks/10-19-inspection-model-control/research/model-storage.md", "reason": "Source evidence for whitelist removal and restoration."}
+{"file": ".trellis/spec/backend/minimal-linux-delivery.md", "reason": "Verify installation mechanics and bounded fixture checks. Use task R9 for the parameter-free entry instead of historical arguments."}
+{"file": ".trellis/tasks/10-19-inspection-model-control/research/go-installer-parity.md", "reason": "Check installation parity and changed delivery paths without replacing the retained fixture launcher."}
+{"file": ".trellis/tasks/10-19-inspection-model-control/research/go-installer-implementation.md", "reason": "Final Go installer files, focused test evidence, final build outputs, and actual Docker execution limits."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify installer source, tests, temporary module, and delivery boundaries."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify actual installation failures and interruption restoration."}
+{"file": ".trellis/tasks/10-19-inspection-model-control/research/implementation-handoff.md", "reason": "Completed model-control implementation and checks remain valid for unchanged inputs."}
+{"file": ".trellis/tasks/10-19-inspection-model-control/research/check-handoff.md", "reason": "Reuse completed independent review while checking the new delivery scope."}
