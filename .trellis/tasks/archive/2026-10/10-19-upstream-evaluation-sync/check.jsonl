@@ -1,0 +1,16 @@
+{"file":".trellis/spec/backend/index.md","reason":"Current native scope and bounded quality checks."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Keep production source in ordered patches and tests outside those patches."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Reuse valid checks and follow the hybrid commit workflow."}
+{"file":".trellis/spec/backend/runtime-installation.md","reason":"Verify native evaluation and administrator contracts."}
+{"file":".trellis/spec/backend/native-inspection.md","reason":"Preserve local inspection and model controls."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review saved data handling and changed history contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Distinguish unusable responses, valid wrong answers, and transport retries."}
+{"file":".trellis/spec/backend/minimal-linux-delivery.md","reason":"Preserve installer delivery and release asset behavior."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/git-integration.md","reason":"Check explicit merge exclusions and preservation of both Git histories."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/upstream-ui-history.md","reason":"Review source-backed UI changes and the approved native history treatment."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/upstream-evaluations.md","reason":"Verify detector parity, retry semantics, inspection counts, and native cancellation."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/code-detector.md","reason":"Check exact detector parity, sequence rejection, nullable probabilities, and shared decoder retention."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/code-retry-inspection.md","reason":"Check actual transport boundaries, status precedence, cancellation, opt-out, and one-result confirmation counts."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/code-ui-history.md","reason":"Check native API fields, frontend removals, history separation, and retained Settings-first behavior."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/code-delivery.md","reason":"Check production versus test resources, bounded test selection, notices, and unchanged release entry."}
+{"file":".trellis/tasks/10-19-upstream-evaluation-sync/research/task-audit.md","reason":"Check final minimal migration decision and reject added requirements or redundant test suites."}
