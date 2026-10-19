@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-10-18
+- **Total Sessions**: 5
+- **Last Active**: 2026-10-19
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~144 | Active |
+| `journal-1.md` | ~184 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-10-19 | Complete model control and Go installer delivery | `c4cc8e8` | `feat/inspection-model-control` |
 | 4 | 2026-10-18 | Independent inspection verdict state | `8c22806`, `aecf699` | `fix/inspection-controls` |
 | 3 | 2026-10-18 | Fix account refresh and inspection controls | `75f5a3f` | `fix/inspection-controls` |
 | 2 | 2026-10-18 | Complete the native Sub2API v0.2.17 migration | `6cac3a2` | `feat/sub2api-runtime-patch` |

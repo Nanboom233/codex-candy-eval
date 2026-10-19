@@ -142,3 +142,43 @@ Separate saved inspection verdicts from actual priority and retain the single re
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Complete model control and Go installer delivery
+<!-- trellis-session: v=2 fp=8002efb7cb55a7e5 -->
+
+**Date**: 2026-10-19
+**Task**: Complete model control and Go installer delivery
+**Branch**: `feat/inspection-model-control`
+
+### Summary
+
+Complete confirmed-state model control, Go installer delivery, Settings entry, and the Chinese user guide.
+
+### Main Changes
+
+- Apply model control and priority after each confirmed account detection, including stable states.
+- Deliver the self-extracting Go installer and publish it through the existing release workflow.
+- Fix Settings-first group loading and document user operations with original project credits.
+- Create signed work commit c4cc8e8 and archive only the completed model-control task.
+- Recover the archive commit with its destination path after Trellis referenced an untracked source directory.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c4cc8e8` | feat(codex-eval)!: control degraded models and add a Go installer |
+
+### Testing
+
+- [OK] Reuse passing focused backend, installer, UI, actual-browser, build, and independent-review evidence.
+- [OK] Pass the final staged diff check and verify the work and archive signatures.
+- [OK] Keep production installation and GitHub Actions execution outside this local handoff.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Fast-forward local main to the completed task commits and preserve unrelated working changes.
