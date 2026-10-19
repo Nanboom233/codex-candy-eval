@@ -101,6 +101,11 @@ Inspect their results after each step. Verify signatures when Git signing is ena
 
 Do not change Git configuration or downgrade signing to bypass a failure. Do not push without approval.
 
+### Return to Main
+
+If work uses a task branch, merge its completed commits into local `main` before the final handoff.
+Include the work, archive, and session commits. Switch to local `main` after the merge.
+
 References:
 
 - [Trellis workflow](../../workflow.md): work commits, archive, and session order.
