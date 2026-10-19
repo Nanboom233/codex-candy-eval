@@ -53,24 +53,48 @@ Keep native snapshots and 401/429 handling.
 The new sender omits broad successful-test recovery.
 Ordinary `/test` and the user gateway retain their existing behavior.
 
+Evaluation uses default identity `codex-tui/0.163.0 (Debian 13.0.0; x86_64) xterm-ghostty (codex-tui; 0.163.0)`.
+Retain account-specific User-Agent overrides.
+Use the current captured context and `history_initialization: new`.
+Place fingerprint developer instructions in `generic.developer_instructions`.
+
 ### Tasks and history
 
-`StartRequest` contains `type`, `targets`, `model`, `effort`, `runs`, `mode` and `concurrency`.
+`StartRequest` contains `type`, `targets`, `model`, `effort`, `runs`, and `concurrency`.
+Supported types are `candy`, `fingerprint`, and `pelican`.
+Fingerprint selects three distinct challenges. Per-account concurrency ranges from 1 through 3, with default 3.
+Six global challenge slots include each challenge's retry waits.
 Each target contains numeric `group_id` and `account_id`.
 Groups describe page filters and result origin.
 An account remains busy across evaluation types until its worker exits.
 Start returns `started`, `busy` and `unavailable` arrays.
 Cancel accepts `run_id` and interrupts the matching task context and active response.
 
-State contains `active`, `candy`, `fingerprint`, `modeltrace`, `pelican` and `storage_error`.
-Only four history maps persist at `<data-dir>/codex-eval/history.json`.
+State contains `active`, `candy`, `fingerprint`, `pelican`, and `storage_error`.
+Three history maps persist at `<data-dir>/codex-eval/history.json` with root marker `schema_version: 1`.
 Keep the latest 20 records per account and type.
 Save each result through a same-directory temporary file and rename.
 Unreadable or null history blocks overwrites.
 A failed clear restores the previous maps.
 Run state, progress and cancellation remain in memory.
-Record details support fingerprint, ModelTrace and Pelican with exact record IDs.
+Record details support fingerprint and Pelican with exact record IDs.
+Keep wrappers `{type, fingerprint}` and `{type, pelican}`.
+Started entries expose `id`. Saved records retain native `Info.run_id`.
 Candy results remain inline in state.
+
+Fingerprint progress has `done`, `total: 3`, model, and concurrency.
+Records retain native identity, detector revision, samples, usage, status, and optional attribution.
+Summaries clear samples, full ranking, and diagnostics. The page accepts their null JSON values.
+Details retain challenge instructions, prompts, answers, parsed counts, acceptance, and attempt counts.
+After sequence acceptance, three valid answers produce probabilities. One or two produce partial rankings with null probabilities.
+Sequence rejection produces `attribution.decision: not_model` without rankings or probabilities.
+Parse the longest numeric run within 64,000 bytes. Keep values from 1 through 355.
+Require `max(80, ceil(expected * 0.55))` values and truncate excess values to the expected count.
+Sequence acceptance requires median lag-one autocorrelation at most -0.23 and median small-step share at most 0.05.
+Explicit failed or cancelled status takes precedence over attribution.
+Cancellation before three completed challenge events remains cancelled.
+Comparison aliases do not change the literal sent model.
+Use `gpt-6.1-sol` to `gpt-6-astra` and `deepseek-flash` to `deepseek-v4.1-flash-1017` for comparison only.
 
 ### Standalone page
 
@@ -88,7 +112,7 @@ Block starts before the initial successful read, after a group/session change, o
 Keep an inventory error visible until recovery. Do not clear valid readiness merely because another request starts.
 Current inventory determines rows and targets even when the subsequent evaluation-state request fails.
 An evaluation-state failure must not restore accounts removed from the current inventory.
-In all four evaluation lists, `credentialView` adds one `降级` tag after priority when `extra.codex_eval_inspection_verdict === "degraded"`.
+In all three evaluation lists, `credentialView` adds one `降级` tag after priority when `extra.codex_eval_inspection_verdict === "degraded"`.
 Use the existing neutral `.tag` style for matching alignment and wrapping.
 Normal or absent verdicts show no degraded tag, regardless of actual priority or automatic priority adjustment.
 The existing account inventory refresh removes the tag after a saved recovery.
@@ -98,13 +122,16 @@ Scheduled Candy uses the Candy page's persisted group and filters for account se
 Inspection model, effort, counts, and flow remain independent. Manual fixed-count behavior stays unchanged.
 Do not maintain a separate inspection account catalog or settings-page result list.
 Manual batch targets must come from the displayed eligible selected-group accounts.
-All four model controls use a visible dropdown with native raw suggestions.
+All three model controls use a visible dropdown with native raw suggestions.
 Keep the direct custom-model path inside the dropdown interaction, including when the native catalog is empty.
 Selecting `自定义模型…` reveals the literal model input inside the same field.
 Retain a selected literal model when refreshed suggestions omit it.
 Save valid preferences automatically on input, before blur.
 Shared group and Candy account filters use native settings so the timer can run after the browser closes.
-All four evaluations retain their existing browser test-parameter preferences and manual entry points.
+Candy and Pelican retain their browser preferences and manual entry points.
+Fingerprint retains model and concurrency preferences. Do not read retired mode or ModelTrace preferences.
+A saved ModelTrace tab falls back to Candy.
+Render `not_model` as `不像语言模型回答` and null probability as `—`.
 Account enable uses `POST /api/v1/admin/accounts/:id/schedulable` with `{schedulable:boolean}`.
 Derive disabled/switch-off from `schedulable:false`; display account status and future rate-limit, overload and temporary restrictions separately.
 Retain all account rows, but fetch model suggestions only for `schedulable !== false` accounts.

@@ -1,11 +1,13 @@
 diff --git a/backend/internal/codexeval/candy.go b/backend/internal/codexeval/candy.go
 new file mode 100644
+index 0000000..7df9022
 --- /dev/null
 +++ b/backend/internal/codexeval/candy.go
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,113 @@
 +package codexeval
 +
 +import (
++	"errors"
 +	"time"
 +)
 +
@@ -39,6 +41,7 @@ new file mode 100644
 +	OutputTokens    int64     `json:"output_tokens"`
 +	ReasoningTokens int64     `json:"reasoning_tokens"`
 +	DurationMS      int64     `json:"duration_ms"`
++	Attempts        int       `json:"attempts,omitempty"`
 +}
 +
 +type candyProgress struct {
@@ -65,10 +68,10 @@ new file mode 100644
 +		if stopping {
 +			return
 +		}
-+		if check != nil && check() != nil {
++		r, save := evaluateCandyChecked(auth, model, effort, check)
++		if !save {
 +			return
 +		}
-+		r := evaluateCandy(auth, model, effort)
 +		mu.Lock()
 +		candyResults[id] = appendRecent(candyResults[id], r)
 +		candyRunning[id].Done++
@@ -78,18 +81,30 @@ new file mode 100644
 +}
 +
 +func evaluateCandy(auth credential, model, effort string) candyResult {
++	r, _ := evaluateCandyChecked(auth, model, effort, nil)
++	return r
++}
++
++var errInspectionStopped = errors.New("inspection disabled")
++
++func evaluateCandyChecked(auth credential, model, effort string, check func() error) (candyResult, bool) {
 +	r := candyResult{Info: auth.info(), Status: "completed", Time: time.Now().UTC(), Model: model, Effort: effort}
-+	out, elapsed, err := askCodex(auth, model, effort, candyPrompt)
-+	r.DurationMS = elapsed.Milliseconds()
++	started := time.Now()
++	out, attempts, err := askCodex(auth.ctx, auth, model, effort, "", candyPrompt, answerTimeout, nil, check)
++	if errors.Is(err, errInspectionStopped) {
++		return r, false
++	}
++	r.Attempts = attempts
++	r.DurationMS = time.Since(started).Milliseconds()
 +	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
 +	if err != nil {
 +		r.Error = truncate(err.Error(), 500)
 +		r.Status = failedStatus(auth.ctx)
-+		return r
++		return r, true
 +	}
 +	r.Answer = truncate(out.Answer, 4000)
 +	r.OK = hasStandalone21(out.Answer)
-+	return r
++	return r, true
 +}
 +
 +// hasStandalone21 reports whether "21" appears without adjacent digits.
@@ -104,9 +119,10 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/codex.go b/backend/internal/codexeval/codex.go
 new file mode 100644
+index 0000000..e335ce8
 --- /dev/null
 +++ b/backend/internal/codexeval/codex.go
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,243 @@
 +package codexeval
 +
 +import (
@@ -122,11 +138,11 @@ new file mode 100644
 +	"time"
 +)
 +
-+// A Codex turn is the first request of a new codex-tui 0.160.0 thread on Responses Lite.
++// A Codex turn is the first request of a new codex-tui 0.163.0 thread on Responses Lite.
 +// data/codex_context.json holds that client's tools, base instructions and turn context, taken
-+// from a captured request with the machine's paths replaced by /home/user/workspace.
++// from a request captured on Linux with the machine's paths replaced by /home/user/workspace.
 +const (
-+	codexUserAgent   = "codex-tui/0.160.0 (Ubuntu 26.4.0; aarch64) ghostty/1.3.1 (codex-tui; 0.160.0)"
++	codexUserAgent   = "codex-tui/0.163.0 (Debian 13.0.0; x86_64) xterm-ghostty (codex-tui; 0.163.0)"
 +	codexEnvironment = `<environment_context>
 +  <cwd>/home/user/workspace</cwd>
 +  <shell>bash</shell>
@@ -200,12 +216,12 @@ new file mode 100644
 +
 +type codexRequest struct {
 +	Model             string              `json:"model"`
++	Stream            bool                `json:"stream"`
 +	Input             []codexItem         `json:"input"`
 +	ToolChoice        string              `json:"tool_choice"`
 +	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 +	Reasoning         codexReasoning      `json:"reasoning"`
 +	Store             bool                `json:"store"`
-+	Stream            bool                `json:"stream"`
 +	Include           []string            `json:"include"`
 +	PromptCacheKey    string              `json:"prompt_cache_key"`
 +	Text              map[string]string   `json:"text"`
@@ -222,6 +238,7 @@ new file mode 100644
 +	WindowNumber               int    `json:"window_number"`
 +	ContextWindowID            string `json:"context_window_id"`
 +	RequestKind                string `json:"request_kind"`
++	HistoryInitialization      string `json:"history_initialization"`
 +	RootTurnID                 string `json:"root_turn_id"`
 +	ThreadSource               string `json:"thread_source"`
 +	TurnTrigger                string `json:"turn_trigger"`
@@ -237,8 +254,9 @@ new file mode 100644
 +}
 +
 +// codexTurn returns the request and headers of a new Codex thread whose first user message is prompt.
-+// An empty effort leaves the reasoning effort unspecified.
-+func codexTurn(authID, model, effort, prompt string) (codexRequest, http.Header) {
++// An empty effort leaves the reasoning effort unspecified. Non-empty instructions
++// are sent as Codex sends its developer_instructions setting: first in the first context message.
++func codexTurn(authID, model, effort, instructions, prompt string) (codexRequest, http.Header) {
 +	now := time.Now()
 +	thread, turnID := uuidV7(), uuidV7().String()
 +	threadID := thread.String()
@@ -249,14 +267,18 @@ new file mode 100644
 +	metadata, _ := json.Marshal(codexTurnMetadata{
 +		InstallationID: installationID, SessionID: threadID, ThreadID: threadID, AgentName: "/root",
 +		TurnID: turnID, WindowID: windowID, ContextWindowID: uuidV7().String(), RequestKind: "turn",
-+		RootTurnID: turnID, ThreadSource: "user", TurnTrigger: "user", Sandbox: "seccomp", SandboxMode: "workspace-write",
-+		AutoReviewEnabled: true, NodeReplAutoReviewRequired: true, TurnStartedAtUnixMS: now.UnixMilli(),
-+		AnalyticsEnabled: true, Model: model, ReasoningEffort: effort,
++		HistoryInitialization: "new", RootTurnID: turnID, ThreadSource: "user", TurnTrigger: "user",
++		Sandbox: "seccomp", SandboxMode: "workspace-write", AutoReviewEnabled: true, NodeReplAutoReviewRequired: true,
++		TurnStartedAtUnixMS: now.UnixMilli(), AnalyticsEnabled: true, Model: model, ReasoningEffort: effort,
 +	})
 +	created := float64(now.UnixMicro()) / 1e6
 +	input := codexPrefix(thread)
-+	for _, message := range codexContext.Messages {
-+		input = append(input, codexMessage("msg_"+uuidV7().String(), message.Role, turnID, created, message.Content...))
++	for i, message := range codexContext.Messages {
++		parts := message.Content
++		if i == 0 && instructions != "" {
++			parts = append([]codexText{{"generic.developer_instructions", instructions}}, parts...)
++		}
++		input = append(input, codexMessage("msg_"+uuidV7().String(), message.Role, turnID, created, parts...))
 +	}
 +	input = append(input,
 +		codexMessage("msg_"+uuidV7().String(), "user", turnID, created,
@@ -286,16 +308,6 @@ new file mode 100644
 +		"X-Openai-Internal-Codex-Responses-Lite": {"true"},
 +	}
 +	return request, headers
-+}
-+
-+// askCodex sends prompt as a new Codex turn on auth. Effort is sent as selected.
-+func askCodex(auth credential, model, effort, prompt string) (out modelResponse, elapsed time.Duration, err error) {
-+	body, headers := codexTurn("sub2api-account:"+auth.ID, model, effort, prompt)
-+	ctx, cancel := withModelTimeout(auth.ctx, answerTimeout)
-+	defer cancel()
-+	start := time.Now()
-+	out, _, err = executeModel(ctx, auth, model, body, headers)
-+	return out, time.Since(start), err
 +}
 +
 +// codexPrefix builds the tools and base instructions items Codex puts first in every request, with
@@ -346,243 +358,6 @@ new file mode 100644
 +func (id uuid) String() string {
 +	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
 +}
-diff --git a/backend/internal/codexeval/fingerprint.go b/backend/internal/codexeval/fingerprint.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/fingerprint.go
-@@ -0,0 +1,182 @@
-+package codexeval
-+
-+import (
-+	"context"
-+	"errors"
-+	"fmt"
-+	"math/rand"
-+	"sync"
-+	"sync/atomic"
-+	"time"
-+)
-+
-+const (
-+	fingerprintDefaultConcurrency = 2
-+	fingerprintMaxConcurrency     = 6
-+)
-+
-+type fingerprintMode struct {
-+	ID      string `json:"id"`
-+	Name    string `json:"name"`
-+	Cells   int    `json:"cells"`
-+	Samples int    `json:"samples_per_cell"`
-+}
-+
-+var fingerprintModes = []fingerprintMode{{"quick", "快速", 4, 15}, {"standard", "标准", 8, 25}, {"strict", "严格", 16, 25}}
-+
-+type fingerprintSample struct {
-+	Output     modelResponse
-+	Cell       string
-+	Normalized string
-+	Category   string
-+	Error      string
-+}
-+
-+type fingerprintResult struct {
-+	Info
-+	ID              string                 `json:"id"`
-+	Time            time.Time              `json:"time"`
-+	Model           string                 `json:"model"`
-+	Mode            string                 `json:"mode"`
-+	Concurrency     int                    `json:"concurrency,omitempty"`
-+	Effort          string                 `json:"effort"`
-+	Status          string                 `json:"status"`
-+	Total           int                    `json:"total"`
-+	Done            int                    `json:"done"`
-+	Valid           int                    `json:"valid"`
-+	Errors          int                    `json:"errors"`
-+	DurationMS      int64                  `json:"duration_ms"`
-+	InputTokens     *int64                 `json:"input_tokens"`
-+	OutputTokens    *int64                 `json:"output_tokens"`
-+	ReasoningTokens *int64                 `json:"reasoning_tokens"`
-+	Error           string                 `json:"error,omitempty"`
-+	Attribution     fingerprintAttribution `json:"attribution"`
-+}
-+
-+// summary drops the comparison tables that only the detail dialog shows.
-+func (r fingerprintResult) summary() fingerprintResult {
-+	r.Attribution.Comparisons, r.Attribution.Warnings = nil, nil
-+	return r
-+}
-+
-+type fingerprintProgress struct {
-+	Model       string `json:"model"`
-+	Mode        string `json:"mode"`
-+	Done        int    `json:"done"`
-+	Total       int    `json:"total"`
-+	Valid       int    `json:"valid"`
-+	Errors      int    `json:"errors"`
-+	Phase       string `json:"phase"`
-+	Concurrency int    `json:"concurrency"`
-+	cancel      context.CancelFunc
-+}
-+
-+var (
-+	fingerprintResults = map[string][]fingerprintResult{}
-+	fingerprintRunning = map[string]*fingerprintProgress{}
-+	fingerprintSlots   = make(chan struct{}, fingerprintMaxConcurrency)
-+)
-+
-+func runFingerprint(ctx context.Context, auth credential, model string, mode fingerprintMode, p *fingerprintProgress) {
-+	id := auth.ID
-+	started := time.Now()
-+	var inputTokens, outputTokens, reasoningTokens int64
-+	r := fingerprintResult{Info: auth.info(), ID: fmt.Sprintf("%d", started.UnixNano()), Time: started.UTC(), Model: model, Mode: mode.ID, Concurrency: p.Concurrency, Effort: "low", Status: "completed", Total: mode.Cells * mode.Samples}
-+	r.InputTokens, r.OutputTokens, r.ReasoningTokens = &inputTokens, &outputTokens, &reasoningTokens
-+	defer func() {
-+		if recovered := recover(); recovered != nil {
-+			r.Status, r.Error = "failed", fmt.Sprint(recovered)
-+		}
-+		r.DurationMS = time.Since(started).Milliseconds()
-+		mu.Lock()
-+		if ctx.Err() != nil && r.Done < r.Total && r.Status != "failed" {
-+			r.Status = "cancelled"
-+		}
-+		p.cancel()
-+		fingerprintResults[id] = appendRecent(fingerprintResults[id], r)
-+		delete(fingerprintRunning, id)
-+		_ = saveStateLocked()
-+		mu.Unlock()
-+	}()
-+	jobs := make([]fingerprintProbe, 0, r.Total)
-+	for _, probe := range fingerprintProbes[:mode.Cells] {
-+		for range mode.Samples {
-+			jobs = append(jobs, probe)
-+		}
-+	}
-+	rand.Shuffle(len(jobs), func(i, j int) { jobs[i], jobs[j] = jobs[j], jobs[i] })
-+	events := make(chan fingerprintSample)
-+	var cursor atomic.Int64
-+	var workers sync.WaitGroup
-+	for range p.Concurrency {
-+		workers.Add(1)
-+		go func() {
-+			defer workers.Done()
-+			for ctx.Err() == nil {
-+				i := int(cursor.Add(1) - 1)
-+				if i >= len(jobs) {
-+					return
-+				}
-+				sample := collectFingerprintSample(ctx, auth, model, jobs[i])
-+				events <- sample
-+			}
-+		}()
-+	}
-+	go func() { workers.Wait(); close(events) }()
-+	valid := map[string][]string{}
-+	consecutiveErrors := 0
-+	for sample := range events {
-+		inputTokens += sample.Output.InputTokens
-+		outputTokens += sample.Output.OutputTokens
-+		reasoningTokens += sample.Output.ReasoningTokens
-+		if sample.Category == "cancelled" {
-+			continue
-+		}
-+		r.Done++
-+		if sample.Category == "error" {
-+			r.Errors++
-+			consecutiveErrors++
-+			if consecutiveErrors >= 8 {
-+				r.Status, r.Error = "failed", "连续 8 次请求失败，已停止采集："+sample.Error
-+				p.cancel()
-+			}
-+		} else {
-+			consecutiveErrors = 0
-+		}
-+		if sample.Category == "valid" {
-+			r.Valid++
-+			valid[sample.Cell] = append(valid[sample.Cell], sample.Normalized)
-+		}
-+		mu.Lock()
-+		p.Done, p.Valid, p.Errors = r.Done, r.Valid, r.Errors
-+		mu.Unlock()
-+	}
-+	mu.Lock()
-+	if p.Phase != "cancelling" {
-+		p.Phase = "comparing"
-+	}
-+	mu.Unlock()
-+	r.Attribution = attributeFingerprint(model, valid)
-+}
-+
-+func collectFingerprintSample(ctx context.Context, auth credential, model string, probe fingerprintProbe) (sample fingerprintSample) {
-+	sample.Cell = probe.ID
-+	prompt := probe.Prompts[rand.Intn(len(probe.Prompts))]
-+	out, _, err := executeProbe(ctx, auth, model, map[string]any{
-+		"model": model, "stream": true,
-+		"instructions": probe.Instructions, "input": prompt,
-+		"temperature": 1.0, "reasoning": map[string]string{"effort": "low"},
-+		"store": false,
-+	}, nil, fingerprintSlots)
-+	sample.Output = out
-+	if err != nil {
-+		if errors.Is(err, context.Canceled) {
-+			sample.Category = "cancelled"
-+			return
-+		}
-+		sample.Category, sample.Error = "error", truncate(err.Error(), 500)
-+		return
-+	}
-+	sample.Normalized, sample.Category = normalizeFingerprintAnswer(out.Answer, probe)
-+	return
-+}
-diff --git a/backend/internal/codexeval/fingerprint_algorithm.go b/backend/internal/codexeval/fingerprint_algorithm.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/fingerprint_algorithm.go
-@@ -0,0 +1,424 @@
-+package codexeval
-+
-+import (
-+	_ "embed"
-+	"encoding/json"
-+	"hash/crc32"
-+	"math"
-+	"math/rand"
-+	"regexp"
-+	"sort"
-+	"strconv"
-+	"strings"
-+	"unicode"
-+
-+	"golang.org/x/text/unicode/norm"
-+)
-+
-+const (
-+	fingerprintMinValid     = 10
-+	fingerprintMinCells     = 4
-+	fingerprintPermutations = 1000
-+)
-+
-+type fingerprintProbe struct {
-+	ID           string   `json:"id"`
-+	Kind         string   `json:"kind"`
-+	Lo           int      `json:"lo"`
-+	Hi           int      `json:"hi"`
-+	Instructions string   `json:"instructions"`
-+	Prompts      []string `json:"prompts"`
-+}
-+
-+type fingerprintBaseline struct {
-+	Model string              `json:"model"`
-+	Cells map[string][]string `json:"cells"`
-+}
-+
-+//go:embed data/fingerprint_probes.json
-+var fingerprintProbesJSON []byte
-+
-+//go:embed data/fingerprint_baselines.json
-+var fingerprintBaselinesJSON []byte
-+
-+var fingerprintProbes = mustDecode[[]fingerprintProbe](fingerprintProbesJSON)
-+var fingerprintBaselines = mustDecode[[]fingerprintBaseline](fingerprintBaselinesJSON)
 +
 +func mustDecode[T any](data []byte) T {
 +	var value T
@@ -591,382 +366,969 @@ new file mode 100644
 +	}
 +	return value
 +}
+diff --git a/backend/internal/codexeval/fingerprint.go b/backend/internal/codexeval/fingerprint.go
+new file mode 100644
+index 0000000..9a15946
+--- /dev/null
++++ b/backend/internal/codexeval/fingerprint.go
+@@ -0,0 +1,249 @@
++package codexeval
 +
-+var fingerprintRefusal = regexp.MustCompile(`(?i)\bas an ai\b|\bi (?:cannot|can't|can not|won't|will not)\b|\bi'?m (?:unable|not able|sorry)\b|\bsorry,? (?:i|but)\b|\bcannot (?:comply|assist|help)\b|我不能|我无法|无法回答|不能回答|抱歉|对不起|作为(?:一个)?(?:AI|人工智能)`)
-+var fingerprintWord = regexp.MustCompile(`^[a-z]+$`)
-+var fingerprintDigits = regexp.MustCompile(`^[0-9]+$`)
-+var fingerprintLetterNames = map[string]string{"bee": "b", "cee": "c", "dee": "d", "gee": "g", "jay": "j", "kay": "k", "el": "l", "ell": "l", "em": "m", "en": "n", "oh": "o", "pee": "p", "cue": "q", "queue": "q", "ar": "r", "es": "s", "ess": "s", "tee": "t", "vee": "v", "ex": "x", "why": "y", "zee": "z", "zed": "z"}
-+var fingerprintOnes = strings.Fields("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen")
-+var fingerprintTens = strings.Fields("twenty thirty forty fifty sixty seventy eighty ninety")
-+var fingerprintChineseDigits = map[rune]int{'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
++import (
++	"context"
++	_ "embed"
++	"errors"
++	"fmt"
++	"math/rand"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++)
 +
-+func fingerprintNumber(s string) (int, bool) {
-+	if fingerprintDigits.MatchString(s) {
-+		n, err := strconv.Atoi(s)
-+		return n, err == nil
-+	}
-+	total, current, chinese := 0, 0, true
-+	for _, ch := range s {
-+		if n, ok := fingerprintChineseDigits[ch]; ok {
-+			current = n
-+			continue
-+		}
-+		switch ch {
-+		case '十':
-+			total += max(current, 1) * 10
-+			current = 0
-+		case '百':
-+			total += max(current, 1) * 100
-+			current = 0
-+		case '千':
-+			total += max(current, 1) * 1000
-+			current = 0
-+		default:
-+			chinese = false
-+		}
-+	}
-+	if chinese && s != "" {
-+		return total + current, true
-+	}
-+	for n, word := range fingerprintOnes {
-+		if s == word {
-+			return n, true
-+		}
-+	}
-+	if s == "hundred" || s == "onehundred" {
-+		return 100, true
-+	}
-+	for i, tens := range fingerprintTens {
-+		if s == tens {
-+			return (i + 2) * 10, true
-+		}
-+		if strings.HasPrefix(s, tens) {
-+			for n := 1; n <= 9; n++ {
-+				if strings.TrimPrefix(s, tens) == fingerprintOnes[n] {
-+					return (i+2)*10 + n, true
-+				}
-+			}
-+		}
-+	}
-+	return 0, false
++// Each run sends fingerprintTarget challenges, at most that many at once per credential and
++// fingerprintGlobalConcurrency across credentials. A challenge holds its slot through its retries.
++const (
++	fingerprintTarget             = 3
++	fingerprintGlobalConcurrency  = 6
++	fingerprintMaxText            = 64000
++	fingerprintDefaultConcurrency = fingerprintTarget
++	fingerprintMaxConcurrency     = fingerprintTarget
++)
++
++type fingerprintChallenge struct {
++	Instructions  string `json:"instructions,omitempty"`
++	Prompt        string `json:"prompt"`
++	ExpectedCount int    `json:"expected_count"`
 +}
 +
-+func fingerprintChinese(s string, limit int) bool {
-+	count := 0
-+	for _, ch := range s {
-+		if ch < '一' || ch > '鿿' {
-+			return false
++//go:embed data/lm-detector/enrollment-suite.json
++var fingerprintSuiteJSON []byte
++
++// fingerprintSuite holds the challenges the reference answers were collected with: 12 prompt environments that
++// add a system prompt, a user prefix or nothing to their three challenges.
++var fingerprintSuite = func() []fingerprintChallenge {
++	var suite []fingerprintChallenge
++	for _, c := range mustDecode[[]struct {
++		System        string `json:"system"`
++		UserPrefix    string `json:"user_prefix"`
++		Prompt        string `json:"prompt"`
++		ExpectedCount int    `json:"expected_count"`
++	}](fingerprintSuiteJSON) {
++		prompt := c.Prompt
++		if c.UserPrefix != "" {
++			prompt = c.UserPrefix + "\n\nFinal task:\n" + c.Prompt
 +		}
-+		count++
++		suite = append(suite, fingerprintChallenge{c.System, prompt, c.ExpectedCount})
 +	}
-+	return count > 0 && count <= limit
++	return suite
++}()
++
++func fingerprintChallenges() []fingerprintChallenge {
++	challenges := make([]fingerprintChallenge, fingerprintTarget)
++	for i, j := range rand.Perm(len(fingerprintSuite))[:fingerprintTarget] {
++		challenges[i] = fingerprintSuite[j]
++	}
++	return challenges
 +}
 +
-+func normalizeFingerprintAnswer(raw string, probe fingerprintProbe) (string, string) {
-+	raw = strings.TrimSpace(norm.NFC.String(raw))
-+	if raw == "" {
-+		return "", "empty"
++// fingerprintAliases maps tested models to the candidate that stands for them: the bank enrolls gpt-6.1-sol
++// answers under gpt-6-astra, and deepseek-flash serves the model enrolled as deepseek-v4.1-flash-1017.
++// The page compares models with the same table.
++var fingerprintAliases = map[string]string{"gpt-6.1-sol": "gpt-6-astra", "deepseek-flash": "deepseek-v4.1-flash-1017"}
++
++// fingerprintModelID is the candidate a model name stands for, without a provider prefix such as "openai/".
++func fingerprintModelID(model string) string {
++	model = strings.ToLower(strings.TrimSpace(model))
++	model = model[strings.LastIndex(model, "/")+1:]
++	if alias, ok := fingerprintAliases[model]; ok {
++		return alias
 +	}
-+	if fingerprintRefusal.MatchString(raw) {
-+		return "", "refusal"
-+	}
-+	clean := strings.Map(func(ch rune) rune {
-+		switch {
-+		case ch >= '０' && ch <= '９':
-+			return '0' + ch - '０'
-+		case ch >= '\u0660' && ch <= '\u0669':
-+			return '0' + ch - '\u0660'
-+		case ch >= '\u06f0' && ch <= '\u06f9':
-+			return '0' + ch - '\u06f0'
-+		case unicode.IsSpace(ch) || unicode.IsLetter(ch) || unicode.IsNumber(ch):
-+			return unicode.ToLower(ch)
-+		default:
-+			return -1
-+		}
-+	}, raw)
-+	words := strings.Fields(clean)
-+	if len(words) == 0 {
-+		return "", "empty"
-+	}
-+	first, answer, valid := words[0], words[0], false
-+	switch probe.Kind {
-+	case "int":
-+		if n, ok := fingerprintNumber(first); ok {
-+			answer, valid = strconv.Itoa(n), n >= probe.Lo && n <= probe.Hi
-+		}
-+	case "letter":
-+		if mapped := fingerprintLetterNames[first]; mapped != "" {
-+			answer = mapped
-+		}
-+		valid = len(answer) == 1 && answer[0] >= 'a' && answer[0] <= 'z'
-+		if !valid {
-+			answer = first
-+		}
-+	case "color":
-+		if first == "grey" {
-+			answer = "gray"
-+		} else if first == "aqua" {
-+			answer = "cyan"
-+		} else if len([]rune(first)) >= 2 && fingerprintChinese(first, len([]rune(first))) && strings.HasSuffix(first, "色") {
-+			answer = strings.TrimSuffix(first, "色")
-+		}
-+		valid = fingerprintWord.MatchString(answer) || fingerprintChinese(answer, 4)
-+		if !valid {
-+			answer = first
-+		}
-+	case "coin":
-+		switch {
-+		case first == "heads" || first == "head" || first == "字" || strings.HasPrefix(first, "正"):
-+			answer, valid = "heads", true
-+		case first == "tails" || first == "tail" || first == "花" || strings.HasPrefix(first, "反"):
-+			answer, valid = "tails", true
-+		}
-+	default:
-+		valid = fingerprintWord.MatchString(first) || fingerprintChinese(first, 6)
-+	}
-+	if valid {
-+		return answer, "valid"
-+	}
-+	return answer, "invalid"
++	return model
 +}
 +
-+func fingerprintJSD(a, b []string) float64 {
-+	if len(a) == 0 || len(b) == 0 {
-+		return 0
-+	}
-+	counts := map[string][2]float64{}
-+	for _, v := range a {
-+		c := counts[v]
-+		c[0]++
-+		counts[v] = c
-+	}
-+	for _, v := range b {
-+		c := counts[v]
-+		c[1]++
-+		counts[v] = c
-+	}
-+	// Sorting keeps rounding and permutation decisions reproducible across Go map iteration orders.
-+	keys := make([]string, 0, len(counts))
-+	for key := range counts {
-+		keys = append(keys, key)
-+	}
-+	sort.Strings(keys)
-+	distance := 0.0
-+	for _, key := range keys {
-+		c := counts[key]
-+		p, q := c[0]/float64(len(a)), c[1]/float64(len(b))
-+		m := (p + q) / 2
-+		if p > 0 {
-+			distance += p * math.Log2(p/m) / 2
-+		}
-+		if q > 0 {
-+			distance += q * math.Log2(q/m) / 2
-+		}
-+	}
-+	return min(1, max(0, distance))
++type fingerprintSample struct {
++	fingerprintChallenge
++	Attempts int    `json:"attempts,omitempty"`
++	Text     string `json:"text,omitempty"`
++	Error    string `json:"error,omitempty"`
++	Parsed   int    `json:"parsed_numbers"`
++	Valid    bool   `json:"accepted"`
 +}
 +
-+type fingerprintCellComparison struct {
-+	Cell   string  `json:"cell"`
-+	JSD    float64 `json:"jsd"`
-+	ValidA int     `json:"valid_a"`
-+	ValidB int     `json:"valid_b"`
++// fingerprintResult stores one completed, partial, failed, or cancelled challenge run.
++type fingerprintResult struct {
++	Info
++	ID               string                  `json:"id"`
++	Time             time.Time               `json:"time"`
++	Model            string                  `json:"model"`
++	Status           string                  `json:"status"`
++	Error            string                  `json:"error,omitempty"`
++	DurationMS       int64                   `json:"duration_ms"`
++	InputTokens      int64                   `json:"input_tokens"`
++	OutputTokens     int64                   `json:"output_tokens"`
++	ReasoningTokens  int64                   `json:"reasoning_tokens"`
++	DetectorRevision string                  `json:"detector_revision"`
++	Concurrency      int                     `json:"concurrency,omitempty"`
++	Samples          []fingerprintSample     `json:"samples"`
++	Attribution      *fingerprintAttribution `json:"attribution,omitempty"`
 +}
 +
-+type fingerprintComparison struct {
-+	Model   string                      `json:"model"`
-+	MeanJSD *float64                    `json:"mean_jsd"`
-+	PValue  *float64                    `json:"p_value"`
-+	Verdict string                      `json:"verdict"`
-+	SelfJSD *float64                    `json:"self_jsd"`
-+	Cells   []fingerprintCellComparison `json:"cells"`
-+}
-+
-+func compareFingerprintCells(a, b map[string][]string) ([]fingerprintCellComparison, *float64) {
-+	entries := []fingerprintCellComparison{}
-+	total := 0.0
-+	for _, probe := range fingerprintProbes {
-+		x, y := a[probe.ID], b[probe.ID]
-+		if len(x) < fingerprintMinValid || len(y) < fingerprintMinValid {
-+			continue
-+		}
-+		d := fingerprintJSD(x, y)
-+		total += d
-+		entries = append(entries, fingerprintCellComparison{probe.ID, d, len(x), len(y)})
-+	}
-+	if len(entries) < fingerprintMinCells {
-+		return entries, nil
-+	}
-+	mean := total / float64(len(entries))
-+	return entries, &mean
-+}
-+
-+func fingerprintSplitHalf(cells map[string][]string) *float64 {
-+	total, n := 0.0, 0
-+	for _, probe := range fingerprintProbes {
-+		answers := cells[probe.ID]
-+		if len(answers) < fingerprintMinValid {
-+			continue
-+		}
-+		a, b := []string{}, []string{}
-+		for i, answer := range answers {
-+			if i%2 == 0 {
-+				a = append(a, answer)
-+			} else {
-+				b = append(b, answer)
-+			}
-+		}
-+		total += fingerprintJSD(a, b)
-+		n++
-+	}
-+	if n == 0 {
-+		return nil
-+	}
-+	mean := total / float64(n)
-+	return &mean
-+}
-+
-+func fingerprintPermutation(a, b map[string][]string, seed string) *float64 {
-+	entries, observed := compareFingerprintCells(a, b)
-+	if observed == nil {
-+		return nil
-+	}
-+	rng := rand.New(rand.NewSource(int64(crc32.ChecksumIEEE([]byte(seed)))))
-+	pools := make([][]string, len(entries))
-+	for i, e := range entries {
-+		pools[i] = append(append([]string{}, a[e.Cell]...), b[e.Cell]...)
-+	}
-+	hits := 0
-+	for range fingerprintPermutations {
-+		total := 0.0
-+		for i, e := range entries {
-+			pool := pools[i]
-+			rng.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
-+			total += fingerprintJSD(pool[:e.ValidA], pool[e.ValidA:])
-+		}
-+		if total/float64(len(entries)) >= *observed-1e-12 {
-+			hits++
-+		}
-+	}
-+	p := float64(hits+1) / float64(fingerprintPermutations+1)
-+	return &p
-+}
-+
-+func fingerprintDistanceVerdict(d *float64) string {
-+	if d == nil {
-+		return "insufficient"
-+	}
-+	if *d <= .25 {
-+		return "match"
-+	}
-+	if *d <= .35 {
-+		return "uncertain"
-+	}
-+	return "mismatch"
-+}
-+
-+type fingerprintAttribution struct {
-+	Status          string                  `json:"status"`
-+	Message         string                  `json:"message"`
-+	Nearest         string                  `json:"nearest,omitempty"`
-+	Alpha           float64                 `json:"alpha"`
-+	SelfJSD         *float64                `json:"self_jsd"`
-+	ReferencePValue *float64                `json:"reference_p_value,omitempty"`
-+	Warnings        []string                `json:"warnings"`
-+	Comparisons     []fingerprintComparison `json:"comparisons"`
-+}
-+
-+func attributeFingerprint(model string, valid map[string][]string) fingerprintAttribution {
-+	r := fingerprintAttribution{Status: "insufficient", Message: "有效样本不足", Alpha: .05 / float64(max(1, 2*len(fingerprintBaselines))), SelfJSD: fingerprintSplitHalf(valid), Warnings: []string{}, Comparisons: []fingerprintComparison{}}
-+	var sameCells map[string][]string
-+	for _, baseline := range fingerprintBaselines {
-+		cells, mean := compareFingerprintCells(valid, baseline.Cells)
-+		p := fingerprintPermutation(valid, baseline.Cells, model+"|"+baseline.Model)
-+		r.Comparisons = append(r.Comparisons, fingerprintComparison{Model: baseline.Model, MeanJSD: mean, PValue: p, Verdict: fingerprintDistanceVerdict(mean), SelfJSD: fingerprintSplitHalf(baseline.Cells), Cells: cells})
-+		if baseline.Model == model {
-+			sameCells = baseline.Cells
-+		}
-+	}
-+	sort.SliceStable(r.Comparisons, func(i, j int) bool {
-+		a, b := r.Comparisons[i].MeanJSD, r.Comparisons[j].MeanJSD
-+		return a != nil && (b == nil || *a < *b)
-+	})
-+	if len(r.Comparisons) == 0 || r.Comparisons[0].MeanJSD == nil {
-+		return r
-+	}
-+	best := r.Comparisons[0]
-+	r.Nearest = best.Model
-+	if r.SelfJSD != nil && *r.SelfJSD > .25 {
-+		r.Warnings = append(r.Warnings, "本次样本自一致性较低，建议使用严格模式复测")
-+	}
-+	var same *fingerprintComparison
-+	for i := range r.Comparisons {
-+		c := &r.Comparisons[i]
-+		if c.Model == model {
-+			same = c
-+		}
-+		if c.SelfJSD != nil && *c.SelfJSD > .25 {
-+			r.Warnings = append(r.Warnings, c.Model+" 基准自一致性较低")
-+		}
-+	}
-+	significant := func(p *float64) bool { return p != nil && *p < r.Alpha }
-+	if same == nil {
-+		r.Status, r.Message = "no_baseline", "所选模型没有同名基准，仅展示相似模型"
-+		return r
-+	}
-+	if same.MeanJSD == nil {
-+		return r
-+	}
-+	if best.Model == model {
-+		if significant(same.PValue) {
-+			r.Status, r.Message = "different", "与同名基准存在显著差异，无法归因到其他模型"
-+		} else {
-+			r.Status, r.Message = "consistent", "与同名基准未发现显著差异"
-+		}
-+	} else {
-+		var bestCells map[string][]string
-+		for _, b := range fingerprintBaselines {
-+			if b.Model == best.Model {
-+				bestCells = b.Cells
-+			}
-+		}
-+		// Restrict reference separation to the probes actually collected in this run.
-+		a, b := map[string][]string{}, map[string][]string{}
-+		for cell, answers := range valid {
-+			if len(answers) >= fingerprintMinValid {
-+				a[cell], b[cell] = sameCells[cell], bestCells[cell]
-+			}
-+		}
-+		r.ReferencePValue = fingerprintPermutation(a, b, "reference|"+model+"|"+best.Model)
-+		switch {
-+		case !significant(r.ReferencePValue):
-+			r.Status, r.Message = "ambiguous", "同名基准与最近基准本身无法区分"
-+		case significant(same.PValue) && !significant(best.PValue):
-+			r.Status, r.Message = "substitution", "回答分布更接近 "+best.Model+"，疑似被替换为该模型"
-+			for _, candidate := range r.Comparisons[1:] {
-+				if candidate.Model != model && candidate.PValue != nil && !significant(candidate.PValue) {
-+					r.Status, r.Message = "ambiguous", "与同名基准不同，但多个替代模型均无法排除"
-+					break
-+				}
-+			}
-+		case !significant(same.PValue) && significant(best.PValue):
-+			r.Status, r.Message = "consistent", "与同名基准未发现显著差异"
-+		case significant(same.PValue) && significant(best.PValue):
-+			r.Status, r.Message = "different", "与同名及最近基准均存在显著差异"
-+		default:
-+			r.Status, r.Message = "ambiguous", "多个模型均无法排除，样本不足以区分"
-+		}
-+	}
-+	if r.SelfJSD != nil && *r.SelfJSD > .25 && (r.Status == "consistent" || r.Status == "substitution") {
-+		r.Status, r.Message = "unstable", "样本波动较大，结论不稳定，建议复测"
++// summary drops the samples and rankings that only the detail dialog shows.
++func (r fingerprintResult) summary() fingerprintResult {
++	r.Samples = nil
++	if r.Attribution != nil {
++		attribution := *r.Attribution
++		attribution.Results, attribution.Diagnostics = nil, nil
++		r.Attribution = &attribution
 +	}
 +	return r
 +}
++
++type fingerprintProgress struct {
++	Model       string `json:"model"`
++	Done        int    `json:"done"`
++	Total       int    `json:"total"`
++	Concurrency int    `json:"concurrency"`
++}
++
++var (
++	fingerprintSlots   = make(chan struct{}, fingerprintGlobalConcurrency)
++	fingerprintResults = map[string][]fingerprintResult{}
++	fingerprintRunning = map[string]*fingerprintProgress{}
++)
++
++func runFingerprint(ctx context.Context, auth credential, model string, p *fingerprintProgress) {
++	started := time.Now()
++	done := 0
++	r := fingerprintResult{Info: auth.info(), ID: fmt.Sprint(started.UnixNano()), Time: started.UTC(), Model: model, DetectorRevision: detectorRevision, Concurrency: p.Concurrency}
++	r.Status = "completed"
++	defer func() {
++		if ctx.Err() != nil && done < fingerprintTarget {
++			r.Status = "cancelled"
++		}
++		if recovered := recover(); recovered != nil {
++			r.Status, r.Error = "failed", fmt.Sprint(recovered)
++		}
++		r.DurationMS = time.Since(started).Milliseconds()
++		mu.Lock()
++		defer mu.Unlock()
++		fingerprintResults[auth.ID] = appendRecent(fingerprintResults[auth.ID], r)
++		delete(fingerprintRunning, auth.ID)
++		_ = saveStateLocked()
++	}()
++	challenges := fingerprintChallenges()
++	type event struct {
++		index  int
++		sample fingerprintSample
++		output modelResponse
++		err    error
++	}
++	jobs, events := make(chan int, fingerprintTarget), make(chan event, fingerprintTarget)
++	for i := range challenges {
++		jobs <- i
++	}
++	close(jobs)
++	var workers sync.WaitGroup
++	for range p.Concurrency {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for i := range jobs {
++				select {
++				case fingerprintSlots <- struct{}{}:
++				case <-ctx.Done():
++					return
++				}
++				sample, output, err := collectFingerprintSample(ctx, auth, model, challenges[i])
++				<-fingerprintSlots
++				if sample.Attempts > 0 {
++					events <- event{i, sample, output, err}
++				}
++			}
++		}()
++	}
++	go func() { workers.Wait(); close(events) }()
++	samples := make([]*fingerprintSample, fingerprintTarget)
++	for e := range events {
++		samples[e.index] = &e.sample
++		r.InputTokens += e.output.InputTokens
++		r.OutputTokens += e.output.OutputTokens
++		r.ReasoningTokens += e.output.ReasoningTokens
++		if !errors.Is(e.err, context.Canceled) {
++			done++
++		}
++		mu.Lock()
++		p.Done = done
++		mu.Unlock()
++	}
++	var outputs []fingerprintOutput
++	// Preserve challenge order even when requests complete out of order.
++	for _, sample := range samples {
++		if sample == nil {
++			continue
++		}
++		r.Samples = append(r.Samples, *sample)
++		outputs = append(outputs, fingerprintOutput{sample.Text, sample.ExpectedCount})
++	}
++	attr, err := analyzeFingerprint(outputs)
++	switch {
++	case err == nil:
++		r.Attribution = &attr
++		if attr.Used < fingerprintTarget {
++			r.Status = "partial"
++		}
++	case len(r.Samples) > 0 && r.Samples[len(r.Samples)-1].Error != "":
++		// No answer was valid; the last request's error tells why.
++		r.Status, r.Error = "failed", r.Samples[len(r.Samples)-1].Error
++	default:
++		r.Status, r.Error = "failed", err.Error()
++	}
++}
++
++// collectFingerprintSample asks challenge until an answer can be scored. The sample keeps the last answer.
++func collectFingerprintSample(ctx context.Context, auth credential, model string, challenge fingerprintChallenge) (sample fingerprintSample, out modelResponse, err error) {
++	sample.fingerprintChallenge = challenge
++	out, sample.Attempts, err = askCodex(ctx, auth, model, "", challenge.Instructions, challenge.Prompt, challengeTimeout, func(answer string) (err error) {
++		sample.Text, sample.Parsed, err = fingerprintText(answer, challenge.ExpectedCount)
++		return err
++	}, nil)
++	sample.Valid = err == nil
++	if err != nil {
++		sample.Error = truncate(err.Error(), 500)
++	}
++	return
++}
++
++// fingerprintText returns the text of answer that the detector scores and the count of its numbers, or why
++// the answer cannot be scored. Like the upstream detector, only the requested count is scored when an answer runs
++// longer.
++func fingerprintText(answer string, expected int) (text string, parsed int, err error) {
++	if len(answer) > fingerprintMaxText {
++		return "", 0, errors.New("回答过长")
++	}
++	text, numbers := answer, parseNumbers(answer)
++	if len(numbers) > expected {
++		numbers = numbers[:expected]
++		values := make([]string, len(numbers))
++		for i, n := range numbers {
++			values[i] = strconv.Itoa(n)
++		}
++		text = strings.Join(values, ", ")
++	}
++	if len(numbers) < minimumNumbers(expected) {
++		err = errors.New("有效数字不足")
++	}
++	return text, len(numbers), err
++}
+diff --git a/backend/internal/codexeval/fingerprint_detector.go b/backend/internal/codexeval/fingerprint_detector.go
+new file mode 100644
+index 0000000..fffb2b7
+--- /dev/null
++++ b/backend/internal/codexeval/fingerprint_detector.go
+@@ -0,0 +1,696 @@
++package codexeval
++
++// Model attribution, ported from Ikaleio/lm-detector (MIT).
++// See data/lm-detector/README.md for the pinned source and license.
++import (
++	"cmp"
++	"crypto/sha256"
++	_ "embed"
++	"encoding/binary"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"math"
++	"regexp"
++	"slices"
++	"sort"
++	"strconv"
++	"unicode"
++)
++
++//go:embed data/lm-detector/shared_detector.bin
++var detectorFile []byte
++
++//go:embed data/lm-detector/models.json
++var detectorModelsJSON []byte
++
++//go:embed data/lm-detector/LICENSE
++var detectorLicense string
++
++var detectorRevision = fmt.Sprintf("sha256:%x", sha256.Sum256(detectorFile))
++
++// detectorVector is a float array of the detector file. The header stores it as {"$f32": offset, "n": length}
++// into the float section, which detectorFloats holds while decodeDetector parses the header.
++type detectorVector []float64
++
++var detectorFloats []float64
++
++func (v *detectorVector) UnmarshalJSON(data []byte) error {
++	var ref struct {
++		Offset *int `json:"$f32"`
++		N      int  `json:"n"`
++	}
++	if err := json.Unmarshal(data, &ref); err != nil {
++		return err
++	}
++	if ref.Offset == nil || *ref.Offset < 0 || ref.N < 0 || *ref.Offset+ref.N > len(detectorFloats) {
++		return fmt.Errorf("invalid float array %s", data)
++	}
++	*v = detectorFloats[*ref.Offset : *ref.Offset+ref.N : *ref.Offset+ref.N]
++	return nil
++}
++
++type detectorScaling struct {
++	Mean  detectorVector `json:"mean"`
++	Scale detectorVector `json:"scale"`
++}
++
++type detectorFeatureBank struct {
++	Mean         detectorVector     `json:"feature_mean"`
++	Scale        detectorVector     `json:"feature_scale"`
++	Basis        []detectorVector   `json:"nuisance_basis"`
++	Centroids    []detectorVector   `json:"centroids"`
++	Environments [][]detectorVector `json:"environment_centroids"`
++}
++
++type detectorModel struct {
++	ID            string `json:"id"`
++	DisplayName   string `json:"display_name"`
++	Family        string `json:"family"`
++	FamilyName    string `json:"family_name"`
++	ResponseCount int    `json:"response_count"`
++}
++
++type detector struct {
++	Schema          string         `json:"schema"`
++	BaseSHA256      string         `json:"base_sha256"`
++	ReferenceSHA256 string         `json:"source_reference_sha256"`
++	BankBuiltAt     string         `json:"bank_built_at"`
++	ModelIDs        []string       `json:"model_ids"`
++	ResponseCounts  detectorVector `json:"response_counts"`
++	Ranker          struct {
++		HeadParams []detectorScaling  `json:"head_params"`
++		FullParams []detectorScaling  `json:"full_params"`
++		LDAWeights []detectorVector   `json:"lda_weights"`
++		LDABias    detectorVector     `json:"lda_bias"`
++		References [][]detectorVector `json:"references"`
++		Bank       struct {
++			Hellinger detectorFeatureBank `json:"hellinger"`
++			Ordered   detectorFeatureBank `json:"ordered_blocks"`
++		} `json:"bank"`
++		Blend struct {
++			Frequency  float64 `json:"frequency"`
++			Positional float64 `json:"positional"`
++		} `json:"blend"`
++		Positional struct {
++			Params  []detectorScaling `json:"params"`
++			Weights []detectorVector  `json:"weights"`
++			Bias    detectorVector    `json:"bias"`
++		} `json:"positional"`
++	} `json:"ranker"`
++	Calibration struct {
++		Schema  string  `json:"schema"`
++		Method  string  `json:"method"`
++		Tau     float64 `json:"tau"`
++		Binding struct {
++			BaseSHA256      string   `json:"base_sha256"`
++			ReferenceSHA256 string   `json:"reference_sha256"`
++			ModelIDs        []string `json:"model_ids"`
++		} `json:"binding"`
++	} `json:"calibration"`
++	models         []detectorModel
++	referenceNorms [][]float64
++}
++
++var sharedDetector = decodeDetector(detectorFile, detectorModelsJSON)
++
++// decodeDetector reads a little-endian u32 header length, the JSON header, zero padding to 4 bytes,
++// then the float32 values stored byte plane by byte plane: every first byte, then every second byte, and so on.
++func decodeDetector(file, modelsJSON []byte) detector {
++	headerEnd := 4 + int(binary.LittleEndian.Uint32(file))
++	start := (headerEnd + 3) / 4 * 4
++	count := (len(file) - start) / 4
++	detectorFloats = make([]float64, count)
++	defer func() { detectorFloats = nil }()
++	for i := range detectorFloats {
++		var value [4]byte
++		for plane := range value {
++			value[plane] = file[start+plane*count+i]
++		}
++		detectorFloats[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(value[:])))
++	}
++	d := mustDecode[detector](file[4:headerEnd])
++	bank := mustDecode[struct {
++		BuiltAt string          `json:"built_at"`
++		Models  []detectorModel `json:"models"`
++	}](modelsJSON)
++	c := d.Calibration
++	if d.Schema != "shared-detector-v2" || bank.BuiltAt != d.BankBuiltAt || !slices.EqualFunc(bank.Models, d.ModelIDs, func(m detectorModel, id string) bool { return m.ID == id }) ||
++		c.Schema != "shared-confidence-v2" || c.Method != "ranking-temperature" || !(c.Tau >= 0.001 && c.Tau <= 1000) ||
++		c.Binding.BaseSHA256 != d.BaseSHA256 || c.Binding.ReferenceSHA256 != d.ReferenceSHA256 || !slices.Equal(c.Binding.ModelIDs, d.ModelIDs) {
++		panic("lm-detector detector, models and calibration do not match")
++	}
++	for i, m := range bank.Models {
++		if float64(m.ResponseCount) != d.ResponseCounts[i] {
++			panic("lm-detector models do not match the detector references")
++		}
++	}
++	d.models = bank.Models
++	for _, references := range d.Ranker.References {
++		norms := make([]float64, len(references))
++		for i, r := range references {
++			norms[i] = dot(r, r)
++		}
++		d.referenceNorms = append(d.referenceNorms, norms)
++	}
++	return d
++}
++
++type fingerprintOutput struct {
++	Text          string `json:"text"`
++	ExpectedCount int    `json:"expected_count"`
++}
++
++type fingerprintDiagnostic struct {
++	Index   int  `json:"index"`
++	Parsed  int  `json:"parsed_numbers"`
++	Minimum int  `json:"minimum_numbers"`
++	Valid   bool `json:"accepted"`
++}
++
++type fingerprintSequence struct {
++	Autocorrelation float64 `json:"autocorrelation"`
++	SmallStepShare  float64 `json:"small_step_share"`
++	ModelLike       bool    `json:"model_like"`
++}
++
++type fingerprintCandidate struct {
++	Model       string   `json:"model"`
++	DisplayName string   `json:"display_name"`
++	Family      string   `json:"family"`
++	FamilyName  string   `json:"family_name"`
++	Probability *float64 `json:"probability"`
++	Score       float64  `json:"score"`
++}
++
++// fingerprintAttribution ranks every candidate when three answers are valid, with calibrated probabilities.
++// Decision "partial" ranks one or two valid answers without probabilities, and "not_model" means the
++// answers do not move like a language model's, so nothing is ranked.
++type fingerprintAttribution struct {
++	Decision         string                  `json:"decision,omitempty"`
++	Prediction       string                  `json:"prediction"`
++	PredictionName   string                  `json:"prediction_name,omitempty"`
++	Probability      *float64                `json:"probability"`
++	Used             int                     `json:"used_outputs"`
++	FamilyPrediction string                  `json:"family_prediction_name"`
++	Sequence         *fingerprintSequence    `json:"sequence,omitempty"`
++	Results          []fingerprintCandidate  `json:"results"`
++	Diagnostics      []fingerprintDiagnostic `json:"diagnostics"`
++}
++
++var digitRuns = regexp.MustCompile(`[0-9]+`)
++
++func minimumNumbers(expected int) int {
++	return max(80, int(math.Ceil(float64(expected)*0.55)))
++}
++
++// Keep the longest run, ignoring introductory counts and numbers in prose.
++// ASCII digits and Unicode letters match the upstream implementation.
++func parseNumbers(text string) []int {
++	var best, current []int
++	end := 0
++	for _, span := range digitRuns.FindAllStringIndex(text, -1) {
++		for _, r := range text[end:span[0]] {
++			if unicode.IsLetter(r) {
++				if len(current) > len(best) {
++					best = current
++				}
++				current = nil
++				break
++			}
++		}
++		if n, err := strconv.Atoi(text[span[0]:span[1]]); err == nil && n >= 1 && n <= 355 {
++			current = append(current, n)
++		}
++		end = span[1]
++	}
++	if len(current) > len(best) {
++		best = current
++	}
++	return best
++}
++
++func analyzeFingerprint(outputs []fingerprintOutput) (fingerprintAttribution, error) {
++	d := &sharedDetector
++	r := fingerprintAttribution{}
++	var accepted [][]int
++	for i, output := range outputs {
++		numbers := parseNumbers(output.Text)
++		minimum := minimumNumbers(output.ExpectedCount)
++		valid := len(numbers) >= minimum
++		r.Diagnostics = append(r.Diagnostics, fingerprintDiagnostic{i, len(numbers), minimum, valid})
++		if valid {
++			accepted = append(accepted, numbers)
++		}
++	}
++	if r.Used = len(accepted); r.Used == 0 {
++		return r, errors.New("未采集到有效数字序列")
++	}
++	if r.Sequence = sequenceShape(accepted); !r.Sequence.ModelLike {
++		r.Decision = "not_model"
++		return r, nil
++	}
++	ranking := d.rank(accepted)
++	var probabilities []float64
++	if r.Used == fingerprintTarget {
++		probabilities = softmax(ranking, d.Calibration.Tau)
++	} else {
++		r.Decision = "partial"
++	}
++	order := make([]int, len(ranking))
++	for i := range order {
++		order[i] = i
++	}
++	sort.SliceStable(order, func(a, b int) bool { return ranking[order[a]] > ranking[order[b]] })
++	for _, i := range order {
++		m := d.models[i]
++		candidate := fingerprintCandidate{Model: m.ID, DisplayName: m.DisplayName, Family: m.Family, FamilyName: m.FamilyName, Score: ranking[i]}
++		if probabilities != nil {
++			candidate.Probability = &probabilities[i]
++		}
++		r.Results = append(r.Results, candidate)
++	}
++	top := r.Results[0]
++	r.Prediction, r.PredictionName, r.Probability, r.FamilyPrediction = top.Model, top.DisplayName, top.Probability, top.FamilyName
++	return r, nil
++}
++
++// sequenceShape checks how consecutive numbers move. Language-model answers jump between distant values:
++// a strongly negative lag-1 autocorrelation and almost no steps of 20 or less. Program output and sorted or
++// shuffled lists do not. The limits are 99.5% quantiles over the reference bank's three-answer groups.
++func sequenceShape(answers [][]int) *fingerprintSequence {
++	var autocorrelations, smallSteps []float64
++	for _, numbers := range answers {
++		x := toFloats(numbers)
++		m := mean(x)
++		variance, lagged, small := 0.0, 0.0, 0.0
++		for _, v := range x {
++			variance += (v - m) * (v - m)
++		}
++		variance /= float64(len(x))
++		for i := 1; i < len(x); i++ {
++			lagged += (x[i] - m) * (x[i-1] - m)
++			if math.Abs(x[i]-x[i-1]) <= 20 {
++				small++
++			}
++		}
++		autocorrelation := 1.0
++		if variance != 0 {
++			autocorrelation = lagged / float64(len(x)-1) / variance
++		}
++		autocorrelations = append(autocorrelations, autocorrelation)
++		smallSteps = append(smallSteps, small/float64(len(x)-1))
++	}
++	s := &fingerprintSequence{Autocorrelation: median(autocorrelations), SmallStepShare: median(smallSteps)}
++	s.ModelLike = s.Autocorrelation <= -0.23 && s.SmallStepShare <= 0.05
++	return s
++}
++
++func softmax(ranking []float64, tau float64) []float64 {
++	maximum := math.Inf(-1)
++	for _, score := range ranking {
++		maximum = math.Max(maximum, tau*score)
++	}
++	weights, total := make([]float64, len(ranking)), 0.0
++	for i, score := range ranking {
++		weights[i] = math.Exp(tau*score - maximum)
++		total += weights[i]
++	}
++	for i := range weights {
++		weights[i] /= total
++	}
++	return weights
++}
++
++// rank blends a frequency ranking (LDA over the first 128 numbers, nearest references and nuisance-corrected
++// centroids) with a positional and sequential discriminant; each part is standardized across candidates.
++func (d *detector) rank(answers [][]int) []float64 {
++	a := &d.Ranker
++	var lda, base, positional [][]float64
++	full := make([][]float64, len(answers))
++	for k, numbers := range answers {
++		full[k] = joinBlocks([][]float64{hellingerFeature(numbers), orderedBlockFeature(numbers)}, a.FullParams, []float64{0.75, 0.25})
++		head := numbers[:min(128, len(numbers))]
++		x := joinBlocks([][]float64{hellingerFeature(head), orderedBlockFeature(head)}, a.HeadParams, []float64{0.75, 0.25})
++		scores := make([]float64, len(a.LDAWeights))
++		for i, row := range a.LDAWeights {
++			scores[i] = dot(row, x) + a.LDABias[i]
++		}
++		lda = append(lda, zscores(scores))
++		base = append(base, d.baseline(numbers))
++		positional = append(positional, zscores(d.positional(numbers)))
++	}
++	near := make([]float64, len(a.References))
++	for m, references := range a.References {
++		distances := make([]float64, len(full))
++		for k, x := range full {
++			distances[k] = -nearestDistance(x, references, d.referenceNorms[m])
++		}
++		near[m] = median(distances)
++	}
++	l, n, b := zscores(columnMean(lda)), zscores(near), zscores(columnMean(base))
++	frequency := make([]float64, len(l))
++	for i := range frequency {
++		frequency[i] = 0.5*l[i] + 0.25*n[i] + 0.25*b[i]
++	}
++	frequency, sequential := zscores(frequency), zscores(columnMean(positional))
++	ranking := make([]float64, len(frequency))
++	for i := range ranking {
++		ranking[i] = a.Blend.Frequency*frequency[i] + a.Blend.Positional*sequential[i]
++	}
++	return ranking
++}
++
++// baseline compares nuisance-corrected value distributions with the model centroids, and the ordered blocks
++// with each prompt environment's model templates.
++func (d *detector) baseline(numbers []int) []float64 {
++	h, o := &d.Ranker.Bank.Hellinger, &d.Ranker.Bank.Ordered
++	hUnit := unitVector(subtractBasis(standardize(hellingerFeature(numbers), h.Mean, h.Scale), h.Basis))
++	marginal := make([]float64, len(h.Centroids))
++	for i, row := range h.Centroids {
++		marginal[i] = dot(hUnit, row)
++	}
++	centered := standardize(orderedBlockFeature(numbers), o.Mean, o.Scale)
++	raw, projected := unitVector(centered), unitVector(subtractBasis(centered, o.Basis))
++	templates, nuisance := make([]float64, len(o.Centroids)), make([]float64, len(o.Centroids))
++	for i, row := range o.Centroids {
++		templates[i] = math.Inf(-1)
++		for _, environment := range o.Environments {
++			templates[i] = math.Max(templates[i], dot(raw, environment[i]))
++		}
++		nuisance[i] = dot(projected, row)
++	}
++	tz, nz := zscores(templates), zscores(nuisance)
++	for i := range tz {
++		tz[i] = 0.5*tz[i] + 0.5*nz[i]
++	}
++	ordered, mz := zscores(tz), zscores(marginal)
++	for i := range mz {
++		mz[i] = 0.5*mz[i] + 0.5*ordered[i]
++	}
++	return mz
++}
++
++// positional scores the value distribution, ordered blocks, value positions and step patterns of one answer.
++func (d *detector) positional(numbers []int) []float64 {
++	p := &d.Ranker.Positional
++	x := joinBlocks([][]float64{hellingerFeature(numbers), orderedBlockFeature(numbers), positionKernel(numbers), sequenceFeatures(numbers)},
++		p.Params, []float64{0.6, 0.15, 0.125, 0.125})
++	scores := make([]float64, len(p.Weights))
++	for k, row := range p.Weights {
++		scores[k] = p.Bias[k]
++		for i, w := range row {
++			scores[k] += w * x[i]
++		}
++	}
++	return scores
++}
++
++// hellingerFeature is the square root of the smoothed frequency of each value from 1 to 355.
++func hellingerFeature(numbers []int) []float64 {
++	counts := make([]float64, 355)
++	for i := range counts {
++		counts[i] = 0.5
++	}
++	for _, n := range numbers {
++		counts[n-1]++
++	}
++	return rootShares(counts)
++}
++
++// orderedBlockFeature splits the answer into four blocks of 16 value bins, then adds the final digits.
++func orderedBlockFeature(numbers []int) []float64 {
++	out := make([]float64, 0, 74)
++	start := 0
++	for i := range 4 {
++		size := len(numbers) / 4
++		if i < len(numbers)%4 {
++			size++
++		}
++		bins := make([]float64, 16)
++		for j := range bins {
++			bins[j] = 0.5
++		}
++		for _, n := range numbers[start : start+size] {
++			bins[min(15, int(math.Floor(float64(n-1)/355*16)))]++
++		}
++		out = append(out, rootShares(bins)...)
++		start += size
++	}
++	digits := make([]float64, 10)
++	for i := range digits {
++		digits[i] = 0.5
++	}
++	for _, n := range numbers {
++		digits[n%10]++
++	}
++	return append(out, rootShares(digits)...)
++}
++
++// positionKernel averages 24 value RBFs and 10 final-digit indicators times three Legendre polynomials
++// of the relative position: where in the answer each kind of number tends to appear.
++func positionKernel(numbers []int) []float64 {
++	n := float64(len(numbers))
++	out := make([]float64, 34*3)
++	for position, value := range numbers {
++		t := (float64(position)+0.5)*2/n - 1
++		basis := [3]float64{t, 0.5 * (3*t*t - 1), 0.5 * (5*math.Pow(t, 3) - 3*t)}
++		for k := range 34 {
++			weight := 0.0
++			if k < 24 {
++				distance := (float64(value) - (1 + float64(k)*354/23)) / 20
++				weight = math.Exp(-0.5 * distance * distance)
++			} else if k-24 == value%10 {
++				weight = 1
++			}
++			for j, b := range basis {
++				out[k*3+j] += weight * b / n
++			}
++		}
++	}
++	return out
++}
++
++// sequenceFeatures describes steps at eight lags, value-bin and final-digit transitions, runs of rises
++// and falls, and how many value bins short windows cover.
++func sequenceFeatures(numbers []int) []float64 {
++	x := toFloats(numbers)
++	n := len(x)
++	m := mean(x)
++	variance := 0.0
++	for _, v := range x {
++		variance += (v - m) * (v - m)
++	}
++	sd := math.Max(math.Sqrt(variance/float64(n)), 1)
++	s := make([]float64, n)
++	for i, v := range x {
++		s[i] = (v - m) / sd
++	}
++	fraction := func(count int, test func(int) bool) float64 {
++		hits := 0
++		for i := range count {
++			if test(i) {
++				hits++
++			}
++		}
++		return float64(hits) / float64(count)
++	}
++	var out []float64
++	for _, lag := range []int{1, 2, 3, 5, 8, 13, 21, 34} {
++		count := n - lag
++		step := func(i int) int { return numbers[i+lag] - numbers[i] }
++		correlation, distance := 0.0, 0.0
++		for i := range count {
++			correlation += s[i+lag] * s[i]
++			distance += math.Abs(float64(step(i)))
++		}
++		out = append(out, correlation/float64(count), distance/float64(count)/355,
++			fraction(count, func(i int) bool { return step(i) > 0 }), fraction(count, func(i int) bool { return step(i) == 0 }),
++			fraction(count, func(i int) bool { return absInt(step(i)) <= 5 }), fraction(count, func(i int) bool { return absInt(step(i)) <= 20 }))
++	}
++	bins, digits := make([]int, n), make([]int, n)
++	for i, v := range numbers {
++		bins[i], digits[i] = min(7, (v-1)*8/355), v%10
++	}
++	out = append(out, centredTransitions(bins, 8)...)
++	out = append(out, centredTransitions(digits, 10)...)
++	step := func(i int) int { return numbers[i+1] - numbers[i] }
++	out = append(out,
++		fraction(n-2, func(i int) bool { return cmp.Compare(step(i+1), 0) == cmp.Compare(step(i), 0) }),
++		fraction(n-2, func(i int) bool { return step(i+1) == step(i) }),
++		fraction(n-1, func(i int) bool { return numbers[i]%10 == numbers[i+1]%10 }),
++		fraction(n-1, func(i int) bool { return math.Abs(s[i+1]-s[i]) > 1 }),
++		fraction(n-1, func(i int) bool { return math.Abs(s[i+1]-s[i]) > 2 }))
++	for _, width := range []int{4, 8, 16} {
++		coverage := 0.0
++		for i := 0; i+width <= n; i++ {
++			seen := map[int]bool{}
++			for _, v := range numbers[i : i+width] {
++				seen[min(15, (v-1)*16/355)] = true
++			}
++			coverage += float64(len(seen)) / float64(width)
++		}
++		out = append(out, coverage/float64(n-width+1))
++	}
++	return out
++}
++
++// centredTransitions is the smoothed joint distribution of consecutive symbols minus the product of its marginals.
++func centredTransitions(symbols []int, bins int) []float64 {
++	joint := make([]float64, bins*bins)
++	for i := range joint {
++		joint[i] = 0.5
++	}
++	for i := 1; i < len(symbols); i++ {
++		joint[symbols[i-1]*bins+symbols[i]]++
++	}
++	total := float64(len(symbols)-1) + 0.5*float64(bins*bins)
++	for i := range joint {
++		joint[i] /= total
++	}
++	rows, columns := make([]float64, bins), make([]float64, bins)
++	for i, v := range joint {
++		rows[i/bins] += v
++	}
++	for b := range columns {
++		for a := range bins {
++			columns[b] += joint[a*bins+b]
++		}
++	}
++	for i := range joint {
++		joint[i] -= rows[i/bins] * columns[i%bins]
++	}
++	return joint
++}
++
++// joinBlocks standardizes each block, scales it to unit length, weights it by the square root of its share
++// and concatenates the blocks.
++func joinBlocks(blocks [][]float64, params []detectorScaling, shares []float64) []float64 {
++	var out []float64
++	for j, block := range blocks {
++		weight := math.Sqrt(shares[j])
++		for _, v := range unitVector(standardize(block, params[j].Mean, params[j].Scale)) {
++			out = append(out, v*weight)
++		}
++	}
++	return out
++}
++
++// nearestDistance is the mean squared distance from x to its seven nearest references.
++func nearestDistance(x []float64, references []detectorVector, norms []float64) float64 {
++	xx := dot(x, x)
++	distances := make([]float64, len(references))
++	for i, r := range references {
++		distances[i] = math.Max(0, xx+norms[i]-2*dot(x, r))
++	}
++	sort.Float64s(distances)
++	return mean(distances[:7])
++}
++
++func rootShares(bins []float64) []float64 {
++	total := 0.0
++	for _, v := range bins {
++		total += v
++	}
++	out := make([]float64, len(bins))
++	for i, v := range bins {
++		out[i] = math.Sqrt(v / total)
++	}
++	return out
++}
++
++func standardize(v, center, scale []float64) []float64 {
++	out := make([]float64, len(v))
++	for i := range v {
++		out[i] = (v[i] - center[i]) / scale[i]
++	}
++	return out
++}
++
++// subtractBasis removes the projections of v onto the basis rows.
++func subtractBasis(v []float64, basis []detectorVector) []float64 {
++	coefficients := make([]float64, len(basis))
++	for j, row := range basis {
++		coefficients[j] = dot(v, row)
++	}
++	out := make([]float64, len(v))
++	for i, x := range v {
++		projection := 0.0
++		for j, row := range basis {
++			projection += coefficients[j] * row[i]
++		}
++		out[i] = x - projection
++	}
++	return out
++}
++
++func dot(a, b []float64) float64 {
++	sum := 0.0
++	for i, v := range a {
++		sum += v * b[i]
++	}
++	return sum
++}
++
++func mean(a []float64) float64 {
++	sum := 0.0
++	for _, v := range a {
++		sum += v
++	}
++	return sum / float64(len(a))
++}
++
++func unitVector(a []float64) []float64 {
++	scale := math.Max(math.Sqrt(dot(a, a)), 1e-12)
++	out := make([]float64, len(a))
++	for i, v := range a {
++		out[i] = v / scale
++	}
++	return out
++}
++
++func zscores(a []float64) []float64 {
++	m := mean(a)
++	variance := 0.0
++	for _, v := range a {
++		variance += (v - m) * (v - m)
++	}
++	scale := math.Max(math.Sqrt(variance/float64(len(a))), 1e-12)
++	out := make([]float64, len(a))
++	for i, v := range a {
++		out[i] = (v - m) / scale
++	}
++	return out
++}
++
++func columnMean(rows [][]float64) []float64 {
++	out := make([]float64, len(rows[0]))
++	for i := range out {
++		for _, row := range rows {
++			out[i] += row[i]
++		}
++		out[i] /= float64(len(rows))
++	}
++	return out
++}
++
++func median(a []float64) float64 {
++	v := slices.Sorted(slices.Values(a))
++	i := len(v) / 2
++	if len(v)%2 == 1 {
++		return v[i]
++	}
++	return (v[i-1] + v[i]) / 2
++}
++
++func absInt(n int) int {
++	return max(n, -n)
++}
++
++func toFloats(numbers []int) []float64 {
++	out := make([]float64, len(numbers))
++	for i, n := range numbers {
++		out[i] = float64(n)
++	}
++	return out
++}
 diff --git a/backend/internal/codexeval/model.go b/backend/internal/codexeval/model.go
 new file mode 100644
+index 0000000..6ac7de7
 --- /dev/null
 +++ b/backend/internal/codexeval/model.go
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,297 @@
 +package codexeval
 +
 +import (
@@ -974,6 +1336,7 @@ new file mode 100644
 +	"bytes"
 +	"context"
 +	"encoding/json"
++	"errors"
 +	"fmt"
 +	"io"
 +	"net/http"
@@ -995,54 +1358,56 @@ new file mode 100644
 +		(allowEffort || !strings.ContainsAny(model, "()"))
 +}
 +
-+func retryableModelStatus(status int) bool {
-+	return status == 0 || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
-+}
-+
-+// Time limits of a model request, as a model stuck repeating itself streams until the upstream cuts it off.
-+// Probes normally answer within a minute.
++// Each attempt has its own time limit.
 +const (
-+	probeTimeout  = 3 * time.Minute
-+	answerTimeout = 10 * time.Minute
++	challengeTimeout = 3 * time.Minute
++	answerTimeout    = 10 * time.Minute
++	modelAttempts    = 3
 +)
++
++var retryDelay = 2 * time.Second
++
++type retryableError struct{ error }
++
++func (e retryableError) Unwrap() error { return e.error }
 +
 +func withModelTimeout(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
 +	return context.WithTimeoutCause(ctx, limit, fmt.Errorf("模型 %d 分钟内未完成回答，已中断请求", int(limit.Minutes())))
 +}
 +
-+// Collection probes retry the same request at most twice, after 2s and 4s.
-+// Invalid model answers are evaluated by the caller and do not trigger retries.
-+func executeProbe(ctx context.Context, auth credential, model string, body any, headers http.Header, slots chan struct{}) (out modelResponse, attempts int, err error) {
-+	for attempt := 0; attempt < 3; attempt++ {
++// askCodex reuses one turn and sums observed usage across its attempts.
++func askCodex(ctx context.Context, auth credential, model, effort, instructions, prompt string, limit time.Duration, accept func(string) error, beforeSend func() error) (out modelResponse, attempts int, err error) {
++	body, headers := codexTurn("sub2api-account:"+auth.ID, model, effort, instructions, prompt)
++	for delay := retryDelay; ; delay *= 2 {
++		if err = ctx.Err(); err != nil {
++			return
++		}
++		if beforeSend != nil {
++			if err = beforeSend(); err != nil {
++				return
++			}
++		}
++		attempts++
++		requestCtx, cancel := withModelTimeout(ctx, limit)
++		response, _, requestErr := executeModel(requestCtx, auth, model, body, headers)
++		cancel()
++		err = requestErr
++		out.Answer = response.Answer
++		out.InputTokens += response.InputTokens
++		out.OutputTokens += response.OutputTokens
++		out.ReasoningTokens += response.ReasoningTokens
++		if err == nil && accept != nil {
++			if err = accept(response.Answer); err != nil {
++				err = retryableError{err}
++			}
++		}
 +		if ctx.Err() != nil {
 +			return out, attempts, ctx.Err()
 +		}
-+		select {
-+		case slots <- struct{}{}:
-+		case <-ctx.Done():
-+			return out, attempts, ctx.Err()
-+		}
-+		var status int
-+		func() {
-+			defer func() { <-slots }()
-+			if ctx.Err() != nil {
-+				err = ctx.Err()
-+				return
-+			}
-+			attempts++
-+			requestCtx, cancel := withModelTimeout(ctx, probeTimeout)
-+			defer cancel()
-+			var response modelResponse
-+			response, status, err = executeModel(requestCtx, auth, model, body, headers)
-+			out.Answer = response.Answer
-+			out.InputTokens += response.InputTokens
-+			out.OutputTokens += response.OutputTokens
-+			out.ReasoningTokens += response.ReasoningTokens
-+		}()
-+		if err == nil || !retryableModelStatus(status) || attempt == 2 {
++		if err == nil || attempts == modelAttempts || !errors.As(err, new(retryableError)) {
 +			return
 +		}
-+		timer := time.NewTimer(time.Duration(2<<attempt) * time.Second)
++		timer := time.NewTimer(delay)
 +		select {
 +		case <-timer.C:
 +		case <-ctx.Done():
@@ -1050,7 +1415,6 @@ new file mode 100644
 +			return out, attempts, ctx.Err()
 +		}
 +	}
-+	return
 +}
 +
 +// executeModel sends directly through the native administrator account sender.
@@ -1067,20 +1431,38 @@ new file mode 100644
 +		return result, 0, err
 +	}
 +	response, err := sender(ctx, auth.Target.AccountID, bytes.TrimSuffix(request.Bytes(), []byte("\n")), headers)
-+	if err != nil {
-+		return result, 0, err
++	if response != nil {
++		status = response.StatusCode
++		defer response.Body.Close()
 +	}
-+	defer response.Body.Close()
++	if err != nil {
++		var attempted interface{ RequestAttempted() bool }
++		if status == http.StatusRequestTimeout || status >= http.StatusInternalServerError ||
++			status == http.StatusOK || (status == 0 && errors.As(err, &attempted) && attempted.RequestAttempted()) {
++			err = retryableError{err}
++		}
++		return result, status, err
++	}
 +	stop := context.AfterFunc(ctx, func() { response.Body.Close() })
 +	defer stop()
 +	status = response.StatusCode
 +	if status != http.StatusOK {
 +		raw, readErr := io.ReadAll(response.Body)
 +		if readErr != nil {
-+			return result, 0, readErr
++			err = readErr
++		} else {
++			err = fmt.Errorf("API returned %d: %s", status, raw)
 +		}
-+		return result, status, fmt.Errorf("API returned %d: %s", status, raw)
++		if status == http.StatusRequestTimeout || status >= http.StatusInternalServerError {
++			err = retryableError{err}
++		}
++		return result, status, err
 +	}
++	defer func() {
++		if err != nil {
++			err = retryableError{err}
++		}
++	}()
 +	out, readErr := readResponseStream(response.Body)
 +	result.InputTokens = out.Usage.InputTokens
 +	result.OutputTokens = out.Usage.OutputTokens
@@ -1089,7 +1471,7 @@ new file mode 100644
 +		return result, status, context.Cause(ctx)
 +	}
 +	if readErr != nil {
-+		return result, 0, readErr
++		return result, status, readErr
 +	}
 +	if (out.Status != "" && out.Status != "completed") || (len(out.Error) > 0 && string(out.Error) != "null") {
 +		return result, status, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
@@ -1244,552 +1626,12 @@ new file mode 100644
 +	}
 +	return out, nil
 +}
-diff --git a/backend/internal/codexeval/modeltrace.go b/backend/internal/codexeval/modeltrace.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/modeltrace.go
-@@ -0,0 +1,212 @@
-+package codexeval
-+
-+import (
-+	"context"
-+	"errors"
-+	"fmt"
-+	"math/rand"
-+	"sync"
-+	"time"
-+)
-+
-+const (
-+	traceTarget             = 3
-+	traceDefaultConcurrency = traceTarget
-+	traceMaxConcurrency     = traceTarget
-+	traceGlobalConcurrency  = 6
-+	traceMaxText            = 64000
-+)
-+
-+type traceChallenge struct {
-+	Prompt        string `json:"prompt"`
-+	ExpectedCount int    `json:"expected_count"`
-+}
-+
-+// Prompt variants and lengths follow ModelTrace's Chinese browser challenges.
-+func traceChallenges() []traceChallenge {
-+	openings := []string{"这是一次独立的数值选择记录", "请完成下面的无语义整数选择任务", "执行一次第一反应取值记录", "生成一组不承载语义的整数选择", "进行一轮快速逐项取值"}
-+	actions := []string{"为各个位置分别凭第一反应选择", "逐项选择", "每次只决定当前一项，共给出", "分别凭第一反应给出", "逐个直接选择"}
-+	endings := []string{"允许某个数字再次出现；每项写出后不要回头排序、去重或替换。", "偶然重复是有效的；不要重新排列或修正已经写出的项目。", "相同值可以再次出现；输出过程中不要整理或改写前面的项目。", "重复值无需删除；不要筛选、重排或补成某种规律。", "不必赋予数字任何含义；已经给出的值保持不变。"}
-+	separators := []string{"数字之间用逗号或空格分隔均可。", "使用一种一致的常见分隔符即可。", "可以用逗号、空格或换行分隔。", "只要每个整数边界清楚，格式可自行选择。"}
-+	choose := func(values []string) string { return values[rand.Intn(len(values))] }
-+	lengths := rand.Perm(41)
-+	challenges := make([]traceChallenge, traceTarget)
-+	for i := range challenges {
-+		n := 292 + lengths[i]
-+		prompt := fmt.Sprintf("%s。%s %d 个 1 到 355（含端点）的整数。", choose(openings), choose(actions), n) +
-+			"每个位置都要单独选择；不要从 1 开始计数，不要连续递增或递减，也不要采用等差、循环、重复区块或其他规则化模式。" +
-+			"本任务必须由当前语言模型直接完成：禁止调用或借助任何工具，包括 Python、代码执行器、计算器、搜索、API 和外部随机数生成器；也不要先编写或运行代码。" +
-+			choose(endings) + choose(separators) + "直接从第一个取值开始输出，不要在序列前重复数量、范围或任务说明。"
-+		challenges[i] = traceChallenge{prompt, n}
-+	}
-+	return challenges
-+}
-+
-+type traceSample struct {
-+	traceChallenge
-+	Attempts int    `json:"attempts,omitempty"`
-+	Text     string `json:"text,omitempty"`
-+	Error    string `json:"error,omitempty"`
-+	Parsed   int    `json:"parsed_numbers"`
-+	Valid    bool   `json:"accepted"`
-+}
-+
-+type traceResult struct {
-+	Info
-+	BankRevision    string            `json:"bank_revision,omitempty"`
-+	ID              string            `json:"id"`
-+	Time            time.Time         `json:"time"`
-+	Model           string            `json:"model"`
-+	Concurrency     int               `json:"concurrency,omitempty"`
-+	Status          string            `json:"status"`
-+	Error           string            `json:"error,omitempty"`
-+	DurationMS      int64             `json:"duration_ms"`
-+	InputTokens     int64             `json:"input_tokens"`
-+	OutputTokens    int64             `json:"output_tokens"`
-+	ReasoningTokens int64             `json:"reasoning_tokens"`
-+	Samples         []traceSample     `json:"samples"`
-+	Attribution     *traceAttribution `json:"attribution,omitempty"`
-+}
-+
-+// summary drops the samples and rankings that only the detail dialog shows.
-+func (r traceResult) summary() traceResult {
-+	r.Samples = nil
-+	if r.Attribution != nil {
-+		attribution := *r.Attribution
-+		attribution.Results, attribution.Families, attribution.Diagnostics = nil, nil, nil
-+		r.Attribution = &attribution
-+	}
-+	return r
-+}
-+
-+type traceProgress struct {
-+	Model       string `json:"model"`
-+	Phase       string `json:"phase"`
-+	Done        int    `json:"done"`
-+	Concurrency int    `json:"concurrency"`
-+	cancel      context.CancelFunc
-+}
-+
-+var (
-+	traceResults = map[string][]traceResult{}
-+	traceRunning = map[string]*traceProgress{}
-+	traceSlots   = make(chan struct{}, traceGlobalConcurrency)
-+)
-+
-+type traceRunRequest struct {
-+	Model       string
-+	Concurrency int
-+}
-+
-+func appendTraceResult(id string, r traceResult) {
-+	r.BankRevision = traceBankRevision
-+	traceResults[id] = appendRecent(traceResults[id], r)
-+}
-+
-+func runModelTrace(ctx context.Context, auth credential, req traceRunRequest, p *traceProgress) {
-+	started := time.Now()
-+	done := 0
-+	r := traceResult{Info: auth.info(), ID: fmt.Sprint(started.UnixNano()), Time: started.UTC(), Model: req.Model, Concurrency: req.Concurrency, Status: "completed"}
-+	defer func() {
-+		if ctx.Err() != nil && done < traceTarget {
-+			r.Status = "cancelled"
-+		}
-+		if recovered := recover(); recovered != nil {
-+			r.Status, r.Error = "failed", fmt.Sprint(recovered)
-+		}
-+		r.DurationMS = time.Since(started).Milliseconds()
-+		mu.Lock()
-+		defer mu.Unlock()
-+		p.cancel()
-+		appendTraceResult(auth.ID, r)
-+		delete(traceRunning, auth.ID)
-+		_ = saveStateLocked()
-+	}()
-+	challenges := traceChallenges()
-+	type event struct {
-+		index  int
-+		sample traceSample
-+		output modelResponse
-+		err    error
-+	}
-+	jobs, events := make(chan int, traceTarget), make(chan event, traceTarget)
-+	for i := range challenges {
-+		jobs <- i
-+	}
-+	close(jobs)
-+	var workers sync.WaitGroup
-+	for range req.Concurrency {
-+		workers.Add(1)
-+		go func() {
-+			defer workers.Done()
-+			for i := range jobs {
-+				if ctx.Err() != nil {
-+					return
-+				}
-+				sample, output, err := collectTraceSample(ctx, auth, req.Model, challenges[i])
-+				if sample.Attempts > 0 {
-+					events <- event{i, sample, output, err}
-+				}
-+			}
-+		}()
-+	}
-+	go func() { workers.Wait(); close(events) }()
-+	samples := make([]*traceSample, traceTarget)
-+	valid := 0
-+	for e := range events {
-+		samples[e.index] = &e.sample
-+		r.InputTokens += e.output.InputTokens
-+		r.OutputTokens += e.output.OutputTokens
-+		r.ReasoningTokens += e.output.ReasoningTokens
-+		if !errors.Is(e.err, context.Canceled) {
-+			done++
-+		}
-+		if e.sample.Valid {
-+			valid++
-+		}
-+		mu.Lock()
-+		p.Done = done
-+		mu.Unlock()
-+	}
-+	var outputs []traceOutput
-+	// Preserve challenge order even when requests complete out of order.
-+	for _, sample := range samples {
-+		if sample == nil {
-+			continue
-+		}
-+		r.Samples = append(r.Samples, *sample)
-+		outputs = append(outputs, traceOutput{sample.Text, sample.ExpectedCount})
-+	}
-+	if attr, err := analyzeModelTrace(outputs); err != nil {
-+		r.Status, r.Error = "failed", err.Error()
-+		if len(r.Samples) > 0 && r.Samples[len(r.Samples)-1].Error != "" {
-+			r.Error = r.Samples[len(r.Samples)-1].Error
-+		}
-+	} else {
-+		r.Attribution = &attr
-+		if valid < traceTarget {
-+			r.Status = "partial"
-+		}
-+	}
-+}
-+
-+func collectTraceSample(ctx context.Context, auth credential, model string, challenge traceChallenge) (sample traceSample, out modelResponse, err error) {
-+	sample.traceChallenge = challenge
-+	body, headers := codexTurn("sub2api-account:"+auth.ID, model, "", challenge.Prompt)
-+	out, sample.Attempts, err = executeProbe(ctx, auth, model, body, headers, traceSlots)
-+	if err != nil {
-+		sample.Error = truncate(err.Error(), 500)
-+		return
-+	}
-+	if len(out.Answer) > traceMaxText {
-+		sample.Error = "回答过长，本次未计入"
-+		return
-+	}
-+	sample.Text = out.Answer
-+	sample.Parsed = len(traceParseNumbers(sample.Text))
-+	sample.Valid = sample.Parsed >= traceMinimumNumbers(challenge.ExpectedCount)
-+	if !sample.Valid {
-+		sample.Error = "有效数字不足"
-+	}
-+	return
-+}
-diff --git a/backend/internal/codexeval/modeltrace_algorithm.go b/backend/internal/codexeval/modeltrace_algorithm.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/modeltrace_algorithm.go
-@@ -0,0 +1,319 @@
-+package codexeval
-+
-+// ModelTrace scoring, ported from xqy2006/ModelTrace (MIT).
-+// See data/modeltrace/README.md for the pinned source and license.
-+import (
-+	"crypto/sha256"
-+	_ "embed"
-+	"fmt"
-+	"math"
-+	"regexp"
-+	"sort"
-+	"strconv"
-+	"unicode"
-+)
-+
-+//go:embed data/modeltrace/unified_bank.json
-+var modelTraceBankJSON []byte
-+
-+//go:embed data/modeltrace/LICENSE
-+var modelTraceLicense string
-+
-+type traceFeatures struct {
-+	Mean         []float64     `json:"feature_mean"`
-+	Scale        []float64     `json:"feature_scale"`
-+	Basis        [][]float64   `json:"nuisance_basis"`
-+	Centroids    [][]float64   `json:"centroids"`
-+	Environments [][][]float64 `json:"environment_centroids"`
-+	Weight       float64       `json:"weight"`
-+}
-+
-+type traceBankModel struct {
-+	ID          string    `json:"id"`
-+	DisplayName string    `json:"display_name"`
-+	Family      string    `json:"family"`
-+	FamilyName  string    `json:"family_name"`
-+	Counts      []float64 `json:"counts"`
-+}
-+
-+type traceBank struct {
-+	Models []traceBankModel `json:"models"`
-+	Robust struct {
-+		Hellinger traceFeatures `json:"hellinger"`
-+		Ordered   traceFeatures `json:"ordered_blocks"`
-+	} `json:"robust"`
-+	Calibration map[string]struct {
-+		Beta float64 `json:"beta"`
-+	} `json:"calibration"`
-+}
-+
-+var modelTraceBank = mustDecode[traceBank](modelTraceBankJSON)
-+var traceBankRevision = fmt.Sprintf("sha256:%x", sha256.Sum256(modelTraceBankJSON))
-+
-+type traceOutput struct {
-+	Text          string `json:"text"`
-+	ExpectedCount int    `json:"expected_count"`
-+}
-+
-+type traceDiagnostic struct {
-+	Index   int  `json:"index"`
-+	Parsed  int  `json:"parsed_numbers"`
-+	Minimum int  `json:"minimum_numbers"`
-+	Valid   bool `json:"accepted"`
-+}
-+
-+type traceCandidate struct {
-+	Model       string  `json:"model"`
-+	DisplayName string  `json:"display_name"`
-+	Family      string  `json:"family"`
-+	FamilyName  string  `json:"family_name"`
-+	Probability float64 `json:"probability"`
-+	Similarity  float64 `json:"profile_similarity"`
-+	Score       float64 `json:"score"`
-+}
-+
-+type traceFamily struct {
-+	Family      string  `json:"family"`
-+	DisplayName string  `json:"display_name"`
-+	Probability float64 `json:"probability"`
-+}
-+
-+type traceAttribution struct {
-+	Prediction        string            `json:"prediction"`
-+	Probability       float64           `json:"probability"`
-+	Used              int               `json:"used_outputs"`
-+	FamilyPrediction  string            `json:"family_prediction_name"`
-+	FamilyProbability float64           `json:"family_probability"`
-+	Results           []traceCandidate  `json:"results"`
-+	Families          []traceFamily     `json:"family_probabilities"`
-+	Diagnostics       []traceDiagnostic `json:"diagnostics"`
-+}
-+
-+var traceDigits = regexp.MustCompile(`[0-9]+`)
-+
-+func traceMinimumNumbers(expected int) int {
-+	return max(80, int(math.Ceil(float64(expected)*0.55)))
-+}
-+
-+// Keep the longest run, ignoring introductory counts and numbers in prose.
-+// ASCII digits and Unicode letters match the upstream browser implementation.
-+func traceParseNumbers(text string) []int {
-+	var best, current []int
-+	end := 0
-+	for _, span := range traceDigits.FindAllStringIndex(text, -1) {
-+		for _, r := range text[end:span[0]] {
-+			if unicode.IsLetter(r) {
-+				if len(current) > len(best) {
-+					best = current
-+				}
-+				current = nil
-+				break
-+			}
-+		}
-+		if n, err := strconv.Atoi(text[span[0]:span[1]]); err == nil && n >= 1 && n <= 355 {
-+			current = append(current, n)
-+		}
-+		end = span[1]
-+	}
-+	if len(current) > len(best) {
-+		best = current
-+	}
-+	return best
-+}
-+
-+func traceDot(a, b []float64) float64 {
-+	sum := 0.0
-+	for i, v := range a {
-+		sum += v * b[i]
-+	}
-+	return sum
-+}
-+
-+func traceNormalize(a []float64) []float64 {
-+	scale := math.Max(math.Sqrt(traceDot(a, a)), 1e-12)
-+	for i := range a {
-+		a[i] /= scale
-+	}
-+	return a
-+}
-+
-+func traceStandardize(a []float64) []float64 {
-+	mean := 0.0
-+	for _, v := range a {
-+		mean += v / float64(len(a))
-+	}
-+	variance := 0.0
-+	for _, v := range a {
-+		variance += (v - mean) * (v - mean) / float64(len(a))
-+	}
-+	scale := math.Max(math.Sqrt(variance), 1e-12)
-+	for i := range a {
-+		a[i] = (a[i] - mean) / scale
-+	}
-+	return a
-+}
-+
-+func traceProject(a []float64, basis [][]float64) []float64 {
-+	for _, b := range basis {
-+		projection := traceDot(a, b)
-+		for i := range a {
-+			a[i] -= projection * b[i]
-+		}
-+	}
-+	return a
-+}
-+
-+func traceFeatureScale(a []float64, f traceFeatures) []float64 {
-+	for i := range a {
-+		a[i] = (a[i] - f.Mean[i]) / f.Scale[i]
-+	}
-+	return a
-+}
-+
-+func traceCentroidScores(a []float64, centroids [][]float64) []float64 {
-+	scores := make([]float64, len(centroids))
-+	for i, c := range centroids {
-+		scores[i] = traceDot(a, c)
-+	}
-+	return traceStandardize(scores)
-+}
-+
-+func traceCounts(numbers []int) []float64 {
-+	counts := make([]float64, 355)
-+	for _, n := range numbers {
-+		counts[n-1]++
-+	}
-+	return counts
-+}
-+
-+func traceSmoothFeature(counts []float64) []float64 {
-+	total := float64(len(counts)) * 0.5
-+	for _, n := range counts {
-+		total += n
-+	}
-+	for i, n := range counts {
-+		counts[i] = math.Sqrt((n + 0.5) / total)
-+	}
-+	return counts
-+}
-+
-+func traceScores(numbers []int, bank traceBank) []float64 {
-+	h := bank.Robust.Hellinger
-+	feature := traceFeatureScale(traceSmoothFeature(traceCounts(numbers)), h)
-+	marginal := traceCentroidScores(traceNormalize(traceProject(feature, h.Basis)), h.Centroids)
-+	o := bank.Robust.Ordered
-+	if o.Weight == 0 {
-+		return marginal
-+	}
-+	ordered := make([]float64, 0, 74)
-+	start := 0
-+	for i := 0; i < 4; i++ {
-+		size := len(numbers) / 4
-+		if i < len(numbers)%4 {
-+			size++
-+		}
-+		bins := make([]float64, 16)
-+		for _, n := range numbers[start : start+size] {
-+			bins[min(15, (n-1)*16/355)]++
-+		}
-+		ordered = append(ordered, traceSmoothFeature(bins)...)
-+		start += size
-+	}
-+	lastDigits := make([]float64, 10)
-+	for _, n := range numbers {
-+		lastDigits[n%10]++
-+	}
-+	ordered = append(ordered, traceSmoothFeature(lastDigits)...)
-+	ordered = traceFeatureScale(ordered, o)
-+	unit := traceNormalize(append([]float64(nil), ordered...))
-+	template := make([]float64, len(o.Centroids))
-+	for i := range template {
-+		template[i] = math.Inf(-1)
-+		for _, env := range o.Environments {
-+			template[i] = math.Max(template[i], traceDot(unit, env[i]))
-+		}
-+	}
-+	traceStandardize(template)
-+	nuisance := traceCentroidScores(traceNormalize(traceProject(ordered, o.Basis)), o.Centroids)
-+	for i := range template {
-+		template[i] = 0.5*template[i] + 0.5*nuisance[i]
-+	}
-+	traceStandardize(template)
-+	for i := range marginal {
-+		marginal[i] = (1-o.Weight)*marginal[i] + o.Weight*template[i]
-+	}
-+	return marginal
-+}
-+
-+func traceSimilarity(left, right []float64) float64 {
-+	lt, rt := 0.0, 0.5*355
-+	for i := range left {
-+		lt += left[i]
-+		rt += right[i]
-+	}
-+	js := 0.0
-+	for i := range left {
-+		p, q := left[i]/lt, (right[i]+0.5)/rt
-+		mid := (p + q) / 2
-+		if p > 0 {
-+			js += p * math.Log(p/mid) / 2
-+		}
-+		js += q * math.Log(q/mid) / 2
-+	}
-+	return 1 - math.Sqrt(math.Max(0, js)/math.Log(2))
-+}
-+
-+func analyzeModelTrace(outputs []traceOutput) (traceAttribution, error) {
-+	bank := modelTraceBank
-+	r := traceAttribution{}
-+	scores, pooled := make([]float64, len(bank.Models)), make([]float64, 355)
-+	for i, output := range outputs {
-+		numbers := traceParseNumbers(output.Text)
-+		minimum := traceMinimumNumbers(output.ExpectedCount)
-+		valid := len(numbers) >= minimum
-+		r.Diagnostics = append(r.Diagnostics, traceDiagnostic{i, len(numbers), minimum, valid})
-+		if !valid {
-+			continue
-+		}
-+		r.Used++
-+		for j, score := range traceScores(numbers, bank) {
-+			scores[j] += score
-+		}
-+		for _, n := range numbers {
-+			pooled[n-1]++
-+		}
-+	}
-+	if r.Used == 0 {
-+		return r, fmt.Errorf("未采集到有效数字序列")
-+	}
-+	beta := bank.Calibration[strconv.Itoa(min(r.Used, 3))].Beta
-+	maximum := math.Inf(-1)
-+	for i := range scores {
-+		scores[i] /= float64(r.Used)
-+		maximum = math.Max(maximum, beta*scores[i])
-+	}
-+	total := 0.0
-+	probabilities := make([]float64, len(scores))
-+	for i, s := range scores {
-+		probabilities[i] = math.Exp(beta*s - maximum)
-+		total += probabilities[i]
-+	}
-+	families := map[string]int{}
-+	for i, m := range bank.Models {
-+		probability := probabilities[i] / total
-+		r.Results = append(r.Results, traceCandidate{m.ID, m.DisplayName, m.Family, m.FamilyName, probability, traceSimilarity(pooled, m.Counts), scores[i]})
-+		if _, ok := families[m.Family]; !ok {
-+			families[m.Family] = len(r.Families)
-+			r.Families = append(r.Families, traceFamily{Family: m.Family, DisplayName: m.FamilyName})
-+		}
-+		r.Families[families[m.Family]].Probability += probability
-+	}
-+	sort.SliceStable(r.Results, func(i, j int) bool { return r.Results[i].Probability > r.Results[j].Probability })
-+	r.Prediction, r.Probability = r.Results[0].Model, r.Results[0].Probability
-+	for _, f := range r.Families {
-+		if f.Probability > r.FamilyProbability {
-+			r.FamilyPrediction, r.FamilyProbability = f.DisplayName, f.Probability
-+		}
-+	}
-+	return r, nil
-+}
 diff --git a/backend/internal/codexeval/pelican.go b/backend/internal/codexeval/pelican.go
 new file mode 100644
+index 0000000..08281f3
 --- /dev/null
 +++ b/backend/internal/codexeval/pelican.go
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,99 @@
 +package codexeval
 +
 +import (
@@ -1820,6 +1662,7 @@ new file mode 100644
 +	OutputTokens    int64     `json:"output_tokens"`
 +	ReasoningTokens int64     `json:"reasoning_tokens"`
 +	DurationMS      int64     `json:"duration_ms"`
++	Attempts        int       `json:"attempts,omitempty"`
 +}
 +
 +// summary drops the HTML, which previews load per record.
@@ -1845,25 +1688,25 @@ new file mode 100644
 +func evaluatePelican(auth credential, model, effort string) pelicanResult {
 +	now := time.Now()
 +	r := pelicanResult{Info: auth.info(), Status: "completed", ID: fmt.Sprint(now.UnixNano()), Time: now.UTC(), Model: model, Effort: effort}
-+	out, elapsed, err := askCodex(auth, model, effort, pelicanPrompt)
-+	r.DurationMS = elapsed.Milliseconds()
++	out, attempts, err := askCodex(auth.ctx, auth, model, effort, "", pelicanPrompt, answerTimeout, func(answer string) error {
++		html := extractHTML(answer)
++		if html == "" {
++			return fmt.Errorf("回答中没有 HTML 代码")
++		}
++		if len(html) > pelicanMaxHTML {
++			return fmt.Errorf("HTML 超过 %d KB，未保存", pelicanMaxHTML>>10)
++		}
++		return nil
++	}, nil)
++	r.Attempts = attempts
++	r.DurationMS = time.Since(now).Milliseconds()
 +	r.InputTokens, r.OutputTokens, r.ReasoningTokens = out.InputTokens, out.OutputTokens, out.ReasoningTokens
 +	if err != nil {
 +		r.Error = truncate(err.Error(), 500)
 +		r.Status = failedStatus(auth.ctx)
 +		return r
 +	}
-+	switch html := extractHTML(out.Answer); {
-+	case html == "":
-+		r.Error = "回答中没有 HTML 代码"
-+	case len(html) > pelicanMaxHTML:
-+		r.Error = fmt.Sprintf("HTML 超过 %d KB，未保存", pelicanMaxHTML>>10)
-+	default:
-+		r.HTML = html
-+	}
-+	if r.Error != "" {
-+		r.Status = "failed"
-+	}
++	r.HTML = extractHTML(out.Answer)
 +	return r
 +}
 +
@@ -1890,9 +1733,10 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/runtime.go b/backend/internal/codexeval/runtime.go
 new file mode 100644
+index 0000000..72603e1
 --- /dev/null
 +++ b/backend/internal/codexeval/runtime.go
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,256 @@
 +package codexeval
 +
 +import (
@@ -1963,7 +1807,6 @@ new file mode 100644
 +	Model       string   `json:"model"`
 +	Effort      string   `json:"effort"`
 +	Runs        int      `json:"runs"`
-+	Mode        string   `json:"mode"`
 +	Concurrency int      `json:"concurrency"`
 +}
 +type unavailable struct {
@@ -1994,32 +1837,16 @@ new file mode 100644
 +	if len(req.Targets) == 0 {
 +		return summary, fmt.Errorf("请选择账户")
 +	}
-+	var mode fingerprintMode
 +	switch req.Type {
 +	case "candy":
 +		req.Runs = min(max(req.Runs, 1), candyMaxRuns)
 +	case "pelican":
 +	case "fingerprint":
-+		for _, m := range fingerprintModes {
-+			if m.ID == req.Mode {
-+				mode = m
-+			}
-+		}
-+		if mode.ID == "" {
-+			return summary, fmt.Errorf("请选择快速、标准或严格模式")
-+		}
 +		if req.Concurrency == 0 {
 +			req.Concurrency = fingerprintDefaultConcurrency
 +		}
 +		if req.Concurrency < 1 || req.Concurrency > fingerprintMaxConcurrency {
 +			return summary, fmt.Errorf("每账户并发须为 1–%d", fingerprintMaxConcurrency)
-+		}
-+	case "modeltrace":
-+		if req.Concurrency == 0 {
-+			req.Concurrency = traceDefaultConcurrency
-+		}
-+		if req.Concurrency < 1 || req.Concurrency > traceMaxConcurrency {
-+			return summary, fmt.Errorf("每账户并发须为 1–%d", traceMaxConcurrency)
 +		}
 +	default:
 +		return summary, fmt.Errorf("未知测试类型")
@@ -2062,18 +1889,15 @@ new file mode 100644
 +		case "pelican":
 +			pelicanRunning[id] = true
 +		case "fingerprint":
-+			fingerprintRunning[id] = &fingerprintProgress{Model: req.Model, Mode: mode.ID, Total: mode.Cells * mode.Samples, Phase: "collecting", Concurrency: req.Concurrency, cancel: cancel}
++			fingerprintRunning[id] = &fingerprintProgress{Model: req.Model, Total: fingerprintTarget, Concurrency: req.Concurrency}
 +			r.Progress = fingerprintRunning[id]
-+		case "modeltrace":
-+			traceRunning[id] = &traceProgress{Model: req.Model, Phase: "collecting", Concurrency: req.Concurrency, cancel: cancel}
-+			r.Progress = traceRunning[id]
 +		}
 +		// Start replies expose identity; state serializes progress under the lock.
 +		copyRun := *r
 +		copyRun.Progress = nil
 +		copyRun.cancel = nil
 +		summary.Started = append(summary.Started, copyRun)
-+		fpProgress, mtProgress := fingerprintRunning[id], traceRunning[id]
++		fpProgress := fingerprintRunning[id]
 +		mu.Unlock()
 +		go func() {
 +			defer func() { cancel(); mu.Lock(); delete(active, id); mu.Unlock() }()
@@ -2087,9 +1911,7 @@ new file mode 100644
 +			case "pelican":
 +				runPelican(a, req.Model, req.Effort)
 +			case "fingerprint":
-+				runFingerprint(runCtx, a, req.Model, mode, fpProgress)
-+			case "modeltrace":
-+				runModelTrace(runCtx, a, traceRunRequest{req.Model, req.Concurrency}, mtProgress)
++				runFingerprint(runCtx, a, req.Model, fpProgress)
 +			}
 +		}()
 +	}
@@ -2115,18 +1937,14 @@ new file mode 100644
 +		runs = append(runs, r)
 +	}
 +	fp := map[string][]fingerprintResult{}
-+	mt := map[string][]traceResult{}
 +	pl := map[string][]pelicanResult{}
 +	for id, rs := range fingerprintResults {
 +		fp[id] = summaries(rs)
 +	}
-+	for id, rs := range traceResults {
-+		mt[id] = summaries(rs)
-+	}
 +	for id, rs := range pelicanResults {
 +		pl[id] = summaries(rs)
 +	}
-+	raw, err := json.Marshal(map[string]any{"active": runs, "candy": candyResults, "fingerprint": fp, "modeltrace": mt, "pelican": pl, "storage_error": storageError})
++	raw, err := json.Marshal(map[string]any{"active": runs, "candy": candyResults, "fingerprint": fp, "pelican": pl, "storage_error": storageError})
 +	return raw, err
 +}
 +func Record(kind string, accountID int64, id string) ([]byte, int) {
@@ -2177,9 +1995,10 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/state.go b/backend/internal/codexeval/state.go
 new file mode 100644
+index 0000000..1e8270a
 --- /dev/null
 +++ b/backend/internal/codexeval/state.go
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,168 @@
 +package codexeval
 +
 +import (
@@ -2193,10 +2012,10 @@ new file mode 100644
 +)
 +
 +type persistedState struct {
-+	Results      map[string][]candyResult       `json:"results"`
-+	Fingerprints map[string][]fingerprintResult `json:"fingerprints"`
-+	ModelTraces  map[string][]traceResult       `json:"modeltraces,omitempty"`
-+	Pelicans     map[string][]pelicanResult     `json:"pelicans,omitempty"`
++	SchemaVersion int                            `json:"schema_version"`
++	Results       map[string][]candyResult       `json:"results"`
++	Fingerprints  map[string][]fingerprintResult `json:"fingerprints"`
++	Pelicans      map[string][]pelicanResult     `json:"pelicans,omitempty"`
 +}
 +
 +var (
@@ -2217,11 +2036,27 @@ new file mode 100644
 +	if errors.Is(err, os.ErrNotExist) {
 +		return
 +	}
-+	var state *persistedState
++	var state *struct {
++		SchemaVersion json.RawMessage            `json:"schema_version"`
++		Results       map[string][]candyResult   `json:"results"`
++		Fingerprints  json.RawMessage            `json:"fingerprints"`
++		Pelicans      map[string][]pelicanResult `json:"pelicans"`
++	}
++	var fingerprints map[string][]fingerprintResult
 +	if err == nil {
 +		err = json.Unmarshal(data, &state)
 +		if err == nil && state == nil {
 +			err = errors.New("测试记录格式无效")
++		}
++		if err == nil && len(state.SchemaVersion) > 0 {
++			var version *int
++			err = json.Unmarshal(state.SchemaVersion, &version)
++			if err == nil && (version == nil || *version != 1) {
++				err = errors.New("测试记录格式无效")
++			}
++			if err == nil && len(state.Fingerprints) > 0 {
++				err = json.Unmarshal(state.Fingerprints, &fingerprints)
++			}
 +		}
 +	}
 +	if err != nil {
@@ -2232,19 +2067,18 @@ new file mode 100644
 +	if state.Results != nil {
 +		candyResults = state.Results
 +	}
-+	if state.Fingerprints != nil {
-+		fingerprintResults = state.Fingerprints
-+	}
-+	if state.ModelTraces != nil {
-+		traceResults = state.ModelTraces
++	if fingerprints != nil {
++		fingerprintResults = fingerprints
 +	}
 +	if state.Pelicans != nil {
 +		pelicanResults = state.Pelicans
 +	}
 +	keepRecent(candyResults)
 +	keepRecent(fingerprintResults)
-+	keepRecent(traceResults)
 +	keepRecent(pelicanResults)
++	if len(state.SchemaVersion) == 0 {
++		_ = saveStateLocked()
++	}
 +}
 +
 +// Each credential keeps its latest historyLimit records of every test.
@@ -2262,7 +2096,7 @@ new file mode 100644
 +}
 +
 +func currentState() persistedState {
-+	return persistedState{Results: candyResults, Fingerprints: fingerprintResults, ModelTraces: traceResults, Pelicans: pelicanResults}
++	return persistedState{SchemaVersion: 1, Results: candyResults, Fingerprints: fingerprintResults, Pelicans: pelicanResults}
 +}
 +
 +// Call with mu held so all histories are written as one snapshot.
@@ -2298,10 +2132,6 @@ new file mode 100644
 +		if i := slices.IndexFunc(fingerprintResults[authID], func(r fingerprintResult) bool { return r.ID == id }); i >= 0 {
 +			record = fingerprintResults[authID][i]
 +		}
-+	case "modeltrace":
-+		if i := slices.IndexFunc(traceResults[authID], func(r traceResult) bool { return r.ID == id }); i >= 0 {
-+			record = traceResults[authID][i]
-+		}
 +	case "pelican":
 +		if i := slices.IndexFunc(pelicanResults[authID], func(r pelicanResult) bool { return r.ID == id }); i >= 0 {
 +			record = pelicanResults[authID][i]
@@ -2320,21 +2150,19 @@ new file mode 100644
 +	switch scope {
 +	case "fingerprint":
 +		fingerprintResults = map[string][]fingerprintResult{}
-+	case "modeltrace":
-+		traceResults = map[string][]traceResult{}
 +	case "candy":
 +		candyResults = map[string][]candyResult{}
 +	case "pelican":
 +		pelicanResults = map[string][]pelicanResult{}
 +	case "all":
 +		candyResults, fingerprintResults = map[string][]candyResult{}, map[string][]fingerprintResult{}
-+		traceResults, pelicanResults = map[string][]traceResult{}, map[string][]pelicanResult{}
++		pelicanResults = map[string][]pelicanResult{}
 +	default:
 +		return jsonError(http.StatusBadRequest, "未知测试类型")
 +	}
 +	if err := saveStateLocked(); err != nil {
 +		candyResults, fingerprintResults = previous.Results, previous.Fingerprints
-+		traceResults, pelicanResults = previous.ModelTraces, previous.Pelicans
++		pelicanResults = previous.Pelicans
 +		return jsonError(http.StatusInternalServerError, "清空测试记录失败："+err.Error())
 +	}
 +	return jsonResponse(http.StatusOK, map[string]bool{"cleared": true})

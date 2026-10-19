@@ -1,95 +1,92 @@
 package codexeval
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
-func TestFingerprintNormalization(t *testing.T) {
-	for _, tc := range []struct{ kind, raw, answer, category string }{
-		{"int", "**４７**", "47", "valid"}, {"int", "٤٧", "47", "valid"}, {"int", "۴۷", "47", "valid"},
-		{"int", "四十七。", "47", "valid"}, {"int", "一百", "100", "valid"}, {"int", "十", "10", "valid"},
-		{"int", "forty-seven", "47", "valid"}, {"int", "one hundred", "1", "valid"},
-		{"int", "101", "101", "invalid"}, {"int", "0", "0", "invalid"}, {"int", "A number: 47", "a", "invalid"},
-		{"letter", "Zed!", "z", "valid"}, {"letter", "QUEUE", "q", "valid"}, {"letter", "abc", "abc", "invalid"},
-		{"color", "Grey", "gray", "valid"}, {"color", "蓝色", "蓝", "valid"}, {"color", "Aqua", "cyan", "valid"},
-		{"coin", "正面！", "heads", "valid"}, {"coin", "花", "tails", "valid"}, {"coin", "HEAD", "heads", "valid"},
-		{"word", "Snow leopard", "snow", "valid"}, {"word", "“上海”", "上海", "valid"},
-		{"word", "e\u0301", "é", "invalid"}, {"word", "🦊", "", "empty"}, {"int", "", "", "empty"},
-		{"int", "As an AI, I cannot pick", "", "refusal"}, {"word", "抱歉，不能回答", "", "refusal"},
-	} {
-		t.Run(tc.kind+"/"+tc.raw, func(t *testing.T) {
-			a, c := normalizeFingerprintAnswer(tc.raw, fingerprintProbe{Kind: tc.kind, Lo: 1, Hi: 100})
-			if a != tc.answer || c != tc.category {
-				t.Fatalf("got (%q, %q), want (%q, %q)", a, c, tc.answer, tc.category)
+func TestFingerprintUpstreamParity(t *testing.T) {
+	raw, err := os.ReadFile("testdata/lm-detector-golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Outputs  []fingerprintOutput
+		Expected fingerprintAttribution
+	}
+	if err = json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	close := func(a, b *float64) {
+		t.Helper()
+		if (a == nil) != (b == nil) || a != nil && !(math.Abs(*a-*b) <= 1e-9) {
+			t.Fatalf("got %v, want %v", a, b)
+		}
+	}
+	for _, tt := range cases {
+		got, err := analyzeFingerprint(tt.Outputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := tt.Expected
+		if got.Decision != want.Decision || got.Prediction != want.Prediction || got.PredictionName != want.PredictionName || got.FamilyPrediction != want.FamilyPrediction ||
+			got.Used != want.Used || got.Sequence.ModelLike != want.Sequence.ModelLike || !reflect.DeepEqual(got.Diagnostics, want.Diagnostics) || len(got.Results) != len(want.Results) {
+			t.Fatalf("attribution mismatch: %+v", got)
+		}
+		close(got.Probability, want.Probability)
+		close(&got.Sequence.Autocorrelation, &want.Sequence.Autocorrelation)
+		close(&got.Sequence.SmallStepShare, &want.Sequence.SmallStepShare)
+		for i, r := range got.Results {
+			w := want.Results[i]
+			if r.Model != w.Model || r.DisplayName != w.DisplayName || r.Family != w.Family || r.FamilyName != w.FamilyName {
+				t.Fatalf("rank %d: %+v, want %+v", i, r, w)
 			}
-		})
-	}
-}
-
-func repeatedFingerprint(answer string, n int) map[string][]string {
-	cells := map[string][]string{}
-	for _, probe := range fingerprintProbes[:4] {
-		for range n {
-			cells[probe.ID] = append(cells[probe.ID], answer)
+			close(r.Probability, w.Probability)
+			close(&r.Score, &w.Score)
 		}
 	}
-	return cells
 }
 
-func TestFingerprintStatistics(t *testing.T) {
-	if got := fingerprintJSD([]string{"a", "a"}, []string{"b"}); got != 1 {
-		t.Fatalf("disjoint JSD = %v", got)
-	}
-	if got := fingerprintJSD([]string{"a", "b"}, []string{"a", "a", "b", "b"}); got != 0 {
-		t.Fatalf("equal distributions JSD = %v", got)
-	}
-	if got := fingerprintJSD([]string{"a"}, []string{"a", "b"}); math.Abs(got-.31127812445913283) > 1e-12 {
-		t.Fatalf("JSD = %v", got)
-	}
-	a, b := repeatedFingerprint("a", 25), repeatedFingerprint("b", 25)
-	entries, mean := compareFingerprintCells(a, b)
-	if len(entries) != 4 || mean == nil || *mean != 1 {
-		t.Fatalf("comparison = %v %v", entries, mean)
-	}
-	if p := fingerprintPermutation(a, b, "different"); p == nil || *p > .004 {
-		t.Fatalf("disjoint p = %v", p)
-	}
-	if p := fingerprintPermutation(a, a, "equal"); p == nil || *p != 1 {
-		t.Fatalf("identical p = %v", p)
-	}
-	if d := fingerprintSplitHalf(a); d == nil || *d != 0 {
-		t.Fatalf("self JSD = %v", d)
-	}
-	delete(a, fingerprintProbes[0].ID)
-	if _, mean := compareFingerprintCells(a, b); mean != nil {
-		t.Fatal("three probes must not produce attribution")
-	}
-	if _, mean := compareFingerprintCells(repeatedFingerprint("a", 9), b); mean != nil {
-		t.Fatal("nine samples must not qualify")
-	}
-}
-
-func TestFingerprintAttribution(t *testing.T) {
-	previous := fingerprintBaselines
-	t.Cleanup(func() { fingerprintBaselines = previous })
-	a, b := repeatedFingerprint("a", 25), repeatedFingerprint("b", 25)
-	fingerprintBaselines = []fingerprintBaseline{{Model: "original", Cells: a}, {Model: "substitute", Cells: b}}
-	for _, tc := range []struct {
-		model   string
-		samples map[string][]string
-		status  string
-	}{
-		{"original", a, "consistent"}, {"original", b, "substitution"},
-		{"original", repeatedFingerprint("c", 25), "different"}, {"unknown", a, "no_baseline"},
-		{"original", repeatedFingerprint("a", 9), "insufficient"},
+func TestFingerprintParseAndChallenges(t *testing.T) {
+	for text, want := range map[string][]int{
+		"生成 300 个：1, 22, 355, 0, 356, 99。完成 4": {1, 22, 355, 99},
+		"1,2 words 3,4": {1, 2}, "1,2 中文 3,4,5": {3, 4, 5}, "1,2 😀 3,4": {1, 2, 3, 4},
 	} {
-		if r := attributeFingerprint(tc.model, tc.samples); r.Status != tc.status {
-			t.Fatalf("%s: got %+v, want %s", tc.model, r, tc.status)
+		if got := parseNumbers(text); !reflect.DeepEqual(got, want) {
+			t.Fatalf("parse %q = %v, want %v", text, got, want)
 		}
 	}
-	fingerprintBaselines = []fingerprintBaseline{{Model: "other", Cells: a}, {Model: "original", Cells: a}}
-	if r := attributeFingerprint("original", a); r.Status != "ambiguous" {
-		t.Fatalf("indistinguishable references: %+v", r)
+	if _, err := analyzeFingerprint([]fingerprintOutput{{strings.Repeat("42,", 164), 300}}); err == nil {
+		t.Fatal("short output was accepted")
+	}
+	if got, err := analyzeFingerprint([]fingerprintOutput{{strings.Repeat("42,", 165), 300}}); err != nil || got.Used != 1 || got.Decision != "not_model" || got.Results != nil {
+		t.Fatalf("repeated numbers = %+v, %v", got, err)
+	}
+	instructed, prefixed := 0, 0
+	for _, c := range fingerprintSuite {
+		if c.Instructions != "" {
+			instructed++
+		}
+		if strings.Contains(c.Prompt, "\n\nFinal task:\n") {
+			prefixed++
+		}
+	}
+	if len(fingerprintSuite) != 36 || instructed != 12 || prefixed != 9 {
+		t.Fatalf("suite: %d challenges, %d with instructions, %d with a user prefix", len(fingerprintSuite), instructed, prefixed)
+	}
+	seen := map[string]bool{}
+	for _, c := range fingerprintChallenges() {
+		if seen[c.Prompt] || !slices.Contains(fingerprintSuite, c) {
+			t.Fatalf("bad challenge: %+v", c)
+		}
+		seen[c.Prompt] = true
+	}
+	if fingerprintModelID("openai/GPT-6.1-sol") != "gpt-6-astra" || fingerprintModelID("deepseek/deepseek-flash") != "deepseek-v4.1-flash-1017" || fingerprintModelID("gpt-6-sol") != "gpt-6-sol" {
+		t.Fatal("aliased models must compare as their candidates")
 	}
 }

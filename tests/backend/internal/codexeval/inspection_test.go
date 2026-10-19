@@ -13,6 +13,9 @@ import (
 )
 
 func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
+	oldDelay := retryDelay
+	retryDelay = time.Millisecond
+	t.Cleanup(func() { retryDelay = oldDelay })
 	mu.Lock()
 	loaded = false
 	stateLoadError = nil
@@ -66,6 +69,9 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		}
 		if id == 8 {
 			return nil, fmt.Errorf("fake upstream failed")
+		}
+		if id == 1 && n == 1 {
+			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("temporary"))}, nil
 		}
 		answer := "20"
 		if id == 2 || id == 7 || (id == 3 && n == 2) {
@@ -153,7 +159,7 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-i.runDone
-	if calls[1] != 3 || calls[2] != 1 || calls[3] != 3 || calls[7] != 3 || calls[8] != 1 || calls[4] != 0 || calls[5] != 0 || calls[6] != 1 {
+	if calls[1] != 4 || calls[2] != 1 || calls[3] != 3 || calls[7] != 3 || calls[8] != 1 || calls[4] != 0 || calls[5] != 0 || calls[6] != 1 {
 		t.Fatalf("wrong test counts: %v", calls)
 	}
 	if len(updates) != 3 || updates[1] != 99 || updates[6] != 99 || updates[7] != 10 {
@@ -621,5 +627,27 @@ func TestCodexInspectionParticipationStopsLaterSends(t *testing.T) {
 	waitIdle(t)
 	if calls != 5 || len(candyResults["92"]) != 5 {
 		t.Fatalf("manual count changed: %d", calls)
+	}
+	// Opt-out during backoff stops this logical result before another send.
+	oldDelay := retryDelay
+	retryDelay = 20 * time.Millisecond
+	t.Cleanup(func() { retryDelay = oldDelay })
+	lock.Lock()
+	a.AutoInspectionEnabled = true
+	lock.Unlock()
+	sender = func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
+		calls++
+		lock.Lock()
+		a.AutoInspectionEnabled = false
+		lock.Unlock()
+		return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("temporary"))}, nil
+	}
+	if err := i.start(); err != nil {
+		t.Fatal(err)
+	}
+	<-i.runDone
+	r = i.snapshot().Results[0]
+	if calls != 6 || r.Tests != 0 || r.Outcome != "unchanged" || r.Error != "" || len(candyResults["92"]) != 5 {
+		t.Fatalf("backoff opt-out calls=%d result=%+v history=%d", calls, r, len(candyResults["92"]))
 	}
 }

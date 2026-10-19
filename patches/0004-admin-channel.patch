@@ -1,5 +1,6 @@
 diff --git a/backend/internal/handler/admin/account_codex_eval_handler.go b/backend/internal/handler/admin/account_codex_eval_handler.go
 new file mode 100644
+index 0000000..deeea7b
 --- /dev/null
 +++ b/backend/internal/handler/admin/account_codex_eval_handler.go
 @@ -0,0 +1,145 @@
@@ -148,11 +149,19 @@ new file mode 100644
 +		_, _ = codexEvalFlusher{c.Writer}.Write(append(append([]byte("event: error\ndata: "), raw...), '\n', '\n'))
 +	}
 +}
+diff --git a/backend/internal/repository/http_upstream.go b/backend/internal/repository/http_upstream.go
+index ff19b03..6ff02dd 100644
+--- a/backend/internal/repository/http_upstream.go
++++ b/backend/internal/repository/http_upstream.go
+@@ -306 +306 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response,
+-		return resp, err
++		return resp, &service.HTTPUpstreamRequestError{Err: err}
 diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
 new file mode 100644
+index 0000000..2f41f43
 --- /dev/null
 +++ b/backend/internal/service/account_codex_eval_service.go
-@@ -0,0 +1,299 @@
+@@ -0,0 +1,296 @@
 +package service
 +
 +import (
@@ -352,9 +361,6 @@ new file mode 100644
 +	if resp.StatusCode != http.StatusOK {
 +		raw, readErr := io.ReadAll(resp.Body)
 +		_ = resp.Body.Close()
-+		if readErr != nil {
-+			return nil, readErr
-+		}
 +		raw = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, raw)
 +		if resp.StatusCode == http.StatusTooManyRequests {
 +			s.reconcileOpenAI429State(ctx, account, resp.Header, raw)
@@ -364,7 +370,7 @@ new file mode 100644
 +		}
 +		resp.Body = io.NopCloser(bytes.NewReader(raw))
 +		resp.ContentLength = int64(len(raw))
-+		return resp, nil
++		return resp, readErr
 +	}
 +	if chat {
 +		state := apicompat.NewChatCompletionsToResponsesStreamState(model)
@@ -452,3 +458,15 @@ new file mode 100644
 +	s.pending = s.pending[n:]
 +	return n, nil
 +}
+diff --git a/backend/internal/service/http_upstream_port.go b/backend/internal/service/http_upstream_port.go
+index e8e7695..d690dc4 100644
+--- a/backend/internal/service/http_upstream_port.go
++++ b/backend/internal/service/http_upstream_port.go
+@@ -8,0 +9,7 @@ import (
++// HTTPUpstreamRequestError preserves an error from an actual transport attempt.
++type HTTPUpstreamRequestError struct{ Err error }
++
++func (e *HTTPUpstreamRequestError) Error() string          { return e.Err.Error() }
++func (e *HTTPUpstreamRequestError) Unwrap() error          { return e.Err }
++func (e *HTTPUpstreamRequestError) RequestAttempted() bool { return true }
++

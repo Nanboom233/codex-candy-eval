@@ -13,10 +13,10 @@ Installation uses one self-extracting Go executable with an embedded server and 
 | --- | --- |
 | [Directory Structure](./directory-structure.md) | Current native code, tests, and delivery owners |
 | [Administrator Evaluation](./runtime-installation.md) | Sending, task APIs, history, page and native session contracts |
-| [Native Candy Inspection](./native-inspection.md) | Automatic rounds, native settings, priority changes and the fifth page tab |
+| [Native Candy Inspection](./native-inspection.md) | Automatic rounds, native settings, priority changes and the Settings tab |
 | [Binary Delivery](./minimal-linux-delivery.md) | Existing-source build, fixed package and replacement/restoration |
-| [Persistence](./database-guidelines.md) | Native database settings and four-map JSON history |
-| [Error Handling](./error-handling.md) | Actual errors, cancellation and original retries |
+| [Persistence](./database-guidelines.md) | Native settings and versioned three-map JSON history |
+| [Error Handling](./error-handling.md) | Actual errors, cancellation and shared bounded retries |
 | [Diagnostics](./logging-guidelines.md) | Error visibility and private-data boundaries |
 | [Quality and Commits](./quality-guidelines.md) | Changed-code checks and commit workflow |
 

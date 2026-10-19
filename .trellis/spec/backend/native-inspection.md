@@ -68,7 +68,7 @@ These flags are not persisted.
 Empty secret updates retain the saved values.
 A failed save leaves active settings unchanged.
 
-The fifth page tab is `设置`.
+The fourth page tab is `设置`.
 Use native settings cards, visible labels, units, and inline validation.
 Keep explanatory paragraphs out of the form.
 Use a visible model dropdown with raw suggestions and a custom literal-model path.
@@ -157,8 +157,11 @@ One native account ID has one value across groups, reloads, and restarts. Shadow
 Keep the global timer switch and native account `schedulable` independent from account inspection participation.
 Apply participation to scheduled and immediate coordinator rounds. Manual Candy tests retain their entry points and fixed counts.
 An in-flight inspection request can finish after opt-out. Check participation before each later send and before a priority update.
+This includes retry sends after backoff. Run the callback outside the global evaluation mutex.
 Use an inspection-only pre-send callback in the Candy worker. Do not hold the runtime mutex during account reads.
 Intentional opt-out retains completed results and ends as `unchanged`, without a synthetic evaluation error.
+Do not append a synthetic history result or increment progress for an intentional pre-send stop.
+Do not cancel unrelated accounts when one account opts out.
 An incomplete confirmation batch cannot produce a recommendation, priority write, or notification.
 Keep per-account pending UI state during refresh. A failed save restores the saved value and shows a row-local error.
 
@@ -209,6 +212,10 @@ Apply native availability and the existing account busy state. Do not replace a 
 Pass the configured model literally through the existing native sender.
 
 Each eligible account gets one first test.
+One logical test can contain up to three request attempts. Only its final completed answer counts toward confirmation.
+Valid wrong Candy text does not retry. Request failures do not become confirmation answers.
+Keep the existing 30-minute phase coordinator wait, then cancel and drain active workers.
+Do not extend that wait to guarantee three full ten-minute attempts.
 After that test, reread the account verdict before selecting confirmations. Do not classify from actual priority or the account-list snapshot.
 If the verdict is degraded and the answer remains wrong, stop after one test.
 If the verdict is normal and the answer is correct, stop after one test.

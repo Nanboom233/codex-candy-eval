@@ -15,7 +15,7 @@ const settings = () => ({ enabled: false, group_id: 101, account_type: "all", ac
   ntfy_server: "https://ntfy.sh", ntfy_topic: "", ntfy_username: "", ntfy_password: "", bark_url: "",
   ntfy_password_configured: true, bark_url_configured: false });
 const idle = { phase: "idle", enabled: false, running: false, results: [] };
-const emptyState = () => ({ active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} });
+const emptyState = () => ({ active: [], candy: {}, fingerprint: {}, pelican: {} });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function harness(preferences = {}, { initializePage = false, api } = {}) {
@@ -27,18 +27,16 @@ function harness(preferences = {}, { initializePage = false, api } = {}) {
   for (const [key, value] of Object.entries(preferences)) w.localStorage.setItem(key, value);
   w.eval([read("vendor/markdown-it.min.js"), read("vendor/markdown-it-cjk-friendly.min.js"),
     read("vendor/texmath.js"), read("vendor/temml.min.js"), read("components.js"), read("catalog.js"),
-    read("candy.js"), read("fingerprint.js").replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({ modes: [
-      { id: "quick", name: "快速", cells: 1, samples_per_cell: 1 }], default_concurrency: 1, max_concurrency: 32 })),
-    read("modeltrace.js").replace('/*MODELTRACE_CONFIG*/{}', JSON.stringify({ requests: 1, default_concurrency: 1, max_concurrency: 32 })),
+    read("candy.js"), read("fingerprint.js").replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({ requests: 3, aliases: { "gpt-6.1-sol": "gpt-6-astra", "deepseek-flash": "deepseek-v4.1-flash-1017" } })),
     read("pelican.js"), read("inspection.js"), initializePage
       ? read("app.js").replace("// Events and initialization.", "api = window.fixtureAPI;\n// Events and initialization.")
       : read("app.js").split("// Events and initialization.")[0], initializePage ? "" : `
-    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializeModelTrace(); initializePelican(); initializeInspection();`, `
+    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializePelican(); initializeInspection();`, `
     window.test = {fillModels,fillInspectionSettings,loadInspectionSettings,saveInspectionSettings,markInspectionEdit,
       inspectionRemovedModels,setInspectionRemovedModels,
       updateModelPicker,renderInspectionState,validateInspectionFields,loadInspectionState,
       refreshCatalog,resetCatalogCache,stateCredentials,visibleCredentials,targetsFor,fillCredentialTypes,fillPlanFilter,renderCandyRow,renderList,render,
-      batchCredentials,runCandy,runFingerprint,runModelTrace,runPelican,candyTip,showLogin,load,
+      batchCredentials,runCandy,runFingerprint,runPelican,fpOutcome,showFingerprintDetail,candyTip,showLogin,load,
       setAccountInspection, selectCandy(id){candySelected.add(id);render()}, setUpdate(fn){update=fn},
       setCredentials(data){credentials=stateCredentials(data)},
       setAPI(fn){api=fn}, setModels(ids){catalogCache.models={ids}}, setGroup(id){selectedGroup=id},
@@ -82,6 +80,28 @@ function groupFixture() {
 }
 
 (async () => {
+  let detector = harness({ "sub2api-codex-eval.prefs.tab": JSON.stringify("modeltrace") }, { initializePage: true, api: groupFixture().api });
+  try {
+    await tick();
+    assert.equal(detector.$("candy-panel").hidden, false);
+    assert.equal(detector.$("modeltrace-panel"), null);
+    assert.equal(detector.$("fp-mode"), null);
+    assert.equal(detector.$("fp-principle"), null);
+    const record = { model: "openai/gpt-6.1-sol", status: "partial", time: "2026-10-19T12:00:00Z", duration_ms: 10, concurrency: 3,
+      attribution: { decision: "partial", prediction: "gpt-6-astra", prediction_name: "GPT-6 Astra", probability: null,
+        results: [{ display_name: "GPT-6 Astra", score: 1.2, probability: null }] },
+      samples: [{ prompt: "fixture prompt", expected_count: 300, parsed_numbers: 200, attempts: 2, accepted: true, text: "fixture output" }] };
+    assert.ok(detector.h.fpOutcome(record).includes("与测试模型一致"));
+    detector.h.showFingerprintDetail(record);
+    assert.ok(detector.$("fp-detail-body").textContent.includes("—"));
+    assert.ok(detector.$("fp-detail-body").textContent.includes("2 次尝试"));
+    detector.h.showFingerprintDetail({ ...record, status: "cancelled" });
+    assert.ok(detector.$("fp-detail-body").textContent.includes("测试已停止"));
+    assert.equal(detector.$("fp-detail-body").textContent.includes("候选模型排行"), false);
+    detector.h.showFingerprintDetail({ ...record, attribution: { decision: "not_model", results: null } });
+    assert.ok(detector.$("fp-detail-body").textContent.includes("不像语言模型回答"));
+    assert.equal(detector.$("fp-detail-body").textContent.includes("候选模型排行"), false);
+  } finally { detector.close(); }
   const entryFixture = groupFixture();
   const initialSettings = deferred(), initialGroups = deferred();
   let settingsReads = 0;
@@ -101,7 +121,7 @@ function groupFixture() {
     initialGroups.resolve();
     await tick();
     await tick();
-    for (const [tab, prefix] of [["candy", ""], ["fingerprint", "fp-"], ["modeltrace", "mt-"], ["pelican", "pl-"]]) {
+    for (const [tab, prefix] of [["candy", ""], ["fingerprint", "fp-"], ["pelican", "pl-"]]) {
       ctx.$("tab-" + tab).click();
       assert.equal(ctx.$(tab + "-panel").hidden, false);
       assert.deepEqual([...ctx.$(prefix + "group").options].map((option) => option.textContent), ["A", "B"]);
@@ -119,7 +139,7 @@ function groupFixture() {
     ctx.h.setModels(["provider/raw", "gpt-6.1-sol"]);
     ctx.h.fillModels();
     assert.equal(ctx.$("model-select").value, "saved/literal");
-    for (const id of ["model", "fp-model", "mt-model", "pl-model"]) {
+    for (const id of ["model", "fp-model", "pl-model"]) {
       ctx.h.setModels(["provider/raw", "gpt-6.1-sol"]);
       ctx.h.fillModels();
       choose(ctx, id, "provider/raw");
@@ -142,7 +162,7 @@ function groupFixture() {
   ctx = harness();
   try {
     ctx.h.fillModels();
-    const ids = ["model", "fp-model", "mt-model", "pl-model"];
+    const ids = ["model", "fp-model", "pl-model"];
     for (const id of ids) {
       const select = ctx.$(id + "-select");
       select.selectedIndex = select.options.length - 1;
@@ -150,7 +170,7 @@ function groupFixture() {
       ctx.$(id).value = "typed/" + id;
       ctx.$(id).dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
     }
-    for (const [id, value] of [["runs", "7"], ["fp-concurrency", "3"], ["mt-concurrency", "2"], ["effort", "high"], ["pl-effort", "max"]]) {
+    for (const [id, value] of [["runs", "7"], ["fp-concurrency", "3"], ["effort", "high"], ["pl-effort", "max"]]) {
       ctx.$(id).value = value;
       ctx.$(id).dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
     }
@@ -159,7 +179,7 @@ function groupFixture() {
     try {
       reloaded.h.fillModels();
       for (const id of ids) assert.equal(reloaded.$(id).value, "typed/" + id, "Reload before blur lost " + id);
-      for (const [id, value] of [["runs", "7"], ["fp-concurrency", "3"], ["mt-concurrency", "2"], ["effort", "high"], ["pl-effort", "max"]]) {
+      for (const [id, value] of [["runs", "7"], ["fp-concurrency", "3"], ["effort", "high"], ["pl-effort", "max"]]) {
         assert.equal(reloaded.$(id).value, value, "Reload before blur lost " + id);
       }
     } finally { reloaded.close(); }
@@ -308,7 +328,7 @@ function groupFixture() {
     assert.equal(ctx.$("inspection-status").parentElement, header);
     assert.equal(ctx.$("inspection-runtime-error"), null);
     assert.equal(ctx.$("candy-settings-status"), null);
-    for (const prefix of ["fp-", "mt-", "pl-"]) assert.equal(ctx.$(prefix + "rows").parentElement.querySelector(".inspection-status"), null);
+    for (const prefix of ["fp-", "pl-"]) assert.equal(ctx.$(prefix + "rows").parentElement.querySelector(".inspection-status"), null);
     ctx.h.renderInspectionState(idle);
     assert.equal(ctx.$("inspection-status").hidden, true);
     assert.equal(ctx.$("inspection-phase").textContent, "");
@@ -484,7 +504,7 @@ function groupFixture() {
   ctx = harness();
   try {
     const fixture = groupFixture();
-    const prefixes = ["", "fp-", "mt-", "pl-"];
+    const prefixes = ["", "fp-", "pl-"];
     const submissions = [];
     ctx.h.setAPI(fixture.api);
     ctx.h.setUpdate((_path, options) => submissions.push(options.body));
@@ -495,12 +515,12 @@ function groupFixture() {
     ctx.h.render();
     const ids = (prefix) => [...ctx.$(prefix + "rows").querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)).sort((a, b) => a - b);
     for (const prefix of prefixes) assert.deepEqual(ids(prefix), [11, 33], prefix);
-    for (const [prefix, run] of prefixes.map((prefix, i) => [prefix, [ctx.h.runCandy, ctx.h.runFingerprint, ctx.h.runModelTrace, ctx.h.runPelican][i]])) {
+    for (const [prefix, run] of prefixes.map((prefix, i) => [prefix, [ctx.h.runCandy, ctx.h.runFingerprint, ctx.h.runPelican][i]])) {
       const targets = ctx.h.targetsFor(ctx.h.batchCredentials(prefix, new Set()).map((a) => a.id));
       await run({ targets });
     }
     assert.deepEqual(submissions.map((body) => [...body.targets].map((target) => target.account_id).sort((a, b) => a - b)),
-      [[11, 33], [11, 33], [11, 33], [11, 33]]);
+      [[11, 33], [11, 33], [11, 33]]);
     assert.ok(submissions.every((body) => body.targets.every((target) => target.group_id === 101)));
     const modelRequests = fixture.calls.filter((url) => url.endsWith("/models")).length;
     await ctx.h.refreshCatalog();
@@ -552,7 +572,7 @@ function groupFixture() {
     await old;
     ctx.h.setCredentials(fixture.data);
     ctx.h.fillCredentialTypes();
-    for (const prefix of ["", "fp-", "mt-", "pl-"]) {
+    for (const prefix of ["", "fp-", "pl-"]) {
       ctx.h.fillPlanFilter(prefix);
       assert.ok([...ctx.h.visibleCredentials(prefix)].every((a) => a.group_ids.includes(202)), "Late group A responses cannot commit into B");
     }
@@ -642,7 +662,7 @@ function groupFixture() {
     assert.equal(row.querySelector("[data-candy-select]").checked, true);
     assert.ok(row.closest(".row").classList.contains("open"));
     assert.ok(ctx.$("candy-credentials").querySelector(".list-head").textContent.includes("启用自动巡检"));
-    for (const prefix of ["fp-", "mt-", "pl-"]) assert.equal(ctx.$(prefix + "rows").querySelector("[data-inspection-enable]"), null);
+    for (const prefix of ["fp-", "pl-"]) assert.equal(ctx.$(prefix + "rows").querySelector("[data-inspection-enable]"), null);
     assert.equal(row.querySelector("[data-enable]").getAttribute("aria-label"), "启用此账户");
     const saving = ctx.h.setAccountInspection("33", false);
     await tick();
@@ -691,11 +711,11 @@ function groupFixture() {
     assert.equal(ctx.$("catalog-error").hidden, false);
     assert.ok(ctx.$("catalog-error").textContent.includes("fixture inventory offline"));
     assert.equal(ctx.h.targetsFor(["11", "33"]).length, 0);
-    for (const prefix of ["", "fp-", "mt-", "pl-"]) {
+    for (const prefix of ["", "fp-", "pl-"]) {
       assert.equal(ctx.$(prefix + "run-batch").disabled, true);
       assert.equal(ctx.$(prefix + "rows").querySelector("[data-row] > button").disabled, true);
     }
-    for (const run of [ctx.h.runCandy, ctx.h.runFingerprint, ctx.h.runModelTrace, ctx.h.runPelican]) await run({ targets: oldTargets });
+    for (const run of [ctx.h.runCandy, ctx.h.runFingerprint, ctx.h.runPelican]) await run({ targets: oldTargets });
     assert.equal(starts.length, 0, "Neither row nor batch helpers may submit targets from a failed inventory refresh");
     inventoryFailed = false;
     await ctx.h.load();
@@ -730,7 +750,7 @@ function groupFixture() {
       return fixture.api(url);
     });
     await ctx.h.load();
-    for (const prefix of ["", "fp-", "mt-", "pl-"]) {
+    for (const prefix of ["", "fp-", "pl-"]) {
       const list = ctx.$(prefix + "rows");
       const tags = [...list.querySelectorAll('[data-row="33"] .tag')];
       assert.equal(tags.filter((tag) => tag.textContent === "降级").length, 1);
@@ -744,7 +764,7 @@ function groupFixture() {
     await ctx.h.load();
     assert.equal(ctx.$("load-error").hidden, false);
     assert.ok(ctx.$("load-error").textContent.includes("fixture evaluation state offline"));
-    for (const prefix of ["", "fp-", "mt-", "pl-"]) {
+    for (const prefix of ["", "fp-", "pl-"]) {
       const list = ctx.$(prefix + "rows");
       assert.deepEqual([...list.querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)), [33]);
       assert.equal(list.querySelector(".name").textContent, "shared updated");
@@ -757,10 +777,10 @@ function groupFixture() {
     assert.ok(ctx.$("rows").querySelector(".answer-content").textContent.includes("retained Candy record"));
     ctx.$("rows").querySelector("[data-candy-run]").click();
     await tick();
-    for (const [prefix, run] of [["", ctx.h.runCandy], ["fp-", ctx.h.runFingerprint], ["mt-", ctx.h.runModelTrace], ["pl-", ctx.h.runPelican]]) {
+    for (const [prefix, run] of [["", ctx.h.runCandy], ["fp-", ctx.h.runFingerprint], ["pl-", ctx.h.runPelican]]) {
       await run({ targets: ctx.h.targetsFor(ctx.h.batchCredentials(prefix, new Set()).map((a) => a.id)) });
     }
-    assert.equal(starts.length, 5);
+    assert.equal(starts.length, 4);
     assert.ok(starts.every((body) => body.targets.length === 1 && body.targets[0].account_id === 33 && body.targets[0].group_id === 101));
     assert.equal(ctx.$("load-error").hidden, false, "Starting a valid current account must not hide the record-fetch error");
     stateFailed = false;

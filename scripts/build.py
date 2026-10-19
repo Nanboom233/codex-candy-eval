@@ -50,7 +50,7 @@ def build(source, workspace, check=False):
     env["GOFLAGS"] = "-mod=readonly"
     if check:
         run(["node", ROOT / "tests/ui/sub2api-dropdowns.cjs", tree], ROOT, env)
-        run(["go", "test", "-tags=unit", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "-run", "Codex|FingerprintNormalization|FingerprintStatistics|FingerprintAttribution|ModelTraceUpstreamParity|ModelTraceParseAndThreshold|ExtractHTML|HasStandalone21"], backend, env)
+        run(["go", "test", "-tags=unit", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "-run", "Codex|FingerprintUpstreamParity|FingerprintParseAndChallenges|ExtractHTML|HasStandalone21"], backend, env)
         run(["go", "vet", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "./internal/server", "./internal/server/routes", "./internal/web"], backend, env)
     output = ROOT / "dist/build/sub2api-codex-eval"
     output.parent.mkdir(parents=True, exist_ok=True)

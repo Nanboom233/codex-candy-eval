@@ -5,6 +5,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -70,9 +71,22 @@ func TestCodexEvalNativeSender(t *testing.T) {
 			require.Equal(t, 401, resp.StatusCode)
 			require.Contains(t, string(raw), "fixture authentication failure")
 			require.Equal(t, int64(17), repo.setErrorID)
+			for _, status := range []int{401, 429} {
+				upstream.responses = []*http.Response{{StatusCode: status, Header: http.Header{}, Body: codexErrorBody{}}}
+				resp, err = svc.SendCodexEvaluation(context.Background(), 17, body, nil)
+				require.ErrorContains(t, err, "fixture body read")
+				require.NotNil(t, resp)
+				require.Equal(t, status, resp.StatusCode)
+				resp.Body.Close()
+			}
 		})
 	}
 }
+
+type codexErrorBody struct{}
+
+func (codexErrorBody) Read([]byte) (int, error) { return 0, errors.New("fixture body read") }
+func (codexErrorBody) Close() error             { return nil }
 
 func TestCodexEvalModelsBypassesAccountProjection(t *testing.T) {
 	gateway := newCodexModelsAPIKeyTestService(&codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {

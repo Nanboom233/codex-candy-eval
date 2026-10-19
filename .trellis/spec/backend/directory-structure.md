@@ -65,6 +65,10 @@ Evidence: [repository layout and private configuration](../../../AGENTS.md).
 
 - Keep evaluation tasks and account admission in `codexeval/runtime.go`.
 - Keep each evaluation's request types, results, runner, and algorithm in its existing package.
+- Keep the LM detector in `fingerprint.go` and `fingerprint_detector.go`. Retired ModelTrace and probe algorithms have no runtime owner.
+- Keep detector assets under `codexeval/data/lm-detector/` in patch `0002`, including its Git binary hunk.
+- Keep the detector golden fixture under `tests/backend/internal/codexeval/testdata/`, outside production patches.
+- Keep shared request retries in `model.go` and the shared context decoder in `codex.go`.
 - Keep corresponding Go tests under `tests/backend/` with the same package path.
 - Keep history persistence in `codexeval/state.go`.
 - Keep inspection scheduling and notifications in `codexeval/inspection*.go`.

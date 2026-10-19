@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,32 @@ func (r codexLifetimeAccountRepo) GetByID(ctx context.Context, id int64) (*servi
 }
 
 func TestCodexEvalBackgroundNativeStreamLifetime(t *testing.T) {
+	t.Run("transport classification", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			connection, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			connection.Close()
+		}))
+		defer upstream.Close()
+		account := &service.Account{ID: 917, Name: "transport fixture", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Concurrency: 1,
+			Credentials: map[string]any{"api_key": "fixture-only", "base_url": upstream.URL}, Extra: map[string]any{"openai_responses_supported": true}}
+		cfg := &config.Config{}
+		cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+		native := service.NewAccountTestService(codexLifetimeAccountRepo{account: account}, nil, nil, nil, nil, repository.NewHTTPUpstream(cfg), cfg, nil)
+		body := []byte(`{"model":"fixture","stream":true,"input":[{"role":"user","content":"fixture"}]}`)
+		_, err := native.SendCodexEvaluation(context.Background(), 918, body, nil)
+		var attempted *service.HTTPUpstreamRequestError
+		require.Error(t, err)
+		require.False(t, errors.As(err, &attempted), "account setup must stay final")
+		_, err = native.SendCodexEvaluation(context.Background(), 917, body, nil)
+		require.Error(t, err)
+		require.True(t, errors.As(err, &attempted), "actual transport failure needs the retry marker")
+		require.True(t, attempted.RequestAttempted())
+		require.True(t, errors.Is(err, attempted.Err))
+	})
 	for _, chat := range []bool{false, true} {
 		t.Run(fmt.Sprintf("chat=%v", chat), func(t *testing.T) {
 			release := make(chan struct{})

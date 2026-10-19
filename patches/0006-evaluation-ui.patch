@@ -1,8 +1,95 @@
+diff --git a/backend/internal/codexeval/web.go b/backend/internal/codexeval/web.go
+new file mode 100644
+index 0000000..e5bf9d3
+--- /dev/null
++++ b/backend/internal/codexeval/web.go
+@@ -0,0 +1,80 @@
++package codexeval
++
++import (
++	_ "embed"
++	"encoding/json"
++	"html"
++	"strings"
++)
++
++const pluginVersion = "0.3.14"
++
++//go:embed web/ui.html
++var uiTemplate string
++
++//go:embed web/style.css
++var uiStyles string
++
++//go:embed web/theme.css
++var uiThemes string
++
++//go:embed web/vendor/markdown-it.min.js
++var markdownScript string
++
++//go:embed web/vendor/markdown-it-cjk-friendly.min.js
++var cjkFriendlyScript string
++
++//go:embed web/vendor/texmath.js
++var texmathScript string
++
++//go:embed web/vendor/temml.min.js
++var temmlScript string
++
++//go:embed web/vendor/temml.css
++var temmlStyles string
++
++//go:embed web/app.js
++var appScript string
++
++//go:embed web/catalog.js
++var catalogScript string
++
++//go:embed web/components.js
++var componentsScript string
++
++//go:embed web/candy.js
++var candyScript string
++
++//go:embed web/fingerprint.js
++var fingerprintScript string
++
++//go:embed web/pelican.js
++var pelicanScript string
++
++//go:embed web/inspection.js
++var inspectionScript string
++
++var uiHTML = func() []byte {
++	config, _ := json.Marshal(map[string]any{"requests": fingerprintTarget, "aliases": fingerprintAliases})
++	fpScript := strings.Replace(fingerprintScript, `/*FINGERPRINT_CONFIG*/{}`, string(config), 1)
++	return []byte(strings.NewReplacer(
++		"/*APP_STYLES*/", temmlStyles+"\n"+uiThemes+"\n"+uiStyles,
++		"<!--PLUGIN_VERSION-->", pluginVersion,
++		"<!--CANDY_PROMPT-->", html.EscapeString(candyPrompt),
++		"<!--PELICAN_PROMPT-->", html.EscapeString(pelicanPrompt),
++		"<!--FINGERPRINT_LICENSE-->", "<!-- lm-detector\n"+detectorLicense+"-->",
++		"/*MARKDOWN_SCRIPT*/", markdownScript,
++		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
++		"/*TEXMATH_SCRIPT*/", texmathScript,
++		"/*TEMML_SCRIPT*/", temmlScript,
++		"/*CATALOG_SCRIPT*/", catalogScript,
++		"/*COMPONENTS_SCRIPT*/", componentsScript,
++		"/*CANDY_SCRIPT*/", candyScript,
++		"/*FINGERPRINT_SCRIPT*/", fpScript,
++		"/*PELICAN_SCRIPT*/", pelicanScript,
++		"/*INSPECTION_SCRIPT*/", inspectionScript,
++		"/*APP_SCRIPT*/", appScript,
++	).Replace(uiTemplate))
++}()
++
++func Page() []byte { return uiHTML }
 diff --git a/backend/internal/codexeval/web/app.js b/backend/internal/codexeval/web/app.js
 new file mode 100644
+index 0000000..3e1c544
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
-@@ -0,0 +1,587 @@
+@@ -0,0 +1,582 @@
 +"use strict";
 +const BASE = "/api/v1/admin/codex-eval";
 +const PREF_STORE = "sub2api-codex-eval.prefs";
@@ -11,11 +98,11 @@ new file mode 100644
 +const DEFAULT_EFFORT = "low";
 +const DEFAULT_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 +const HIDDEN_MODEL = (id) => id.toLowerCase().includes("image");
-+const tabNames = ["candy", "fingerprint", "modeltrace", "pelican", "settings"];
++const tabNames = ["candy", "fingerprint", "pelican", "settings"];
 +
 +let sessionBlocked = false;
 +let credentials = [];
-+let evaluationState = { active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} };
++let evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {} };
 +let pollTimer = 0;
 +let loadError = "";
 +let loadController = null;
@@ -82,7 +169,6 @@ new file mode 100644
 +  };
 +  fill("model", ids, candyPrefs().model);
 +  fill("fp-model", probeModels, stored(PREF_STORE + ".fingerprint")?.model);
-+  fill("mt-model", probeModels, stored(PREF_STORE + ".modeltrace")?.model);
 +  fill("pl-model", ids, stored(PREF_STORE + ".pelican")?.model);
 +  updateModelPicker("inspection-model", ids);
 +  renderInspectionModelOptions();
@@ -150,7 +236,7 @@ new file mode 100644
 +}
 +
 +function renderPageActions() {
-+  $("clear-all").disabled = pending || credentials.every((a) => !a.results.length && !a.fingerprints?.length && !a.modeltraces?.length && !a.pelicans?.length);
++  $("clear-all").disabled = pending || credentials.every((a) => !a.results.length && !a.fingerprints?.length && !a.pelicans?.length);
 +  $("refresh").disabled = pending || refreshing;
 +  $("refresh").setAttribute("aria-busy", refreshing);
 +}
@@ -158,10 +244,9 @@ new file mode 100644
 +function render() {
 +  renderPageActions();
 +  setNotice("storage-error", storageError);
-+  for (const prefix of ["", "fp-", "mt-", "pl-"]) fillPlanFilter(prefix);
++  for (const prefix of ["", "fp-", "pl-"]) fillPlanFilter(prefix);
 +  renderCandy();
 +  renderFingerprints();
-+  renderModelTrace();
 +  renderPelican();
 +}
 +
@@ -181,12 +266,11 @@ new file mode 100644
 +   unavailable: restrictions.length > 0, restrictions,
 +   plan_type: account.credentials?.plan_type || account.parent_plan_type || "",
 +   results: data.candy[id] || [], fingerprints: data.fingerprint[id] || [],
-+   modeltraces: data.modeltrace[id] || [], pelicans: data.pelican[id] || [], task,
++   pelicans: data.pelican[id] || [], task,
 +   task_in_scope: task?.target.group_id === selectedGroup };
 +  if (task && a.task_in_scope) {
 +   if (task.type === "candy") a.running = task.progress;
 +   if (task.type === "fingerprint") a.fingerprint_running = { ...task.progress, phase: task.status === "cancelling" ? "cancelling" : task.progress.phase };
-+   if (task.type === "modeltrace") a.modeltrace_running = { ...task.progress, phase: task.status === "cancelling" ? "cancelling" : task.progress.phase };
 +   if (task.type === "pelican") a.pelican_running = true;
 +  }
 +  return a;
@@ -218,10 +302,10 @@ new file mode 100644
 +  const usable = new Set(credentials.filter(usableCredential).map((a) => a.id));
 +  const answers = new Set(credentials.flatMap((a) => a.results.map((r) => answerKey(a.id, r))));
 +  const pages = new Set(credentials.flatMap((a) => a.pelicans.map((r) => pelicanKey(a.id, r.id))));
-+  for (const expanded of [candyExpanded, fpExpanded, mtExpanded, plExpanded]) {
++  for (const expanded of [candyExpanded, fpExpanded, plExpanded]) {
 +    for (const id of expanded) if (!ids.has(id)) expanded.delete(id);
 +  }
-+  for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) {
++  for (const selection of [candySelected, fpSelected, plSelected]) {
 +    for (const id of selection) if (!usable.has(id)) selection.delete(id);
 +  }
 +  for (const id of candyAnswersExpanded) if (!answers.has(id)) candyAnswersExpanded.delete(id);
@@ -304,12 +388,12 @@ new file mode 100644
 +  sessionBlocked = true;
 +  resetCatalogCache();
 +  credentials = [];
-+  evaluationState = { active: [], candy: {}, fingerprint: {}, modeltrace: {}, pelican: {} };
++  evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {} };
 +  inspectionState = { results: [] };
 +  inspectionSettingsLoaded = false;
 +  inspectionDirtyFields.clear();
 +  loadError = storageError = "";
-+  for (const collection of [candySelected, fpSelected, mtSelected, plSelected, candyExpanded, fpExpanded, mtExpanded, plExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
++  for (const collection of [candySelected, fpSelected, plSelected, candyExpanded, fpExpanded, plExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
 +  for (const id of notices.keys()) setNotice(id, "");
 +  hideTip();
 +  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
@@ -333,7 +417,7 @@ new file mode 100644
 +
 +function setMasked(masked) {
 +  document.body.classList.toggle("masked", masked);
-+  for (const id of ["mask", "fp-mask", "mt-mask", "pl-mask"]) {
++  for (const id of ["mask", "fp-mask", "pl-mask"]) {
 +    $(id).setAttribute("aria-pressed", masked);
 +    $(id).innerHTML = icon(masked ? "eye" : "eye-off");
 +    setLabel($(id), masked ? "取消脱敏" : "脱敏");
@@ -351,8 +435,8 @@ new file mode 100644
 +  if (name === "settings" && loadSettings) loadInspectionSettings();
 +  store(PREF_STORE + ".tab", name);
 +}
-+const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["modeltrace_running", "ModelTrace 测试"], ["pelican_running", "鹈鹕测试"]];
-+const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", modeltrace: "ModelTrace 测试", pelican: "鹈鹕测试" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
++const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["pelican_running", "鹈鹕测试"]];
++const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", pelican: "鹈鹕测试" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
 +const credentialBusy = (a) => !!busyTest(a);
 +const usableCredential = (a) => !a.disabled && !a.unavailable;
 +const availableCredential = (a) => usableCredential(a) && !credentialBusy(a);
@@ -479,7 +563,7 @@ new file mode 100644
 +function fillCredentialTypes() {
 +  const types = new Map(credentials.map((a) => [credentialType(a), credentialTypeLabel(a)]));
 +  const options = [["all", "全部账户"], ...[...types].sort(([a], [b]) => a.localeCompare(b))];
-+  for (const prefix of ["", "fp-", "mt-", "pl-"]) {
++  for (const prefix of ["", "fp-", "pl-"]) {
 +    const selected = $(prefix + "credential-type").value;
 +    const values = [...options];
 +    if (!prefix && selected && !values.some(([value]) => value === selected)) values.push([selected, selected === "oauth" ? "OAuth" : "API Key"]);
@@ -489,8 +573,7 @@ new file mode 100644
 +
 +function initializeLayout() {
 +  $("candy-credentials").innerHTML = credentialCard("", "糖果测试", ["账户", "最近一次", "正确率", "最近 20 次"]);
-+  $("fp-credentials").innerHTML = credentialCard("fp-", "指纹测试", ["账户", "指纹结果", "模式", "测试时间"]);
-+  $("mt-credentials").innerHTML = credentialCard("mt-", "ModelTrace 测试", ["账户", "归因结果", "测试模型", "测试时间"]);
++  $("fp-credentials").innerHTML = credentialCard("fp-", "指纹测试", ["账户", "指纹结果", "测试模型", "测试时间"]);
 +  $("pl-credentials").innerHTML = credentialCard("pl-", "鹈鹕测试", ["账户", "最近一次", "动画"]);
 +  $("notifications").innerHTML = ["flash", "load-error", "catalog-error", "storage-error"].map((id) => `<div id="${id}" class="global-flash" role="alert" hidden><span class="notice-symbol" aria-hidden="true"></span><span class="notice-message"></span><button class="notice-close" type="button" aria-label="隐藏提示" data-tip>${icon("x")}</button></div>`).join("");
 +}
@@ -502,7 +585,6 @@ new file mode 100644
 +initializeCopyButtons();
 +initializeCandy();
 +initializeFingerprint();
-+initializeModelTrace();
 +initializePelican();
 +initializeInspection();
 +document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon, el.dataset.class); });
@@ -533,9 +615,9 @@ new file mode 100644
 +  setMasked(masked);
 +  store(MASK_STORE, masked);
 +});
-+for (const id of ["fp-mask", "mt-mask", "pl-mask"]) $(id).addEventListener("click", () => $("mask").click());
++for (const id of ["fp-mask", "pl-mask"]) $(id).addEventListener("click", () => $("mask").click());
 +
-+for (const [id, scope] of [["clear", "candy"], ["fp-clear", "fingerprint"], ["mt-clear", "modeltrace"], ["pl-clear", "pelican"], ["clear-all", "all"]]) {
++for (const [id, scope] of [["clear", "candy"], ["fp-clear", "fingerprint"], ["pl-clear", "pelican"], ["clear-all", "all"]]) {
 +  $(id).addEventListener("click", () => {
 +    clearScope = scope;
 +    $("clear-title").textContent = `${$(id).getAttribute("aria-label")}？`;
@@ -559,7 +641,7 @@ new file mode 100644
 +}
 +switchTab(tabNames.includes(stored(PREF_STORE + ".tab")) ? stored(PREF_STORE + ".tab") : "candy", { loadSettings: false });
 +
-+for (const [prefix, type, selection, submit] of [["", "candy", candySelected, runCandy], ["fp-", "fp", fpSelected, runFingerprint], ["mt-", "mt", mtSelected, runModelTrace], ["pl-", "pl", plSelected, runPelican]]) {
++for (const [prefix, type, selection, submit] of [["", "candy", candySelected, runCandy], ["fp-", "fp", fpSelected, runFingerprint], ["pl-", "pl", plSelected, runPelican]]) {
 +  for (const filter of ["credential-type", "credential-plan", "enabled-only"]) $(prefix + filter).addEventListener("change", () => { selection.clear(); render(); });
 +  $(prefix + "toolbar").addEventListener("submit", (e) => {
 +    e.preventDefault();
@@ -586,12 +668,13 @@ new file mode 100644
 + selectedGroup = Number(select.value);
 + store(PREF_STORE + ".group", selectedGroup);
 + stopPolling(); resetCatalogCache(); credentials = [];
-+ for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) selection.clear();
++ for (const selection of [candySelected, fpSelected, plSelected]) selection.clear();
 + syncGroupControls(); load({ refresh: true });
 +}));
 +localStorage.getItem("auth_token") ? start() : showLogin("请登录 Sub2API 管理面板，登录后刷新本页");
 diff --git a/backend/internal/codexeval/web/candy.js b/backend/internal/codexeval/web/candy.js
 new file mode 100644
+index 0000000..e3da0b1
 --- /dev/null
 +++ b/backend/internal/codexeval/web/candy.js
 @@ -0,0 +1,115 @@
@@ -712,6 +795,7 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/catalog.js b/backend/internal/codexeval/web/catalog.js
 new file mode 100644
+index 0000000..8931a2a
 --- /dev/null
 +++ b/backend/internal/codexeval/web/catalog.js
 @@ -0,0 +1,129 @@
@@ -739,7 +823,7 @@ new file mode 100644
 +function syncGroupControls() {
 +  const options = groups.map((g) => [String(g.id), g.name]);
 +  if (selectedGroup && !groups.some((g) => g.id === selectedGroup)) options.push([String(selectedGroup), `分组 ${selectedGroup}（不可用）`]);
-+  for (const prefix of ["", "fp-", "mt-", "pl-"]) {
++  for (const prefix of ["", "fp-", "pl-"]) {
 +    fillSelect(prefix + "group", options, String(selectedGroup), String(selectedGroup));
 +  }
 +}
@@ -846,9 +930,10 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/components.js b/backend/internal/codexeval/web/components.js
 new file mode 100644
+index 0000000..c62c6be
 --- /dev/null
 +++ b/backend/internal/codexeval/web/components.js
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,347 @@
 +"use strict";
 +
 +// Lucide icons (https://lucide.dev, ISC license).
@@ -914,7 +999,7 @@ new file mode 100644
 +  picker.input.hidden = !picker.custom;
 +}
 +function initializeModelPickers() {
-+  for (const id of ["model", "fp-model", "mt-model", "pl-model", "inspection-model"]) {
++  for (const id of ["model", "fp-model", "pl-model", "inspection-model"]) {
 +    const input = $(id), select = $(id + "-select");
 +    const picker = { input, select, models: [], custom: false };
 +    modelPickers.set(id, picker);
@@ -952,7 +1037,8 @@ new file mode 100644
 +  metric("clock", "耗时", r.duration_ms != null ? fmtSec(r.duration_ms) : "—") +
 +  metric("square-arrow-right-enter", "输入 Token", r.input_tokens != null ? fmtNum(r.input_tokens) : "—") +
 +  metric("square-arrow-right-exit", "输出 Token", r.output_tokens != null ? fmtNum(r.output_tokens) : "—") +
-+  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "");
++  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "") +
++  (r.attempts ? `<span class="metric"><span>${r.attempts} 次尝试</span></span>` : "");
 +
 +// Codex plans in sort order, labelled like the official Codex client.
 +// Badges follow the original panel: platinum for top Pro plans, gold for Pro 100 and Business Premium.
@@ -1032,7 +1118,7 @@ new file mode 100644
 +  });
 +}
 +function collectionButton(type, credential, progress, label) {
-+  if (progress) return `<button class="btn ghost" type="button" data-${type}-cancel="${esc(credential.id)}" data-tip="停止采集并中断进行中的请求" ${pending || progress.phase === "cancelling" ? "disabled" : ""}>停止</button>`;
++  if (progress) return `<button class="btn ghost" type="button" data-${type}-cancel="${esc(credential.id)}" ${pending || progress.phase === "cancelling" ? "disabled" : ""}>停止</button>`;
 +  return `<button class="btn" type="button" data-${type}-run="${esc(credential.id)}" ${disabledFor(runBlocker(type + "-", credential))}>${icon("play")}${esc(label)}</button>`;
 +}
 +// The latest result of a single-prompt test: its verdict and model, then its usage.
@@ -1197,118 +1283,76 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/fingerprint.js b/backend/internal/codexeval/web/fingerprint.js
 new file mode 100644
+index 0000000..bf1d843
 --- /dev/null
 +++ b/backend/internal/codexeval/web/fingerprint.js
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,63 @@
 +"use strict";
 +
 +const FP_CONFIG = /*FINGERPRINT_CONFIG*/{};
-+const fpModes = Object.fromEntries(FP_CONFIG.modes.map((m) => [m.id, { name: m.name, requests: m.cells * m.samples_per_cell }]));
 +const fpSelected = new Set();
 +const fpExpanded = new Set();
++const fpConcurrency = () => boundedInput("fp-concurrency", FP_CONFIG.requests, FP_CONFIG.requests);
++const fpSavePrefs = () => store(PREF_STORE + ".fingerprint", { model: $("fp-model").value, concurrency: fpConcurrency() });
++const fpPercent = (value) => value == null ? "—" : `${(value * 100).toFixed(1)}%`;
 +
-+const fpModeName = (mode) => fpModes[mode]?.name || mode || "—";
-+const fpConcurrency = () => boundedInput("fp-concurrency", FP_CONFIG.default_concurrency, FP_CONFIG.max_concurrency);
-+const fpSavePrefs = () => store(PREF_STORE + ".fingerprint", { model: $("fp-model").value, mode: $("fp-mode").value, concurrency: fpConcurrency() });
-+
++function fingerprintModelID(model) {
++  const id = String(model || "").trim().toLowerCase().split("/").pop();
++  return Object.hasOwn(FP_CONFIG.aliases, id) ? FP_CONFIG.aliases[id] : id;
++}
 +function fpOutcome(r) {
-+  const status = r.status && r.status !== "completed" ? r.status : r.attribution?.status;
-+  const model = `<span class="mono">${esc(r.model)}</span>`;
-+  const retry = r.mode === "strict" ? "建议稍后重新采集" : "建议用严格模式复测";
-+  const states = {
-+    consistent: ["ok", "circle-check", "与所选模型一致", model],
-+    substitution: ["warn", "shuffle", "疑似模型替换", `${model}${icon("arrow-right")}<strong class="mono">${esc(r.attribution?.nearest)}</strong>`],
-+    different: ["bad", "circle-alert", "与所选模型有差异", "暂无法确定实际模型"],
-+    ambiguous: ["neutral", "circle-help", "暂无法判断", retry],
-+    insufficient: ["neutral", "circle-help", "有效回答不足", "建议重新采集"],
-+    no_baseline: ["neutral", "circle-help", "暂不支持判断此模型", model],
-+    unstable: ["warn", "circle-alert", "结果不稳定", retry],
-+    cancelled: ["neutral", "circle-pause", "采集已停止", model],
-+    failed: ["bad", "circle-x", "采集失败", "请稍后重试"],
-+    skipped: ["neutral", "ban", "已跳过", "此凭证不支持所选模型"],
-+  };
-+  const [tone, symbol, title, detail] = states[status] || ["idle", "fingerprint", "等待采集", ""];
-+  return resultOutcome({ tone, symbol, titleHTML: title, detailHTML: detail });
++  const attr = r.attribution;
++  const states = { failed: ["bad", "circle-x", "测试失败"], cancelled: ["neutral", "circle-pause", "测试已停止"] };
++  if (states[r.status] || !attr) {
++    const [tone, symbol, titleHTML] = states[r.status] || ["idle", "fingerprint", "等待测试"];
++    return resultOutcome({ tone, symbol, titleHTML });
++  }
++  if (attr.decision === "not_model") return resultOutcome({ tone: "warn", symbol: "circle-alert", titleHTML: "不像语言模型回答" });
++  const matches = fingerprintModelID(r.model) === fingerprintModelID(attr.prediction);
++  return resultOutcome({ tone: matches ? "ok" : "warn", symbol: matches ? "circle-check" : "shuffle",
++    titleHTML: `<span class="fp-prediction"><span>${esc(attr.prediction_name)}</span><span class="mono">${fpPercent(attr.probability)}</span></span>`,
++    detailHTML: `${matches ? "与测试模型一致" : "与测试模型不一致"}${r.status === "partial" ? " · 部分结果" : ""}` });
 +}
-+const fpMetric = (n) => n == null ? "—" : Number(n).toFixed(4);
-+const fpComparisonNames = { match: "相似", uncertain: "不确定", mismatch: "不同", insufficient: "样本不足" };
-+const fpProbeNames = { "random-number-1-100": "随机数 1–100", "random-number-1-10": "随机数 1–10", "random-letter": "随机字母", "random-color": "随机颜色", "coin-flip": "抛硬币", "random-animal": "随机动物", "random-city": "随机城市", "favorite-number": "喜欢的数字" };
-+let fpDetailRecord = null;
 +function showFingerprintDetail(r) {
-+  fpDetailRecord = r;
-+  const attr = r.attribution || {};
-+  const comparisons = attr.comparisons || [];
-+  const stat = (label, value) => `<div class="fp-stat"><dt>${label}</dt><dd class="mono">${esc(value)}</dd></div>`;
-+  $("fp-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fpModeName(r.mode))}模式 · <time class="mono" datetime="${esc(r.time)}">${esc(fmtTime(r.time))}</time></p>
-+    ${fpOutcome(r)}
-+    ${r.status === "cancelled" || r.status === "failed" ? `<p class="detail-note">结果基于已采集的部分样本，仅供参考</p>` : ""}
-+    ${attr.message ? `<p class="detail-note">${esc(attr.message)}</p>` : ""}
-+    ${r.error ? `<p class="detail-note detail-warning">${esc(r.error)}</p>` : ""}
-+    ${r.status === "skipped" ? "" : `<dl class="fp-stats">${stat("采集进度", `${r.done} / ${r.total}`)}${stat("有效回答", r.valid)}${stat("请求失败", r.errors)}${stat("耗时", fmtSec(r.duration_ms))}</dl>
-+    <section class="result-dialog-section"><h3>基准比对</h3>
-+      <div class="fp-detail-scroll"><table class="fp-detail-table"><thead><tr><th>基准模型</th><th>距离 JSD ↓</th><th>p 值</th><th>有效探针</th><th>距离判断</th></tr></thead><tbody>
-+        ${comparisons.map((c) => `<tr class="${c.model === attr.nearest ? "closest" : ""}"><td class="mono">${esc(c.model)}${c.model === r.model ? " · 所选" : ""}${c.model === attr.nearest ? " · 最近" : ""}</td><td class="mono">${fpMetric(c.mean_jsd)}</td><td class="mono">${fpMetric(c.p_value)}</td><td>${c.cells?.length || 0}</td><td>${esc(fpComparisonNames[c.verdict] || c.verdict)}</td></tr>`).join("") || `<tr><td colspan="5">暂无可比数据</td></tr>`}
-+      </tbody></table></div>
-+      <p class="detail-note">距离越小，回答分布越接近。p 值低于 ${fpMetric(attr.alpha)} 时视为差异显著；归因同时考虑距离与统计检验。</p>
-+    </section>
-+    <section class="result-dialog-section"><h3>结果稳定性</h3>
-+      <p class="detail-note">本次自一致性 JSD：<span class="mono">${fpMetric(attr.self_jsd)}</span>（越小越稳定）${attr.reference_p_value != null ? `<br>所选模型与最近模型的基准差异 p 值：<span class="mono">${fpMetric(attr.reference_p_value)}</span>` : ""}</p>
-+      ${(attr.warnings || []).map((w) => `<p class="detail-note detail-warning">${esc(w)}</p>`).join("")}
-+    </section>
-+    <section class="result-dialog-section"><h3>逐项比对</h3><label class="field fp-probe-select"><span class="field-label">对比模型</span><span class="native-select"><select id="fp-detail-baseline">${comparisons.map((c) => `<option>${esc(c.model)}</option>`).join("")}</select></span></label><div id="fp-detail-probes" class="fp-detail-scroll"></div></section>`}`;
-+  if (r.status !== "skipped") renderFingerprintProbes();
-+}
-+function renderFingerprintProbes() {
-+  const comparison = fpDetailRecord?.attribution?.comparisons?.find((c) => c.model === $("fp-detail-baseline").value);
-+  const rows = (comparison?.cells || []).map((c) => {
-+    const [task, lang] = String(c.cell || "").split(":");
-+    return `<tr><td>${esc(fpProbeNames[task] || task)} · ${lang === "zh" ? "中文" : "英文"}</td><td class="mono">${fpMetric(c.jsd)}</td><td>${esc(c.valid_a ?? "—")}</td><td>${esc(c.valid_b ?? "—")}</td></tr>`;
-+  }).join("");
-+  $("fp-detail-probes").innerHTML = `<table class="fp-detail-table"><thead><tr><th>探针</th><th>距离 JSD</th><th>本次有效回答</th><th>基准有效回答</th></tr></thead><tbody>${rows || `<tr><td colspan="4">有效样本不足，暂无可比探针</td></tr>`}</tbody></table>`;
++  const attr = r.attribution;
++  const samples = r.samples || [];
++  const ranking = attr && attr.decision !== "not_model" && ["completed", "partial"].includes(r.status)
++    ? `<section class="result-dialog-section"><h3>候选模型排行</h3><div class="fp-detail-scroll"><table class="fp-detail-table"><thead><tr><th>排名</th><th>模型</th><th>得分</th><th>归因概率</th></tr></thead><tbody>${(attr.results || []).map((c, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(c.display_name)}</td><td class="mono">${Number(c.score).toFixed(4)}</td><td class="mono">${fpPercent(c.probability)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
++  const part = (label, text) => `<div class="fp-sample-part"><h4>${label}</h4><pre>${esc(text)}</pre></div>`;
++  $("fp-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fmtTime(r.time))} · ${fmtSec(r.duration_ms)} · 并发 ${esc(r.concurrency)}</p>
++    ${fpOutcome(r)}${r.error ? `<p class="detail-warning">${esc(r.error)}</p>` : ""}${ranking}
++    ${samples.length ? `<section class="result-dialog-section"><h3>挑战记录 · ${samples.reduce((n, s) => n + (s.attempts || 0), 0)} 次请求</h3>${samples.map((s, i) => `<details class="fp-sample"><summary>${icon("chevron-right", "chev")}挑战 ${i + 1}<span>${s.parsed_numbers} / ${s.expected_count} 个数字 · ${s.attempts || 0} 次尝试</span><span class="verdict ${s.accepted ? "ok" : "err"}">${s.accepted ? "有效" : "未计入"}</span></summary>${s.instructions ? part("开发者指令", s.instructions) : ""}${part("提示词", s.prompt)}${s.text ? part("回答", s.text) : ""}${s.error ? `<p class="detail-warning">${esc(s.error)}</p>` : ""}</details>`).join("")}</section>` : ""}`;
 +}
 +function renderFingerprintRow(a) {
-+  const history = a.fingerprints || [];
-+  const last = history[history.length - 1];
-+  const p = a.fingerprint_running;
-+  const latest = p ? collectionOutcome(p, p.total, true) : fpOutcome(last || {});
-+  return credentialRow({
-+    type: "fp", credential: a, selected: fpSelected.has(a.id), open: fpExpanded.has(a.id), selectable: runnable("fp-", a), button: collectionButton("fp", a, p, "采集"),
-+    result: latest, tested: !!(last || p),
-+    meta: `<div class="fp-mode">${esc(fpModeName(p?.mode || last?.mode))}</div>${listTime(!p && last?.time)}`,
-+    history: () => [...history].reverse().map((r) => historyEntry("fp", a.id, r, fpOutcome(r), metric("fingerprint", "采集模式", fpModeName(r.mode)))).join(""),
-+  });
++  const history = a.fingerprints || [], last = history.at(-1), p = a.fingerprint_running;
++  return credentialRow({ type: "fp", credential: a, selected: fpSelected.has(a.id), open: fpExpanded.has(a.id), selectable: runnable("fp-", a),
++    button: collectionButton("fp", a, p, "测试"), result: p ? collectionOutcome(p, p.total, true) : fpOutcome(last || {}), tested: !!(last || p),
++    meta: `<div class="fp-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
++    history: () => [...history].reverse().map((r) => historyEntry("fp", a.id, r, fpOutcome(r))).join("") });
 +}
 +function renderFingerprints() {
-+  renderSelection("fp-", fpSelected, "采集");
-+  const selected = selectedCredentials("fp-", fpSelected).filter(availableCredential);
++  renderSelection("fp-", fpSelected, "测试");
 +  $("fp-clear").disabled = pending || !credentials.some((a) => a.fingerprints?.length);
-+  const count = fpModes[$("fp-mode").value]?.requests || fpModes.quick.requests;
-+  $("fp-cost").textContent = `每个凭证 ${count} 次请求（失败会重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${count * selected.length} 次` : ""}`;
 +  renderList("fp-", renderFingerprintRow);
 +}
 +function runFingerprint(body) {
 +  if (!$("fp-toolbar").reportValidity()) return;
 +  fpSavePrefs();
-+  return update("/start", { method: "POST", body: { type: "fingerprint", ...body, model: $("fp-model").value, mode: $("fp-mode").value, concurrency: fpConcurrency() } }, "开始采集失败");
++  return update("/start", { method: "POST", body: { type: "fingerprint", ...body, model: $("fp-model").value, concurrency: fpConcurrency() } }, "开始测试失败");
 +}
-+
 +function initializeFingerprint() {
 +  const saved = stored(PREF_STORE + ".fingerprint") || {};
-+  fillSelect("fp-mode", Object.entries(fpModes).map(([id, mode]) => [id, `${mode.name} · ${mode.requests} 次`]), saved.mode, "quick");
-+  $("fp-concurrency").max = FP_CONFIG.max_concurrency;
-+  $("fp-concurrency").value = saved.concurrency || FP_CONFIG.default_concurrency;
++  $("fp-concurrency").max = FP_CONFIG.requests;
++  $("fp-concurrency").value = saved.concurrency || FP_CONFIG.requests;
 +  $("fp-concurrency").value = fpConcurrency();
-+
-+  for (const id of ["fp-model", "fp-mode", "fp-concurrency"]) $(id).addEventListener("input", fpSavePrefs);
-+  $("fp-detail-body").addEventListener("change", (e) => { if (e.target.id === "fp-detail-baseline") renderFingerprintProbes(); });
-+  $("fp-detail").addEventListener("close", () => { fpDetailRecord = null; });
-+
-+  for (const id of ["fp-model", "fp-mode"]) $(id).addEventListener("change", () => { fpSavePrefs(); renderFingerprints(); });
++  for (const id of ["fp-model", "fp-concurrency"]) $(id).addEventListener("input", fpSavePrefs);
++  $("fp-model").addEventListener("change", () => { fpSavePrefs(); renderFingerprints(); });
 +  $("fp-concurrency").addEventListener("change", () => { $("fp-concurrency").value = fpConcurrency(); fpSavePrefs(); });
 +  bindCollectionActions({ type: "fp", scope: "fingerprint", expanded: fpExpanded, renderRows: renderFingerprints, run: runFingerprint, showDetail: showFingerprintDetail });
 +}
 diff --git a/backend/internal/codexeval/web/inspection.js b/backend/internal/codexeval/web/inspection.js
 new file mode 100644
+index 0000000..630cbc0
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
 @@ -0,0 +1,501 @@
@@ -1347,7 +1391,7 @@ new file mode 100644
 +      syncGroupControls();
 +      if (changed && accountListReady) {
 +        stopPolling(); resetCatalogCache(); credentials = [];
-+        for (const selection of [candySelected, fpSelected, mtSelected, plSelected]) selection.clear();
++        for (const selection of [candySelected, fpSelected, plSelected]) selection.clear();
 +        load({ refresh: true });
 +      }
 +    } else if (name === "account_type" || name === "account_plan") {
@@ -1813,97 +1857,9 @@ new file mode 100644
 +    } finally { inspectionActionPending = false; if (!sessionBlocked) await loadInspectionState(); }
 +  });
 +}
-diff --git a/backend/internal/codexeval/web/modeltrace.js b/backend/internal/codexeval/web/modeltrace.js
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/web/modeltrace.js
-@@ -0,0 +1,84 @@
-+"use strict";
-+const MT_CONFIG = /*MODELTRACE_CONFIG*/{};
-+const mtSelected = new Set();
-+const mtExpanded = new Set();
-+const mtPercent = (value) => Number.isFinite(value) && value >= 0 && value <= 1 ? `${(value * 100).toFixed(1)}%` : "—";
-+const mtConcurrency = () => boundedInput("mt-concurrency", MT_CONFIG.default_concurrency, MT_CONFIG.max_concurrency);
-+const mtSavePrefs = () => store(PREF_STORE + ".modeltrace", { model: $("mt-model").value, concurrency: mtConcurrency() });
-+
-+function mtComparison(r) {
-+  if (!r?.attribution || !["completed", "partial"].includes(r.status)) return { tone: "neutral", symbol: "chart", label: "" };
-+  const modelID = (model) => String(model || "").trim().toLowerCase().split("/").pop();
-+  return modelID(r.model) === modelID(r.attribution.prediction)
-+    ? { tone: "ok", symbol: "circle-check", label: "与测试模型一致" }
-+    : { tone: "warn", symbol: "shuffle", label: "与测试模型不一致" };
-+}
-+
-+function mtOutcome(r) {
-+  const a = r?.attribution;
-+  const comparison = mtComparison(r);
-+  const state = { failed: ["bad", "circle-x", "测试失败", "查看详情了解原因"], cancelled: ["neutral", "circle-pause", "测试已停止", ""], skipped: ["neutral", "ban", "已跳过", "此凭证不支持所选模型"] }[r?.status];
-+  const [tone, symbol, title] = state || (a ? [comparison.tone, comparison.symbol, a.prediction] : ["idle", "fingerprint", "等待测试"]);
-+  const detail = state ? state[3] : a ? `${comparison.label}${r.status === "partial" ? " · 部分结果" : ""}` : "";
-+  return resultOutcome({
-+    tone, symbol,
-+    titleHTML: `<span class="mt-prediction"><span>${esc(title)}</span>${a && !state ? `<span class="mt-probability mono">${mtPercent(a.probability)}</span>` : ""}</span>`,
-+    detailHTML: esc(detail),
-+  });
-+}
-+
-+function renderModelTraceRow(a) {
-+  const history = a.modeltraces || [], last = history.at(-1), p = a.modeltrace_running;
-+  const latest = p ? collectionOutcome(p, MT_CONFIG.requests) : mtOutcome(last);
-+  return credentialRow({
-+    type: "mt", credential: a, selected: mtSelected.has(a.id), open: mtExpanded.has(a.id), selectable: runnable("mt-", a), button: collectionButton("mt", a, p, "测试"),
-+    result: latest, tested: !!(last || p),
-+    meta: `<div class="mt-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
-+    history: () => [...history].reverse().map((r) => historyEntry("mt", a.id, r, mtOutcome(r))).join(""),
-+  });
-+}
-+
-+function renderModelTrace() {
-+  renderSelection("mt-", mtSelected, "测试");
-+  const selected = selectedCredentials("mt-", mtSelected).filter(availableCredential);
-+  $("mt-cost").textContent = `每个凭证 ${MT_CONFIG.requests} 次请求（失败会重试）${selected.length ? ` · 已选 ${selected.length} 个，共 ${MT_CONFIG.requests * selected.length} 次` : ""}`;
-+  $("mt-clear").disabled = pending || !credentials.some((a) => a.modeltraces?.length);
-+  renderList("mt-", renderModelTraceRow);
-+}
-+
-+function runModelTrace(body) {
-+  if (!$("mt-toolbar").reportValidity()) return;
-+  mtSavePrefs();
-+  return update("/start", { method: "POST", body: { type: "modeltrace", ...body, model: $("mt-model").value, concurrency: mtConcurrency() } }, "开始测试失败");
-+}
-+
-+function mtResultHTML(r) {
-+  const a = r.attribution, comparison = mtComparison(r);
-+  return `<dl class="mt-summary ${comparison.tone}"><div><dt>${comparison.label ? `${icon(comparison.symbol)}${comparison.label}` : "最接近的模型"}</dt><dd class="mono">${esc(a.prediction)}<small>${mtPercent(a.probability)}</small></dd></div><div><dt>模型家族</dt><dd>${esc(a.family_prediction_name)}<small class="mono">${mtPercent(a.family_probability)}</small></dd></div><div><dt>有效回答</dt><dd class="mono">${a.used_outputs} / ${MT_CONFIG.requests}</dd></div></dl>
-+    <div class="mt-families">${(a.family_probabilities || []).map((f) => `<span>${esc(f.display_name)}<b class="mono">${mtPercent(f.probability)}</b></span>`).join("")}</div>
-+    <div class="mt-result-heading"><h3>候选模型排行</h3><span class="meta">归因概率</span></div>
-+    <div class="mt-ranking">${(a.results || []).map((r, i) => `<div class="mt-rank"><span class="meta mono">${String(i + 1).padStart(2, "0")}</span><span class="mono mt-rank-name">${esc(r.display_name || r.model)}</span><div class="mt-bar" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, (r.probability || 0) * 100))}%"></span></div><span class="mono">${mtPercent(r.probability)}</span></div>`).join("")}</div>`;
-+}
-+
-+function showModelTraceDetail(r) {
-+  const samples = r.samples || [];
-+  const sampleEntries = samples.map((s, i) => `<details class="mt-sample">
-+    <summary>${icon("chevron-right", "chev")}挑战 ${i + 1}<span class="meta">${s.parsed_numbers} / ${s.expected_count} 个数字${s.attempts > 1 ? ` · 重试 ${s.attempts - 1} 次` : ""}</span><span class="verdict ${s.accepted ? "ok" : "err"}">${s.accepted ? "有效" : "未计入"}</span></summary>
-+    <pre>${esc(s.prompt)}</pre>${s.error ? `<p class="detail-warning">${esc(s.error)}</p>` : ""}${s.text ? `<pre class="mono">${esc(s.text)}</pre>` : ""}
-+  </details>`).join("");
-+  $("mt-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fmtTime(r.time))} · ${fmtSec(r.duration_ms)}${r.concurrency ? ` · 并发 ${esc(r.concurrency)}` : ""}</p>
-+    ${r.attribution && r.status !== "completed" ? `<p class="detail-note">${esc({ partial: "部分结果", cancelled: "测试已停止", failed: "测试失败", skipped: "已跳过" }[r.status] || r.status)}</p>` : ""}
-+    ${r.attribution ? mtResultHTML(r) : mtOutcome(r)}
-+    ${r.error ? `<p class="detail-note detail-warning">${esc(r.error)}</p>` : ""}
-+    ${samples.length ? `<div class="mt-result-heading"><h3>挑战记录</h3><span class="meta">${samples.reduce((n, s) => n + (s.attempts || 1), 0)} 次请求</span></div>${sampleEntries}` : ""}`;
-+}
-+
-+function initializeModelTrace() {
-+  $("mt-concurrency").max = MT_CONFIG.max_concurrency;
-+  $("mt-concurrency").value = stored(PREF_STORE + ".modeltrace")?.concurrency || MT_CONFIG.default_concurrency;
-+  $("mt-concurrency").value = mtConcurrency();
-+  for (const id of ["mt-model", "mt-concurrency"]) $(id).addEventListener("input", mtSavePrefs);
-+  $("mt-model").addEventListener("change", () => { mtSavePrefs(); renderModelTrace(); });
-+  $("mt-concurrency").addEventListener("change", () => { $("mt-concurrency").value = mtConcurrency(); mtSavePrefs(); });
-+  bindCollectionActions({ type: "mt", scope: "modeltrace", expanded: mtExpanded, renderRows: renderModelTrace, run: runModelTrace, showDetail: showModelTraceDetail });
-+}
 diff --git a/backend/internal/codexeval/web/pelican.js b/backend/internal/codexeval/web/pelican.js
 new file mode 100644
+index 0000000..737e3b3
 --- /dev/null
 +++ b/backend/internal/codexeval/web/pelican.js
 @@ -0,0 +1,97 @@
@@ -2006,9 +1962,10 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/style.css b/backend/internal/codexeval/web/style.css
 new file mode 100644
+index 0000000..f1b5b12
 --- /dev/null
 +++ b/backend/internal/codexeval/web/style.css
-@@ -0,0 +1,481 @@
+@@ -0,0 +1,447 @@
 +/* Layout */
 +:root {
 +  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
@@ -2146,7 +2103,7 @@ new file mode 100644
 +:is(.fp-detail-table, .markdown) :is(th, td) { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
 +:is(.fp-detail-table, .markdown) th { color: var(--muted); font-weight: 500; background: var(--sunken); }
 +:is(.fp-detail-table, .markdown) tr:last-child td { border-bottom: 0; }
-+:is(.mt-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
++:is(.fp-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
 +
 +/* Page navigation and introduction */
 +header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--section-gap); }
@@ -2194,9 +2151,9 @@ new file mode 100644
 +.result-meta .model-meta .meta { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 +.verdict { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px 1px 6px; border-radius: 999px; background: var(--status-bg, var(--control-bg)); color: var(--status-ink, var(--muted)); font-size: 12px; font-weight: 600; }
 +.verdict .icon, .metric .icon { width: 13px; height: 13px; }
-+.verdict.ok, .outcome.ok, .mt-summary.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
++.verdict.ok, .outcome.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
 +.verdict.bad, .outcome.bad { --status-ink: var(--danger-ink); --status-bg: var(--danger-soft); }
-+.outcome.warn, .mt-summary.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
++.outcome.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
 +.verdict.err, .verdict.skip { border: 1px solid var(--control-line); }
 +.meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 +.metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 12px; }
@@ -2210,8 +2167,7 @@ new file mode 100644
 +/* Short columns are fixed. Credential, result and model tracks share the rest equally up to their caps;
 +   any remaining space is spread evenly across the gaps. */
 +#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) 104px var(--action-width); }
-+#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 190px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px 84px var(--switch-width) var(--action-width); }
-+#modeltrace-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
++#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
 +#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px minmax(0, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
 +#settings-panel { --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
 +.list-head, .list-row, .history-panel { display: grid; grid-template-columns: var(--list-columns); justify-content: space-between; align-items: center; gap: var(--list-gap); padding-inline: var(--list-padding); }
@@ -2328,7 +2284,7 @@ new file mode 100644
 +.outcome-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
 +.outcome-detail .icon { width: 12px; height: 12px; }
 +.outcome-detail strong { color: var(--ink); font-weight: 500; }
-+.fp-mode, .test-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
++.test-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
 +.history-title { padding: 0 0 8px; color: var(--muted); font-size: 12px; }
 +.result-history { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
 +.result-history > .none { grid-column: 1 / -1; padding: 4px 0; text-align: center; }
@@ -2373,43 +2329,15 @@ new file mode 100644
 +.detail-warning { color: var(--danger-ink); overflow-wrap: anywhere; }
 +
 +/* Fingerprint details */
-+.fp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
-+.fp-stat { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sunken); }
-+.fp-stat dt { margin-bottom: 5px; color: var(--muted); font-size: 12px; }
-+.fp-stat dd { margin: 0; font-size: 17px; font-weight: 600; }
 +.fp-detail-table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 12px; }
-+.fp-detail-table tr.closest { background: var(--accent-soft); }
-+.fp-probe-select { max-width: 280px; margin: 14px 0 10px; }
-+
-+/* ModelTrace results and details */
-+.mt-test-model { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-+.mt-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
-+.mt-prediction > span:first-child { min-width: 0; }
-+.mt-probability { color: var(--status-ink, var(--muted)); font-size: 12px; white-space: nowrap; }
-+.mt-summary { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px; gap: 12px; margin: 0 0 20px; }
-+.mt-summary > div { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--sunken); }
-+.mt-summary > div:first-child { background: var(--status-bg, var(--sunken)); border-color: color-mix(in srgb, var(--status-ink, var(--line)) 25%, var(--line)); }
-+.mt-summary > div:first-child dt, .mt-summary > div:first-child small { color: var(--status-ink, var(--muted)); }
-+.mt-summary dt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-+.mt-summary dd { margin: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
-+.mt-summary small { display: block; font-size: 13px; color: var(--accent-ink); font-weight: 500; margin-top: 4px; }
-+.mt-result-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 20px 0 10px; }
-+.mt-result-heading h3 { margin: 0; font-size: 14px; }
-+.mt-ranking { display: grid; gap: 2px; }
-+.mt-rank { display: grid; grid-template-columns: 26px minmax(180px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 12px; }
-+.mt-rank:first-child { background: var(--accent-soft); }
-+.mt-rank-name { overflow-wrap: anywhere; }
-+.mt-rank > :last-child { text-align: right; }
-+.mt-bar { height: 7px; overflow: hidden; border-radius: 99px; background: var(--line); }
-+.mt-bar span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: var(--accent); }
-+.mt-families { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
-+.mt-families span { display: inline-flex; gap: 14px; border: 1px solid var(--line); padding: 5px 10px; border-radius: 8px; font-size: 12px; }
-+.mt-families b { font-weight: 500; color: var(--accent-ink); }
-+.mt-sample { border-top: 1px solid var(--line); padding: 12px 0; }
-+.mt-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
-+.mt-sample summary .chev { color: var(--muted); }
-+.mt-sample[open] summary .chev { transform: rotate(90deg); }
-+.mt-sample pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
++.fp-test-model { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
++.fp-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
++.fp-sample { border-top: 1px solid var(--line); padding: 12px 0; }
++.fp-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
++.fp-sample summary .chev { color: var(--muted); }
++.fp-sample[open] summary .chev { transform: rotate(90deg); }
++.fp-sample pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
++.fp-sample h4 { font-size: 14px; font-weight: 500; }
 +
 +/* Feedback and login */
 +.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--muted); font-size: 12px; line-height: 20px; margin: 0 4px 10px; }
@@ -2478,13 +2406,8 @@ new file mode 100644
 +  .answer { grid-template-columns: auto minmax(0, 1fr); }
 +  .answer-toggle { justify-self: end; }
 +  .answer-content { grid-column: 1 / -1; }
-+  .fp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 +  .result-dialog { --dialog-padding: 16px; }
-+  :is(#mt-toolbar, #pl-toolbar) > .btn { grid-column: 1 / -1; }
-+  .mt-summary { grid-template-columns: 1fr 1fr; }
-+  .mt-summary > div:first-child { grid-column: 1 / -1; }
-+  .mt-rank { grid-template-columns: 18px minmax(0, 1fr) 58px; gap: 8px; padding-inline: 6px; }
-+  .mt-rank .mt-bar { display: none; }
++  :is(#fp-toolbar, #pl-toolbar) > .btn { grid-column: 1 / -1; }
 +}
 +@media (prefers-reduced-motion: reduce) {
 +  .spin, #refresh[aria-busy="true"] .icon { animation: none; }
@@ -2492,6 +2415,7 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/theme.css b/backend/internal/codexeval/web/theme.css
 new file mode 100644
+index 0000000..b1851c0
 --- /dev/null
 +++ b/backend/internal/codexeval/web/theme.css
 @@ -0,0 +1,52 @@
@@ -2549,12 +2473,13 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/web/ui.html b/backend/internal/codexeval/web/ui.html
 new file mode 100644
+index 0000000..9572706
 --- /dev/null
 +++ b/backend/internal/codexeval/web/ui.html
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,182 @@
 +<!doctype html>
 +<html lang="zh-CN">
-+<!--MODELTRACE_LICENSE-->
++<!--FINGERPRINT_LICENSE-->
 +<head>
 +  <meta charset="utf-8">
 +  <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2574,7 +2499,6 @@ new file mode 100644
 +        <div class="tabs" role="tablist" aria-label="测试类型">
 +          <button id="tab-candy" class="tab" role="tab" aria-selected="true" aria-controls="candy-panel" type="button">糖果</button>
 +          <button id="tab-fingerprint" class="tab" role="tab" aria-selected="false" aria-controls="fingerprint-panel" tabindex="-1" type="button">指纹</button>
-+          <button id="tab-modeltrace" class="tab" role="tab" aria-selected="false" aria-controls="modeltrace-panel" tabindex="-1" type="button">ModelTrace</button>
 +          <button id="tab-pelican" class="tab" role="tab" aria-selected="false" aria-controls="pelican-panel" tabindex="-1" type="button">鹈鹕</button>
 +          <button id="tab-settings" class="tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" type="button">设置</button>
 +        </div>
@@ -2614,47 +2538,13 @@ new file mode 100644
 +        <section id="candy-credentials" class="card"></section>
 +      </section>
 +      <section id="fingerprint-panel" role="tabpanel" aria-labelledby="tab-fingerprint" hidden>
-+        <div class="panel-intro">
-+          <p>采集模型的回答特征，与正常基准对比，判断模型是否被替换。</p>
-+          <details class="problem" id="fp-principle">
-+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
-+            <div class="problem-body principle-body">
-+              <p>即使让模型“随便说一个数字或颜色”，不同模型也会呈现不同的回答偏好。重复提问后，这些偏好就形成了可比较的行为“指纹”。</p>
-+              <p>本测试采集多组简短回答，与正常模型的指纹对比，判断是否一致、是否更像其他模型。结果基于统计特征，不能单独证明模型身份或能力。</p>
-+              <p>来源论文：Tomas Bruckner，<a href="https://arxiv.org/abs/2607.10252" target="_blank" rel="noopener noreferrer" data-tip="One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions">《One Token Is Enough》</a>（2026）。</p>
-+            </div>
-+          </details>
-+        </div>
 +        <form id="fp-toolbar" class="card toolbar">
 +          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="fp-group" data-group-select></select></span></label>
 +          <div class="field"><label class="field-label" for="fp-model-select">模型</label><span class="native-select"><select id="fp-model-select"></select></span><input id="fp-model" maxlength="200" required aria-label="自定义模型" hidden></div>
-+          <label class="field"><span class="field-label">采集模式</span><span class="native-select"><select id="fp-mode"></select></span></label>
 +          <label class="field"><span class="field-label">每账户并发</span><input id="fp-concurrency" class="mono" type="number" min="1" step="1" required></label>
-+          <button id="fp-run-batch" class="btn" type="submit" disabled>采集全部</button>
++          <button id="fp-run-batch" class="btn" type="submit" disabled>测试全部</button>
 +        </form>
-+        <div class="legend"><span id="fp-cost"></span></div>
 +        <section id="fp-credentials" class="card"></section>
-+      </section>
-+      <section id="modeltrace-panel" role="tabpanel" aria-labelledby="tab-modeltrace" hidden>
-+        <div class="panel-intro">
-+          <p>通过三次数字生成挑战，识别最接近的模型家族与版本。</p>
-+          <details class="problem" id="mt-principle">
-+            <summary><i data-icon="chevron-right" data-class="chev"></i>查看原理</summary>
-+            <div class="problem-body principle-body">
-+              <p>不同模型生成长整数序列时，会表现出不同的数字偏好与排列特征。本测试自动采集三份回答，提取数字分布和序列特征，与候选模型的指纹对比。</p>
-+              <p>比对时先减弱提示词等环境因素的影响，再汇总三份回答的得分，计算各模型的归因概率。同一家族内各模型的概率之和，即为家族概率。</p>
-+              <p>方法来源：<a href="https://github.com/xqy2006/ModelTrace" target="_blank" rel="noopener noreferrer">ModelTrace</a>。</p>
-+            </div>
-+          </details>
-+        </div>
-+        <form id="mt-toolbar" class="card toolbar">
-+          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="mt-group" data-group-select></select></span></label>
-+          <div class="field"><label class="field-label" for="mt-model-select">模型</label><span class="native-select"><select id="mt-model-select"></select></span><input id="mt-model" maxlength="200" required aria-label="自定义模型" hidden></div>
-+          <label class="field"><span class="field-label">每账户并发</span><input id="mt-concurrency" class="mono" type="number" min="1" step="1" required></label>
-+          <button id="mt-run-batch" class="btn" type="submit" disabled>测试全部</button>
-+        </form>
-+        <div class="legend"><span id="mt-cost"></span></div>
-+        <section id="mt-credentials" class="card"></section>
 +      </section>
 +      <section id="pelican-panel" role="tabpanel" aria-labelledby="tab-pelican" hidden>
 +        <div class="panel-intro">
@@ -2672,7 +2562,6 @@ new file mode 100644
 +          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort"></select></span></label>
 +          <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
 +        </form>
-+        <div class="legend"><span>每个账户 1 次请求</span></div>
 +        <section id="pl-credentials" class="card"></section>
 +      </section>
 +      <section id="settings-panel" role="tabpanel" aria-labelledby="tab-settings" hidden>
@@ -2744,10 +2633,6 @@ new file mode 100644
 +      <div class="section-head result-dialog-head"><h2 id="fp-detail-title">指纹详情</h2><button id="fp-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭详情"><i data-icon="x"></i></button></div>
 +      <div id="fp-detail-body" class="result-dialog-body"></div>
 +    </dialog>
-+    <dialog id="mt-detail" class="result-dialog" aria-labelledby="mt-detail-title">
-+      <div class="section-head result-dialog-head"><h2 id="mt-detail-title">ModelTrace 详情</h2><button id="mt-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭 ModelTrace 详情"><i data-icon="x"></i></button></div>
-+      <div id="mt-detail-body" class="result-dialog-body"></div>
-+    </dialog>
 +    <dialog id="pl-detail" class="result-dialog" aria-labelledby="pl-detail-title">
 +      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕动画</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭动画"><i data-icon="x"></i></button></div>
 +      <div id="pl-detail-body" class="result-dialog-body"></div>
@@ -2769,105 +2654,14 @@ new file mode 100644
 +  <script>/*COMPONENTS_SCRIPT*/</script>
 +  <script>/*CANDY_SCRIPT*/</script>
 +  <script>/*FINGERPRINT_SCRIPT*/</script>
-+  <script>/*MODELTRACE_SCRIPT*/</script>
 +  <script>/*PELICAN_SCRIPT*/</script>
 +  <script>/*INSPECTION_SCRIPT*/</script>
 +  <script>/*APP_SCRIPT*/</script>
 +</body>
 +</html>
-diff --git a/backend/internal/codexeval/web.go b/backend/internal/codexeval/web.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/codexeval/web.go
-@@ -0,0 +1,86 @@
-+package codexeval
-+
-+import (
-+	_ "embed"
-+	"encoding/json"
-+	"html"
-+	"strings"
-+)
-+
-+const pluginVersion = "0.3.14"
-+
-+//go:embed web/ui.html
-+var uiTemplate string
-+
-+//go:embed web/style.css
-+var uiStyles string
-+
-+//go:embed web/theme.css
-+var uiThemes string
-+
-+//go:embed web/vendor/markdown-it.min.js
-+var markdownScript string
-+
-+//go:embed web/vendor/markdown-it-cjk-friendly.min.js
-+var cjkFriendlyScript string
-+
-+//go:embed web/vendor/texmath.js
-+var texmathScript string
-+
-+//go:embed web/vendor/temml.min.js
-+var temmlScript string
-+
-+//go:embed web/vendor/temml.css
-+var temmlStyles string
-+
-+//go:embed web/app.js
-+var appScript string
-+
-+//go:embed web/catalog.js
-+var catalogScript string
-+
-+//go:embed web/components.js
-+var componentsScript string
-+
-+//go:embed web/candy.js
-+var candyScript string
-+
-+//go:embed web/fingerprint.js
-+var fingerprintScript string
-+
-+//go:embed web/modeltrace.js
-+var modelTraceScript string
-+
-+//go:embed web/pelican.js
-+var pelicanScript string
-+
-+//go:embed web/inspection.js
-+var inspectionScript string
-+
-+var uiHTML = func() []byte {
-+	config, _ := json.Marshal(map[string]any{"modes": fingerprintModes, "default_concurrency": fingerprintDefaultConcurrency, "max_concurrency": fingerprintMaxConcurrency})
-+	fpScript := strings.Replace(fingerprintScript, `/*FINGERPRINT_CONFIG*/{}`, string(config), 1)
-+	traceConfig, _ := json.Marshal(map[string]any{"requests": traceTarget, "default_concurrency": traceDefaultConcurrency, "max_concurrency": traceMaxConcurrency})
-+	traceScript := strings.Replace(modelTraceScript, `/*MODELTRACE_CONFIG*/{}`, string(traceConfig), 1)
-+	return []byte(strings.NewReplacer(
-+		"/*APP_STYLES*/", temmlStyles+"\n"+uiThemes+"\n"+uiStyles,
-+		"<!--PLUGIN_VERSION-->", pluginVersion,
-+		"<!--CANDY_PROMPT-->", html.EscapeString(candyPrompt),
-+		"<!--PELICAN_PROMPT-->", html.EscapeString(pelicanPrompt),
-+		"<!--MODELTRACE_LICENSE-->", "<!-- ModelTrace\n"+modelTraceLicense+"-->",
-+		"/*MARKDOWN_SCRIPT*/", markdownScript,
-+		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
-+		"/*TEXMATH_SCRIPT*/", texmathScript,
-+		"/*TEMML_SCRIPT*/", temmlScript,
-+		"/*CATALOG_SCRIPT*/", catalogScript,
-+		"/*COMPONENTS_SCRIPT*/", componentsScript,
-+		"/*CANDY_SCRIPT*/", candyScript,
-+		"/*FINGERPRINT_SCRIPT*/", fpScript,
-+		"/*MODELTRACE_SCRIPT*/", traceScript,
-+		"/*PELICAN_SCRIPT*/", pelicanScript,
-+		"/*INSPECTION_SCRIPT*/", inspectionScript,
-+		"/*APP_SCRIPT*/", appScript,
-+	).Replace(uiTemplate))
-+}()
-+
-+func Page() []byte { return uiHTML }
 diff --git a/frontend/src/views/admin/CodexEvalView.vue b/frontend/src/views/admin/CodexEvalView.vue
 new file mode 100644
+index 0000000..ea5feaf
 --- /dev/null
 +++ b/frontend/src/views/admin/CodexEvalView.vue
 @@ -0,0 +1,30 @@

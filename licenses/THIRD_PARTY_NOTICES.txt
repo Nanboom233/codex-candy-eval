@@ -8,9 +8,9 @@ Original source: https://github.com/Wei-Shaw/sub2api/tree/v0.2.17.
 The production patches are in `patches/`. Apply them in the order listed in `patches/series`.
 Build instructions are in README.md. Keep these notices with redistributed binaries.
 
-ModelTrace's candidate bank and attribution method are copyright (c) 2026 xqy2006 and MIT licensed.
-The notice is embedded as `LICENSE/ModelTrace-MIT.txt` in the installer and included in the page.
-Original project: https://github.com/xqy2006/ModelTrace.
+The lm-detector resources and attribution method use the MIT license, copyright (c) 2026 xqy2006.
+The installer includes `LICENSE/LM-detector-MIT.txt`. The page includes the same notice.
+Source: https://github.com/Ikaleio/lm-detector/tree/654c8334bb53951aaf04cbd61252d163649e1369.
 
 The page uses markdown-it, markdown-it-cjk-friendly, get-east-asian-width, markdown-it-texmath and Temml under their MIT notices.
 Full notices are embedded as `LICENSE/Renderers-MIT.txt` in the installer. Vendor copyright banners remain in the embedded assets.

@@ -36,14 +36,35 @@ Use the existing `validModelName` and native account admission paths.
 
 `executeModel` converts model-request panics into errors. Do not add recovery to every helper.
 
-`executeProbe` retries the same request at most twice after the initial attempt. It retries status `0`, `429`, or server errors, not invalid answer content.
+`askCodex` builds one request and sends at most three attempts. Wait two seconds, then four seconds, between attempts.
+Accumulate observed usage and attempts. Measure duration across the logical request, including waits.
+Each fingerprint attempt has a three-minute limit. Each Candy or Pelican attempt has a ten-minute limit.
+
+`HTTPUpstreamRequestError` wraps only errors from the actual native `servertiming.Do` transport call.
+It provides `Error`, `Unwrap`, and `RequestAttempted() bool` beside `HTTPUpstream` in the service package.
+Evaluation recognizes the marker through an interface and `errors.As`, without a service dependency.
+Keep host, proxy, client, account, credential, and conversion setup errors unmarked and final.
+Pre-response plugin errors remain final. Possible sending does not establish transience or replay permission.
+An attempt deadline alone cannot override that plugin boundary.
+
+Capture response status and arrange body closure before processing a sender error.
+Return the observed response with a non-200 body-read error. Do not replace its status with zero.
+Retry marked direct transport failures, HTTP 408/5xx, and unusable successful streams while the parent context remains active.
+Keep HTTP 401, 429, and other permanent statuses final, including after body-read failure.
+Retry empty, incomplete, failed, or tool-only successful streams.
+Fingerprint retries numeric-count rejection. Sequence-shape rejection does not retry.
+Pelican retries failed existing HTML acceptance. Valid wrong Candy text completes without a retry.
+Do not add retries around account updates, settings saves, or notifications.
 
 Preserve context cancellation, timeout causes, and stream closure.
 `executeModel` closes the response on completion and uses `context.AfterFunc` to close it on cancellation.
 Keep background task lifetime separate from the completed HTTP start request.
 Explicit stop must cancel the task and supplier request.
 
-Record asynchronous failures in their result or sample fields. Candy and ModelTrace truncate request errors through `truncate(err.Error(), 500)`.
+Record asynchronous failures in their result or sample fields. Keep existing error truncation.
+Cancellation stops active streams, retry waits, and later sends. Release each response before the next wait or attempt.
+Inspection checks participation before every attempt, outside the runtime mutex.
+An intentional opt-out does not create a failed result or cancel unrelated accounts.
 
 Evidence: [evaluation core](../../../patches/0001-evaluation-core.patch) and [native lifetime test](../../../tests/backend/internal/service/codex_eval_lifetime_test.go).
 
@@ -74,7 +95,7 @@ References: [evaluation UI](../../../patches/0006-evaluation-ui.patch), [adminis
 ## Common Mistakes
 
 - Do not grade a failed model request, even when its error text contains the expected Candy answer.
-- Do not retry malformed or incorrect answers as if they were transport failures.
+- Use each evaluation's acceptance rule. A valid wrong Candy answer is complete. Detector count rejection can retry.
 - Do not hide save failures. Runners expose `storageError`. History removal handlers also restore the previous histories.
 - Do not hold `mu` during supplier requests.
 - Do not replace an upstream status with a generic success code before deciding whether a retry is allowed.
@@ -85,3 +106,4 @@ Verification:
 - [Runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go): admission, history, cancellation, and stream outcomes.
 - [Sender tests](../../../tests/backend/internal/service/account_codex_eval_service_test.go): native transport and conversion errors.
 - [Inspection tests](../../../tests/backend/internal/codexeval/inspection_test.go): confirmations, cancellation, priorities, and notification failures.
+- [Shared runner](../../../tests/backend/internal/codexeval/model_test.go): retry limits, request reuse, accumulated usage, validators, final errors, and cancellation.

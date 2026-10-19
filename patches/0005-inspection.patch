@@ -580,7 +580,7 @@ new file mode 100644
 +			current, err := i.hooks.Get(checkCtx, id)
 +			if err == nil && !current.AutoInspectionEnabled {
 +				i.result(index[id], func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
-+				return fmt.Errorf("inspection disabled")
++				return errInspectionStopped
 +			}
 +			if err == nil && (!inspectionEligible(current, s) || confirmation && current.Priority != a.Priority) {
 +				err = fmt.Errorf("账户状态或优先级已改变")
