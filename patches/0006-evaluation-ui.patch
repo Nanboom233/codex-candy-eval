@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..e5bf9d3
 --- /dev/null
 +++ b/backend/internal/codexeval/web.go
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,81 @@
 +package codexeval
 +
 +import (
@@ -63,11 +63,12 @@ index 0000000..e5bf9d3
 +var uiHTML = func() []byte {
 +	config, _ := json.Marshal(map[string]any{"requests": fingerprintTarget, "aliases": fingerprintAliases})
 +	fpScript := strings.Replace(fingerprintScript, `/*FINGERPRINT_CONFIG*/{}`, string(config), 1)
++	variants, _ := json.Marshal(pelicanVariants)
++	plScript := strings.Replace(pelicanScript, `/*PELICAN_VARIANTS*/[]`, string(variants), 1)
 +	return []byte(strings.NewReplacer(
 +		"/*APP_STYLES*/", temmlStyles+"\n"+uiThemes+"\n"+uiStyles,
 +		"<!--PLUGIN_VERSION-->", pluginVersion,
 +		"<!--CANDY_PROMPT-->", html.EscapeString(candyPrompt),
-+		"<!--PELICAN_PROMPT-->", html.EscapeString(pelicanPrompt),
 +		"<!--FINGERPRINT_LICENSE-->", "<!-- lm-detector\n"+detectorLicense+"-->",
 +		"/*MARKDOWN_SCRIPT*/", markdownScript,
 +		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
@@ -77,7 +78,7 @@ index 0000000..e5bf9d3
 +		"/*COMPONENTS_SCRIPT*/", componentsScript,
 +		"/*CANDY_SCRIPT*/", candyScript,
 +		"/*FINGERPRINT_SCRIPT*/", fpScript,
-+		"/*PELICAN_SCRIPT*/", pelicanScript,
++		"/*PELICAN_SCRIPT*/", plScript,
 +		"/*INSPECTION_SCRIPT*/", inspectionScript,
 +		"/*APP_SCRIPT*/", appScript,
 +	).Replace(uiTemplate))
@@ -574,7 +575,7 @@ index 0000000..3e1c544
 +function initializeLayout() {
 +  $("candy-credentials").innerHTML = credentialCard("", "糖果测试", ["账户", "最近一次", "正确率", "最近 20 次"]);
 +  $("fp-credentials").innerHTML = credentialCard("fp-", "指纹测试", ["账户", "指纹结果", "测试模型", "测试时间"]);
-+  $("pl-credentials").innerHTML = credentialCard("pl-", "鹈鹕测试", ["账户", "最近一次", "动画"]);
++  $("pl-credentials").innerHTML = credentialCard("pl-", "鹈鹕测试", ["账户", "最近一次", "画面"]);
 +  $("notifications").innerHTML = ["flash", "load-error", "catalog-error", "storage-error"].map((id) => `<div id="${id}" class="global-flash" role="alert" hidden><span class="notice-symbol" aria-hidden="true"></span><span class="notice-message"></span><button class="notice-close" type="button" aria-label="隐藏提示" data-tip>${icon("x")}</button></div>`).join("");
 +}
 +
@@ -933,7 +934,7 @@ new file mode 100644
 index 0000000..c62c6be
 --- /dev/null
 +++ b/backend/internal/codexeval/web/components.js
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,348 @@
 +"use strict";
 +
 +// Lucide icons (https://lucide.dev, ISC license).
@@ -943,6 +944,7 @@ index 0000000..c62c6be
 +  "key": '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
 +  candy: '<path d="M10 7v10.9"/><path d="M14 6.1V17"/><path d="M16 7V3a1 1 0 0 1 1.707-.707 2.5 2.5 0 0 0 2.152.717 1 1 0 0 1 1.131 1.131 2.5 2.5 0 0 0 .717 2.152A1 1 0 0 1 21 8h-4"/><path d="M16.536 7.465a5 5 0 0 0-7.072 0l-2 2a5 5 0 0 0 0 7.07 5 5 0 0 0 7.072 0l2-2a5 5 0 0 0 0-7.07"/><path d="M8 17v4a1 1 0 0 1-1.707.707 2.5 2.5 0 0 0-2.152-.717 1 1 0 0 1-1.131-1.131 2.5 2.5 0 0 0-.717-2.152A1 1 0 0 1 3 16h4"/>',
 +  "chevron-right": '<path d="m9 18 6-6-6-6"/>',
++  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4-4L7 21"/>',
 +  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 +  check: '<path d="M20 6 9 17l-5-5"/>',
 +  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
@@ -1862,11 +1864,17 @@ new file mode 100644
 index 0000000..737e3b3
 --- /dev/null
 +++ b/backend/internal/codexeval/web/pelican.js
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,110 @@
 +"use strict";
++const PELICAN_VARIANTS = /*PELICAN_VARIANTS*/[];
 +const plSelected = new Set();
 +const plExpanded = new Set();
-+const plSavePrefs = () => store(PREF_STORE + ".pelican", { model: $("pl-model").value, effort: $("pl-effort").value });
++const plSavePrefs = () => store(PREF_STORE + ".pelican", { model: $("pl-model").value, effort: $("pl-effort").value, variant: $("pl-variant").value });
++const plVariant = (id) => PELICAN_VARIANTS.find((v) => v.id === id);
++const plVariantMeta = (r) => metric("image", "版本", plVariant(r.variant)?.label || r.variant);
++function updatePelicanPrompt() {
++  $("pl-prompt").textContent = plVariant($("pl-variant").value).prompt;
++}
 +
 +const plKind = (r) => (r.skipped ? "skip" : r.error ? "err" : "ok");
 +const PL_VERDICT = { ok: "已生成", err: "未生成", skip: "已跳过" };
@@ -1892,7 +1900,7 @@ index 0000000..737e3b3
 +
 +// Model pages run sandboxed: their scripts work, but this page's origin and storage stay out of reach, and
 +// the CSP they inherit from it blocks external assets.
-+const pelicanFrame = (html) => `<iframe sandbox="allow-scripts" srcdoc="${esc(html)}" title="鹈鹕动画" loading="lazy" tabindex="-1"></iframe>`;
++const pelicanFrame = (html) => `<iframe sandbox="allow-scripts" srcdoc="${esc(html)}" title="鹈鹕画面" loading="lazy" tabindex="-1"></iframe>`;
 +// Previews show a page as it looks a second after it is first drawn, then hold its animations and stop its
 +// timers, so a long list costs no CPU; only the dialog plays the page. Frames in a hidden tab can load without
 +// being drawn, and Chrome restarts CSS animations whenever a frame is drawn again, hence the wait for a frame
@@ -1908,23 +1916,23 @@ index 0000000..737e3b3
 +function pelicanPreview(credentialID, r) {
 +  if (r.error) return `<div class="preview" data-tip="${esc(r.error)}">${icon(STATUS_ICONS[plKind(r)])}</div>`;
 +  const page = pelicanPage(credentialID, r.id);
-+  if (page instanceof Error) return `<div class="preview" data-tip="${esc("动画加载失败：" + page.message)}">${icon("circle-alert")}</div>`;
++  if (page instanceof Error) return `<div class="preview" data-tip="${esc("画面加载失败：" + page.message)}">${icon("circle-alert")}</div>`;
 +  return `<div class="preview">${page === undefined ? icon("loader-circle", "spin") : pelicanFrame(page + PREVIEW_FREEZE)}
-+    <button class="preview-open" type="button" data-pl-detail="${esc(r.id)}" data-pl-credential="${esc(credentialID)}" aria-label="${esc(`放大查看 ${fmtTime(r.time)} 的动画`)}"></button></div>`;
++    <button class="preview-open" type="button" data-pl-detail="${esc(r.id)}" data-pl-credential="${esc(credentialID)}" aria-label="${esc(`放大查看 ${fmtTime(r.time)} 的画面`)}"></button></div>`;
 +}
 +
 +function pelicanHistory(a, r) {
-+  return historyCard(r, r.error ? `${plVerdict(r)}<span class="${r.skipped ? "meta" : "detail-warning"}">${esc(r.error)}</span>` : pelicanPreview(a.id, r));
++  return historyCard(r, r.error ? `${plVerdict(r)}<span class="${r.skipped ? "meta" : "detail-warning"}">${esc(r.error)}</span>` : pelicanPreview(a.id, r), plVariantMeta(r));
 +}
 +
 +function renderPelicanRow(a) {
 +  const history = a.pelicans || [], last = history.at(-1);
 +  const button = a.pelican_running
-+    ? `<button class="btn ghost" type="button" data-tip="正在等待模型生成动画" disabled>${icon("loader-circle", "spin")}测试中</button>`
++    ? `<button class="btn ghost" type="button" data-tip="正在等待模型生成画面" disabled>${icon("loader-circle", "spin")}测试中</button>`
 +    : collectionButton("pl", a, null, "测试");
 +  return credentialRow({
 +    type: "pl", credential: a, selected: plSelected.has(a.id), open: plExpanded.has(a.id), selectable: runnable("pl-", a), button,
-+    result: latestResult(last, plVerdict), tested: !!last, meta: last ? pelicanPreview(a.id, last) : `<span class="none">—</span>`,
++    result: latestResult(last, (r) => plVerdict(r) + plVariantMeta(r)), tested: !!last, meta: last ? pelicanPreview(a.id, last) : `<span class="none">—</span>`,
 +    history: () => [...history].reverse().map((r) => pelicanHistory(a, r)).join(""),
 +  });
 +}
@@ -1938,11 +1946,11 @@ index 0000000..737e3b3
 +function runPelican(body) {
 +  if (!$("pl-toolbar").reportValidity()) return;
 +  plSavePrefs();
-+  return update("/start", { method: "POST", body: { type: "pelican", ...body, model: $("pl-model").value, effort: $("pl-effort").value } }, "开始测试失败");
++  return update("/start", { method: "POST", body: { type: "pelican", ...body, model: $("pl-model").value, effort: $("pl-effort").value, variant: $("pl-variant").value } }, "开始测试失败");
 +}
 +
 +function showPelicanDetail(r) {
-+  $("pl-detail-body").innerHTML = `<div class="result-dialog-meta record-meta">${recordMeta(r)}</div>
++  $("pl-detail-body").innerHTML = `<div class="result-dialog-meta record-meta">${recordMeta(r, plVariantMeta(r))}</div>
 +    <div class="preview pelican-stage">${pelicanFrame(r.html)}</div>`;
 +  fitPelicanStage();
 +}
@@ -1953,6 +1961,13 @@ index 0000000..737e3b3
 +
 +function initializePelican() {
 +  fillSelect("pl-effort", DEFAULT_EFFORTS, stored(PREF_STORE + ".pelican")?.effort, DEFAULT_EFFORT);
++  fillSelect("pl-variant", PELICAN_VARIANTS.map((v) => [v.id, v.label]), stored(PREF_STORE + ".pelican")?.variant, "original");
++  updatePelicanPrompt();
++  const changeVariant = () => {
++    store(PREF_STORE + ".pelican", { ...stored(PREF_STORE + ".pelican"), variant: $("pl-variant").value });
++    updatePelicanPrompt();
++  };
++  for (const event of ["input", "change"]) $("pl-variant").addEventListener(event, changeVariant);
 +  for (const id of ["pl-model", "pl-effort"]) $(id).addEventListener("input", plSavePrefs);
 +  for (const id of ["pl-model", "pl-effort"]) $(id).addEventListener("change", plSavePrefs);
 +  // Closing the dialog also stops its animation.
@@ -1965,7 +1980,7 @@ new file mode 100644
 index 0000000..f1b5b12
 --- /dev/null
 +++ b/backend/internal/codexeval/web/style.css
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,453 @@
 +/* Layout */
 +:root {
 +  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
@@ -2168,7 +2183,9 @@ index 0000000..f1b5b12
 +   any remaining space is spread evenly across the gaps. */
 +#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) 104px var(--action-width); }
 +#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
-+#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px minmax(0, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
++#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 120px minmax(138px, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
++#pelican-panel .latest-top { flex-wrap: wrap; }
++#pelican-panel .latest-top > .metric:not(.model-meta) { flex: none; }
 +#settings-panel { --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
 +.list-head, .list-row, .history-panel { display: grid; grid-template-columns: var(--list-columns); justify-content: space-between; align-items: center; gap: var(--list-gap); padding-inline: var(--list-padding); }
 +.list-head { padding-block: 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
@@ -2367,6 +2384,10 @@ index 0000000..f1b5b12
 +  :root { --list-padding: 18px; --list-gap: 10px; }
 +  .result-history { grid-template-columns: minmax(0, 1fr); }
 +}
++@media (max-width: 900px) {
++  #pl-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  #pl-toolbar > .btn { grid-column: 1 / -1; min-width: 0; width: 100%; }
++}
 +@media (max-width: 768px) {
 +  :root { --list-padding: 16px; }
 +  .page-navigation .tab { padding: 0 12px; }
@@ -2476,7 +2497,7 @@ new file mode 100644
 index 0000000..9572706
 --- /dev/null
 +++ b/backend/internal/codexeval/web/ui.html
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,183 @@
 +<!doctype html>
 +<html lang="zh-CN">
 +<!--FINGERPRINT_LICENSE-->
@@ -2548,10 +2569,10 @@ index 0000000..9572706
 +      </section>
 +      <section id="pelican-panel" role="tabpanel" aria-labelledby="tab-pelican" hidden>
 +        <div class="panel-intro">
-+          <p>让模型写一个 HTML 页面，用 SVG 绘制鹈鹕骑自行车的动画。</p>
++          <p>让模型用 SVG 绘制鹈鹕画面，可选择原版动画或多合一场景。</p>
 +          <details class="problem">
 +            <summary><i data-icon="chevron-right" data-class="chev"></i>查看题目</summary>
-+            <div class="problem-body"><pre class="mono"><code><!--PELICAN_PROMPT--></code></pre>
++            <div class="problem-body"><pre class="mono"><code id="pl-prompt"></code></pre>
 +              <button class="copy-btn" type="button" aria-label="复制题目" data-tip></button>
 +            </div>
 +          </details>
@@ -2560,6 +2581,7 @@ index 0000000..9572706
 +          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="pl-group" data-group-select></select></span></label>
 +          <div class="field"><label class="field-label" for="pl-model-select">模型</label><span class="native-select"><select id="pl-model-select"></select></span><input id="pl-model" maxlength="200" required aria-label="自定义模型" hidden></div>
 +          <label class="field"><span class="field-label">推理强度</span><span class="native-select"><select id="pl-effort"></select></span></label>
++          <label class="field"><span class="field-label">版本</span><span class="native-select"><select id="pl-variant"></select></span></label>
 +          <button id="pl-run-batch" class="btn" type="submit" disabled>测试全部</button>
 +        </form>
 +        <section id="pl-credentials" class="card"></section>
@@ -2634,7 +2656,7 @@ index 0000000..9572706
 +      <div id="fp-detail-body" class="result-dialog-body"></div>
 +    </dialog>
 +    <dialog id="pl-detail" class="result-dialog" aria-labelledby="pl-detail-title">
-+      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕动画</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭动画"><i data-icon="x"></i></button></div>
++      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕画面</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭画面"><i data-icon="x"></i></button></div>
 +      <div id="pl-detail-body" class="result-dialog-body"></div>
 +    </dialog>
 +    <div id="tip" class="tip" role="tooltip" hidden></div>

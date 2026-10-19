@@ -60,8 +60,10 @@ Place fingerprint developer instructions in `generic.developer_instructions`.
 
 ### Tasks and history
 
-`StartRequest` contains `type`, `targets`, `model`, `effort`, `runs`, and `concurrency`.
+`StartRequest` contains `type`, `targets`, `model`, `effort`, `runs`, `concurrency`, and optional `variant`.
 Supported types are `candy`, `fingerprint`, and `pelican`.
+Pelican accepts `variant: original` or `all-in-one`. Missing or empty values select `original`.
+Reject unknown nonempty variants before account lookup or supplier calls. Other evaluation types ignore this field.
 Fingerprint selects three distinct challenges. Per-account concurrency ranges from 1 through 3, with default 3.
 Six global challenge slots include each challenge's retry waits.
 Each target contains numeric `group_id` and `account_id`.
@@ -71,7 +73,8 @@ Start returns `started`, `busy` and `unavailable` arrays.
 Cancel accepts `run_id` and interrupts the matching task context and active response.
 
 State contains `active`, `candy`, `fingerprint`, `pelican`, and `storage_error`.
-Three history maps persist at `<data-dir>/codex-eval/history.json` with root marker `schema_version: 1`.
+Three history maps persist at `<data-dir>/codex-eval/history.json` with root marker `schema_version: 2`.
+The [persistence contract](./database-guidelines.md) defines old-format copies, retained maps, and migration write protection.
 Keep the latest 20 records per account and type.
 Save each result through a same-directory temporary file and rename.
 Unreadable or null history blocks overwrites.
@@ -81,6 +84,14 @@ Record details support fingerprint and Pelican with exact record IDs.
 Keep wrappers `{type, fingerprint}` and `{type, pelican}`.
 Started entries expose `id`. Saved records retain native `Info.run_id`.
 Candy results remain inline in state.
+
+Pelican definitions in `pelican.go` supply exact upstream prompts and public page configuration through `web.go`.
+Successful, failed, and cancelled records retain the admitted variant. Later toolbar changes affect only subsequent starts.
+Prefer the selected language block without case sensitivity, then the first block whose trimmed content starts with `<`.
+Accept bare markup only when no fenced block exists. An empty preferred block fails acceptance.
+Limit extracted bytes to 256 KiB before the all-in-one SVG viewport wrapper. Keep original HTML unchanged.
+Do not add XML validation or grade picture content and its Candy answer.
+Use the existing shared retry runner, usage accounting, and native result statuses.
 
 Fingerprint progress has `done`, `total: 3`, model, and concurrency.
 Records retain native identity, detector revision, samples, usage, status, and optional attribution.
@@ -129,6 +140,11 @@ Retain a selected literal model when refreshed suggestions omit it.
 Save valid preferences automatically on input, before blur.
 Shared group and Candy account filters use native settings so the timer can run after the browser closes.
 Candy and Pelican retain their browser preferences and manual entry points.
+Pelican places version after effort, defaults to original, and restores a valid browser preference across group changes.
+Version changes immediately update the visible and copied prompt. Merge only that preference during asynchronous model restoration.
+Latest results, history, and details show each record's saved version. Toolbar changes do not filter or relabel history.
+Both variants share the latest-20 limit. Keep 4:3 frozen previews, animated details, sandbox isolation, and stale-detail guards.
+At narrow widths, pair group/model and effort/version. Put the test action on its own full-width row.
 Fingerprint retains model and concurrency preferences. Do not read retired mode or ModelTrace preferences.
 A saved ModelTrace tab falls back to Candy.
 Render `not_model` as `不像语言模型回答` and null probability as `—`.
@@ -172,7 +188,8 @@ Use native light/dark theme variables.
 | Lookup or account protocol unavailable | Target appears in `unavailable` with the actual reason |
 | HTTP/SSE/CC failure or premature stream EOF | Actual failure and observed usage, no fabricated completion |
 | Task cancelled | Interrupt active request and prevent subsequent calls |
-| Pelican HTML absent or oversized | Persist `failed` consistently in summaries and details |
+| Unknown nonempty Pelican variant | Return 400 before account lookup or supplier calls |
+| Pelican selected markup absent or oversized | Persist `failed` and the admitted variant consistently in summaries and details |
 | History unreadable/null or save fails | Visible storage error; preserve the existing file |
 | History clear cannot save | Restore previous in-memory maps |
 
@@ -185,6 +202,10 @@ Bad: treating a CC stream failure as successful EOF hides the upstream error.
 ## 6. Tests Required
 
 Use existing relevant tests for changed code and add focused assertions only for uncovered behavior.
+Pelican extraction tests own language preference, page preparation, and the byte boundary.
+Runtime tests own variant admission, saved versions, and migration. Reuse shared retry tests without a per-variant matrix.
+The existing UI harness owns preferences, prompt/copy updates, payloads, and record-derived labels.
+Use the actual browser for toolbar layout, previews, and detail animation. Do not repeat the DOM assertion list.
 The focused UI checks use two groups with exclusive and shared accounts, membership moves, pagination, and obsolete responses.
 Check submitted targets after inventory failures and after successful inventory refresh followed by evaluation-state failure.
 Check manual preference reload before blur through actual input events.

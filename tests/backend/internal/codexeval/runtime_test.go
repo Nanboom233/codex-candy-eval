@@ -44,7 +44,10 @@ func TestCodexEvalRuntime(t *testing.T) {
 	block := false
 	pelicanAnswer := "<html><svg></svg></html>"
 	var fingerprintCalls atomic.Int32
+	var resolveCalls, supplierCalls atomic.Int32
+	var lastPrompt string
 	send := func(ctx context.Context, id int64, body []byte, headers http.Header) (*http.Response, error) {
+		supplierCalls.Add(1)
 		if id != 7 {
 			t.Errorf("sent to unexpected account %d", id)
 		}
@@ -62,7 +65,8 @@ func TestCodexEvalRuntime(t *testing.T) {
 		answer := "21"
 		if input, ok := req["input"].([]any); ok {
 			last := input[len(input)-1].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-			if strings.Contains(last, "HTML") {
+			if strings.Contains(last, "HTML") || strings.Contains(last, "完整的 SVG") {
+				lastPrompt = last
 				answer = pelicanAnswer
 			} else if strings.Contains(last, "355") {
 				answer = strings.Repeat("42,", 320)
@@ -75,6 +79,7 @@ func TestCodexEvalRuntime(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: " + string(data) + "\n\n"))}, nil
 	}
 	Initialize(t.TempDir(), send, func(_ context.Context, id int64) (string, error) {
+		resolveCalls.Add(1)
 		if id != 7 {
 			return "", fmt.Errorf("missing account %d", id)
 		}
@@ -98,10 +103,30 @@ func TestCodexEvalRuntime(t *testing.T) {
 	if len(fingerprintResults["7"]) != 1 || len(fingerprintResults["7"][0].Samples) != 3 || fingerprintResults["7"][0].Status != "completed" || fingerprintCalls.Load() != 4 || fingerprintResults["7"][0].InputTokens != 8 {
 		t.Errorf("fingerprint: %+v", fingerprintResults)
 	}
-	if len(pelicanResults["7"]) != 1 || pelicanResults["7"][0].HTML == "" {
+	if len(pelicanResults["7"]) != 1 || pelicanResults["7"][0].HTML == "" || pelicanResults["7"][0].Variant != "original" || lastPrompt != pelicanVariants[0].Prompt {
 		t.Errorf("pelican: %+v", pelicanResults)
 	}
 	mu.Unlock()
+	resolved, sent := resolveCalls.Load(), supplierCalls.Load()
+	if _, err := Start(context.Background(), StartRequest{Type: "pelican", Targets: []Target{{1, 7}}, Model: "fixture", Variant: "unknown"}); err == nil || resolveCalls.Load() != resolved || supplierCalls.Load() != sent {
+		t.Fatal("unknown version reached account resolution or supplier")
+	}
+	pelicanAnswer = "```html\n<html>fallback</html>\n```\n```SVG\n<svg>composite</svg>\n```"
+	if _, err := Start(context.Background(), StartRequest{Type: "pelican", Targets: []Target{{1, 7}}, Model: "fixture", Variant: "all-in-one"}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t)
+	composite := pelicanResults["7"][1]
+	if composite.Variant != "all-in-one" || !strings.HasSuffix(composite.HTML, "<svg>composite</svg>") || lastPrompt != pelicanVariants[1].Prompt {
+		t.Fatalf("composite routing: %+v", composite)
+	}
+	state, _ := State()
+	if !strings.Contains(string(state), `"variant":"all-in-one"`) || strings.Contains(string(state), `"html":`) {
+		t.Fatalf("version summary: %s", state)
+	}
+	if detail, status := Record("pelican", 7, composite.ID); status != 200 || !strings.Contains(string(detail), `"variant":"all-in-one"`) || !strings.Contains(string(detail), `"html":`) {
+		t.Fatalf("version detail: %s", detail)
+	}
 	fp := fingerprintResults["7"][0]
 	if fp.summary().Samples != nil || len(fp.Samples) != 3 {
 		t.Fatal("summary changed stored samples")
@@ -109,10 +134,10 @@ func TestCodexEvalRuntime(t *testing.T) {
 	if detail, status := Record("fingerprint", 7, fp.ID); status != 200 || !strings.Contains(string(detail), `"samples":[`) {
 		t.Fatalf("fingerprint detail: %s", detail)
 	}
-	for _, answer := range []string{"No HTML in this answer", "<html>" + strings.Repeat("x", pelicanMaxHTML) + "</html>"} {
+	for _, answer := range []string{"No HTML in this answer", "<html>" + strings.Repeat("x", pelicanMaxCode) + "</html>"} {
 		pelicanAnswer = answer
-		result := evaluatePelican(credential{ID: "7", Target: Target{1, 7}, Name: "selected", ctx: context.Background()}, "fixture", "none")
-		if result.Status != "failed" || result.Error == "" || result.HTML != "" {
+		result := evaluatePelican(credential{ID: "7", Target: Target{1, 7}, Name: "selected", ctx: context.Background()}, "fixture", "none", pelicanVariants[0])
+		if result.Status != "failed" || result.Error == "" || result.HTML != "" || result.Variant != "original" {
 			t.Fatalf("invalid HTML reported completed: %+v", result)
 		}
 	}
@@ -156,10 +181,25 @@ func TestCodexEvalRuntime(t *testing.T) {
 	if latest := fingerprintResults["7"][1]; latest.Status != "cancelled" || len(latest.Samples) != 1 {
 		t.Fatalf("fingerprint cancellation: %+v", latest)
 	}
+	summary, err = Start(context.Background(), StartRequest{Type: "pelican", Targets: []Target{{1, 7}}, Model: "fixture", Variant: "all-in-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("Pelican sender not started")
+	}
+	Cancel(summary.Started[0].ID)
+	waitIdle(t)
+	if latest := pelicanResults["7"][2]; latest.Status != "cancelled" || latest.Variant != "all-in-one" {
+		t.Fatalf("Pelican cancellation: %+v", latest)
+	}
 	// Exercise the same original atomic history path, including failed clear rollback.
 	mu.Lock()
-	for range 25 {
+	for i := range 25 {
 		candyResults["7"] = appendRecent(candyResults["7"], last)
+		pelicanResults["7"] = appendRecent(pelicanResults["7"], pelicanResult{Variant: pelicanVariants[i%2].ID})
 	}
 	err = saveStateLocked()
 	mu.Unlock()
@@ -171,7 +211,7 @@ func TestCodexEvalRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = json.Unmarshal(raw, &saved); err != nil || len(saved.Results["7"]) != 20 {
+	if err = json.Unmarshal(raw, &saved); err != nil || len(saved.Results["7"]) != 20 || len(saved.Pelicans["7"]) != 20 || saved.Pelicans["7"][0].Variant == saved.Pelicans["7"][1].Variant {
 		t.Fatalf("history retention: %v", err)
 	}
 	oldPath := statePath
@@ -193,8 +233,15 @@ func TestCodexEvalRuntime(t *testing.T) {
 	if err != nil || json.Unmarshal(raw, &saved) != nil {
 		t.Fatal("cannot read migrated history")
 	}
-	if saved.SchemaVersion != 1 || len(saved.Fingerprints) != 0 || strings.Contains(string(raw), "retired") || saved.Results["7"][0].RunID != "old-candy" || saved.Results["7"][0].Status != "" || saved.Results["7"][0].Attempts != 0 || saved.Pelicans["7"][0].HTML != "<html>old</html>" {
+	if saved.SchemaVersion != 2 || len(saved.Fingerprints) != 0 || strings.Contains(string(raw), "retired") || saved.Results["7"][0].RunID != "old-candy" || saved.Results["7"][0].Status != "" || saved.Results["7"][0].Attempts != 0 || saved.Pelicans["7"][0].HTML != "<html>old</html>" || saved.Pelicans["7"][0].Variant != "original" {
 		t.Fatalf("minimal migration changed retained records: %s", raw)
+	}
+	backup, err := os.ReadFile(filepath.Join(filepath.Dir(statePath), "history.v0.json"))
+	if err != nil || string(backup) != legacy {
+		t.Fatal("unversioned recovery copy changed original bytes")
+	}
+	if err := os.Remove(filepath.Join(filepath.Dir(statePath), "history.v0.json")); err != nil {
+		t.Fatal(err)
 	}
 	loaded = false
 	candyResults = map[string][]candyResult{}
@@ -202,6 +249,65 @@ func TestCodexEvalRuntime(t *testing.T) {
 	loadState()
 	if len(candyResults["7"]) != 1 || len(pelicanResults["7"]) != 1 {
 		t.Fatal("migrated records did not reload")
+	}
+	saved.SchemaVersion = 1
+	saved.Fingerprints = map[string][]fingerprintResult{"7": {fp}}
+	saved.Pelicans["7"][0].Variant = ""
+	v1, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Backup := filepath.Join(filepath.Dir(statePath), "history.v1.json")
+	if err := os.Mkdir(v1Backup, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, v1, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	loadState()
+	_, status = Clear("all")
+	raw, _ = os.ReadFile(statePath)
+	if stateLoadError == nil || storageError == "" || status != 500 || string(raw) != string(v1) || len(fingerprintResults["7"]) != 1 || pelicanResults["7"][0].Variant != "original" {
+		t.Fatal("backup failure did not retain records and block writes")
+	}
+	if err := os.Remove(v1Backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath+".tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	stateLoadError, loaded = nil, false
+	loadState()
+	raw, _ = os.ReadFile(statePath)
+	backup, err = os.ReadFile(v1Backup)
+	if err != nil || string(backup) != string(v1) || string(raw) != string(v1) || storageError == "" || len(fingerprintResults["7"]) != 1 {
+		t.Fatal("failed migration save lost the original, copy, or memory records")
+	}
+	if err := os.Chmod(v1Backup, 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	loadState()
+	raw, _ = os.ReadFile(statePath)
+	if err := json.Unmarshal(raw, &saved); err != nil || saved.SchemaVersion != 2 || saved.Pelicans["7"][0].Variant != "original" {
+		t.Fatal("schema-1 migration failed")
+	}
+	wantFingerprint, _ := json.Marshal(fp)
+	gotFingerprint, _ := json.Marshal(saved.Fingerprints["7"][0])
+	if string(gotFingerprint) != string(wantFingerprint) || saved.Results["7"][0].RunID != "old-candy" || saved.Pelicans["7"][0].HTML != "<html>old</html>" {
+		t.Fatal("schema-1 migration changed retained data")
+	}
+	if info, err := os.Stat(v1Backup); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("recovery copy permissions")
+	}
+	if err := os.Remove(v1Backup); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	loadState()
+	if _, err := os.Stat(v1Backup); !os.IsNotExist(err) {
+		t.Fatal("schema-2 reload created a migration copy")
 	}
 	invalidMarker := `{"schema_version":null,"results":{"7":[]}}`
 	if err = os.WriteFile(statePath, []byte(invalidMarker), 0600); err != nil {
@@ -216,6 +322,18 @@ func TestCodexEvalRuntime(t *testing.T) {
 	raw, _ = os.ReadFile(statePath)
 	if status != 500 || string(raw) != invalidMarker {
 		t.Fatal("invalid marker was migrated or overwritten")
+	}
+	stateLoadError = nil
+	future := `{"schema_version":3}`
+	if err := os.WriteFile(statePath, []byte(future), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	loadState()
+	_, status = Clear("all")
+	raw, _ = os.ReadFile(statePath)
+	if status != 500 || string(raw) != future {
+		t.Fatal("future schema was overwritten")
 	}
 	stateLoadError = nil
 	if err = os.WriteFile(statePath, []byte("null"), 0600); err != nil {

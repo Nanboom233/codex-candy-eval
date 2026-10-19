@@ -57,15 +57,19 @@ Keep current administrator mappings, remove the reserved identity placeholder, a
 No extra table, snapshot, scheduling flag, original scheduling value, or restore phase is necessary.
 See [Native Candy Inspection](./native-inspection.md) for confirmed-state application and placeholder behavior.
 
-Write root field `schema_version: 1` and history keys `results`, `fingerprints`, and `pelicans`.
+Write root field `schema_version: 2` and history keys `results`, `fingerprints`, and `pelicans`.
 Each map uses a native account ID as a decimal string.
-Keep Candy and Pelican record payloads unchanged. New records can include optional `attempts`.
+Pelican records store `variant` as `original` or `all-in-one`. Records can include optional `attempts`.
 Read fingerprints as raw JSON until the root marker identifies the current format.
-An absent marker selects legacy loading. Decode only Candy and Pelican, then immediately save the current snapshot.
-Start the new fingerprint map empty. Discard old fingerprint and ModelTrace payloads without per-record conversion or backup.
+An absent marker selects legacy loading. Decode only Candy and Pelican. Start the fingerprint map empty.
+Discard obsolete fingerprint and ModelTrace payloads without per-record conversion.
+Schema 1 retains all three current maps. Both older formats mark retained Pelican records as `original`.
 Assign loaded maps only after retained fields decode successfully.
-Use the existing atomic saver for this migration. A failed migration retains memory records and exposes the save error.
-Version-1 files do not require a migration write. A present invalid marker keeps the original file protected.
+Before migration, copy the original bytes to same-directory `history.v0.json` or `history.v1.json` with mode `0600`.
+If the copy fails, retain memory records, expose the error, and block replacement and later saves.
+Use the existing atomic saver for migration. A failed save retains memory records, the original file, and the recovery copy.
+Schema 2 needs no migration copy or write. Invalid and future markers keep the original file protected.
+An executable downgrade needs a compatible old history snapshot. That snapshot excludes records saved after the copy.
 Retain the latest 20 records per account and evaluation type.
 Hold `mu` during shared history access and `saveStateLocked`.
 `loadState` acquires its own lock and reads once per process.
@@ -85,9 +89,11 @@ Restart reloads saved history/settings without restoring tasks or the previous i
 | Condition | Result |
 | --- | --- |
 | Missing history file | Start with empty histories |
-| Unversioned native history | Load Candy/Pelican and immediately save schema 1 with an empty fingerprint map |
-| Version-1 native history | Load all current maps without a migration write |
-| Unreadable, malformed, or null history | Show the error and prevent overwrite |
+| Unversioned native history | Load Candy/Pelican, mark Pelican original, copy original bytes, then save schema 2 with empty fingerprints |
+| Version-1 native history | Retain all maps, mark Pelican original, copy original bytes, then save schema 2 |
+| Version-2 native history | Load all maps without a migration copy or write |
+| Migration copy fails | Retain memory records and block later saves |
+| Unreadable, malformed, null, or future-schema history | Show the error and prevent overwrite |
 | History save fails | Retain memory results and show the error |
 | History clear save fails | Restore previous maps and return failure |
 | Settings read fails | Return the repository error |
@@ -109,7 +115,8 @@ Bad: a null history file must not become an empty snapshot after the next result
 ### 6. Tests Required
 
 Use existing native evaluation persistence tests for load protection, latest-20 retention, saves, and clear rollback.
-Extend that fixture for immediate legacy migration, retained payloads, and the schema-1 snapshot. Do not add a separate migration suite.
+Extend that fixture for retained maps, original variants, migration copies, write failures, and schema-2 reload.
+Do not add a separate migration suite.
 Use `tests/backend/internal/service/codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
 Reuse existing persistence evidence. Add focused checks only for changed storage behavior without coverage.
 Account participation needs key-only-save and full-edit-preservation assertions, without a separate restart or copy test matrix.

@@ -53,7 +53,7 @@ Retry marked direct transport failures, HTTP 408/5xx, and unusable successful st
 Keep HTTP 401, 429, and other permanent statuses final, including after body-read failure.
 Retry empty, incomplete, failed, or tool-only successful streams.
 Fingerprint retries numeric-count rejection. Sequence-shape rejection does not retry.
-Pelican retries failed existing HTML acceptance. Valid wrong Candy text completes without a retry.
+Pelican retries failed selected-language markup acceptance through the same runner. Valid wrong Candy text completes without a retry.
 Do not add retries around account updates, settings saves, or notifications.
 
 Preserve context cancellation, timeout causes, and stream closure.
@@ -97,6 +97,7 @@ References: [evaluation UI](../../../patches/0006-evaluation-ui.patch), [adminis
 - Do not grade a failed model request, even when its error text contains the expected Candy answer.
 - Use each evaluation's acceptance rule. A valid wrong Candy answer is complete. Detector count rejection can retry.
 - Do not hide save failures. Runners expose `storageError`. History removal handlers also restore the previous histories.
+- A failed migration copy blocks replacement and later saves. Keep decoded records readable in memory.
 - Do not hold `mu` during supplier requests.
 - Do not replace an upstream status with a generic success code before deciding whether a retry is allowed.
 - Keep notification errors separate from successful priority changes.

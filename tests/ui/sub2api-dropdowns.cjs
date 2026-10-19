@@ -7,6 +7,10 @@ if (!source) throw new Error("Set SUB2API_SOURCE to the patched native source tr
 const { JSDOM } = createRequire(path.resolve(source, "frontend/package.json"))("jsdom");
 const web = path.resolve(source, "backend/internal/codexeval/web");
 const read = (name) => fs.readFileSync(path.join(web, name), "utf8");
+const variants = [...fs.readFileSync(path.join(web, "../pelican.go"), "utf8").matchAll(/\{ID: "([^"]+)", Label: "([^"]+)", language: "[^"]+", Prompt: pelicanPreamble \+([\s\S]*?)\},/g)]
+  .map(([, id, label, prompt]) => ({ id, label, prompt: "不使用任何工具，也不要创建或修改文件，直接在回复中完成以下任务：\n\n" +
+    [...prompt.matchAll(/"(?:[^"\\]|\\.)*"/g)].map(([literal]) => JSON.parse(literal)).join("") }));
+assert.equal(variants.length, 2, "Load the native shared Pelican definitions");
 const settings = () => ({ enabled: false, group_id: 101, account_type: "all", account_plan: "all", enabled_only: false,
   model: "saved/literal", effort: "low", max_tests_per_account: 3,
   min_wait_minutes: 15, max_wait_minutes: 35,
@@ -22,13 +26,14 @@ function harness(preferences = {}, { initializePage = false, api } = {}) {
   const dom = new JSDOM(read("ui.html"), { url: "http://127.0.0.1:60198/codex-eval", runScripts: "outside-only" });
   const w = dom.window;
   w.matchMedia = () => ({ matches: false, addEventListener() {} });
+  w.CSS = { escape: (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c) };
   w.fixtureAPI = api;
   w.localStorage.setItem("sub2api-codex-eval.prefs", JSON.stringify({ model: "saved/literal" }));
   for (const [key, value] of Object.entries(preferences)) w.localStorage.setItem(key, value);
   w.eval([read("vendor/markdown-it.min.js"), read("vendor/markdown-it-cjk-friendly.min.js"),
     read("vendor/texmath.js"), read("vendor/temml.min.js"), read("components.js"), read("catalog.js"),
     read("candy.js"), read("fingerprint.js").replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({ requests: 3, aliases: { "gpt-6.1-sol": "gpt-6-astra", "deepseek-flash": "deepseek-v4.1-flash-1017" } })),
-    read("pelican.js"), read("inspection.js"), initializePage
+    read("pelican.js").replace("/*PELICAN_VARIANTS*/[]", JSON.stringify(variants)), read("inspection.js"), initializePage
       ? read("app.js").replace("// Events and initialization.", "api = window.fixtureAPI;\n// Events and initialization.")
       : read("app.js").split("// Events and initialization.")[0], initializePage ? "" : `
     initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializePelican(); initializeInspection();`, `
@@ -36,7 +41,7 @@ function harness(preferences = {}, { initializePage = false, api } = {}) {
       inspectionRemovedModels,setInspectionRemovedModels,
       updateModelPicker,renderInspectionState,validateInspectionFields,loadInspectionState,
       refreshCatalog,resetCatalogCache,stateCredentials,visibleCredentials,targetsFor,fillCredentialTypes,fillPlanFilter,renderCandyRow,renderList,render,
-      batchCredentials,runCandy,runFingerprint,runPelican,fpOutcome,showFingerprintDetail,candyTip,showLogin,load,
+      batchCredentials,runCandy,runFingerprint,runPelican,fpOutcome,showFingerprintDetail,showPelicanDetail,pelicanHistory,renderPelicanRow,initializeCopyButtons,candyTip,showLogin,load,
       setAccountInspection, selectCandy(id){candySelected.add(id);render()}, setUpdate(fn){update=fn},
       setCredentials(data){credentials=stateCredentials(data)},
       setAPI(fn){api=fn}, setModels(ids){catalogCache.models={ids}}, setGroup(id){selectedGroup=id},
@@ -80,6 +85,50 @@ function groupFixture() {
 }
 
 (async () => {
+  const pendingSettings = deferred();
+  const startup = harness({ auth_token: "fixture", "sub2api-codex-eval.prefs.pelican": JSON.stringify({ model: "saved/pelican", effort: "high", variant: "obsolete" }) }, {
+    initializePage: true, api: async (url) => url.includes("/settings/") ? pendingSettings.promise : groupFixture().api(url),
+  });
+  try {
+    assert.equal(startup.$("pl-variant").value, "original");
+    assert.equal(startup.$("pl-prompt").textContent, variants[0].prompt);
+    startup.$("pl-variant").value = "all-in-one";
+    startup.$("pl-variant").dispatchEvent(new startup.w.Event("input", { bubbles: true }));
+    assert.deepEqual(JSON.parse(startup.w.localStorage.getItem("sub2api-codex-eval.prefs.pelican")), { model: "saved/pelican", effort: "high", variant: "all-in-one" });
+    assert.equal(startup.$("pl-prompt").textContent, variants[1].prompt);
+    let copied;
+    startup.w.navigator.clipboard = { writeText: async (text) => { copied = text; } };
+    startup.$("pl-prompt").parentElement.parentElement.querySelector(".copy-btn").click();
+    await tick();
+    assert.equal(copied, variants[1].prompt);
+    pendingSettings.resolve(settings());
+    await tick();
+    await tick();
+    assert.equal(startup.$("pl-model").value, "saved/pelican");
+    assert.equal(startup.$("pl-effort").value, "high");
+    assert.equal(startup.$("pl-variant").value, "all-in-one");
+    const reloaded = harness(Object.fromEntries(Object.entries(startup.w.localStorage)));
+    try {
+      assert.equal(reloaded.$("pl-variant").value, "all-in-one");
+      assert.equal(reloaded.$("pl-prompt").textContent, variants[1].prompt);
+      const records = [
+        { id: "original", variant: "original", status: "completed", time: "2026-10-20T12:00:00Z", model: "fixture", html: "<html>fixture</html>" },
+        { id: "failed", variant: "all-in-one", status: "failed", error: "fixture failure", time: "2026-10-20T13:00:00Z", model: "fixture" },
+        { id: "cancelled", variant: "original", status: "cancelled", error: "cancelled", time: "2026-10-20T14:00:00Z", model: "fixture" },
+      ];
+      reloaded.h.setAPI(async () => ({ pelican: records[0] }));
+      for (const record of records) {
+        const label = variants.find((v) => v.id === record.variant).label;
+        assert.ok(reloaded.h.pelicanHistory({ id: "11" }, record).includes(label));
+        assert.ok(reloaded.h.renderPelicanRow({ id: "11", pelicans: [record] }).includes(label));
+        reloaded.h.showPelicanDetail(record);
+        assert.ok(reloaded.$("pl-detail-body").textContent.includes(label));
+      }
+      reloaded.$("pl-detail").dispatchEvent(new reloaded.w.Event("close"));
+      assert.equal(reloaded.$("pl-detail-body").innerHTML, "");
+      await tick();
+    } finally { reloaded.close(); }
+  } finally { startup.close(); }
   let detector = harness({ "sub2api-codex-eval.prefs.tab": JSON.stringify("modeltrace") }, { initializePage: true, api: groupFixture().api });
   try {
     await tick();
@@ -515,6 +564,8 @@ function groupFixture() {
     ctx.h.render();
     const ids = (prefix) => [...ctx.$(prefix + "rows").querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)).sort((a, b) => a - b);
     for (const prefix of prefixes) assert.deepEqual(ids(prefix), [11, 33], prefix);
+    ctx.$("pl-variant").value = "all-in-one";
+    ctx.$("pl-variant").dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
     for (const [prefix, run] of prefixes.map((prefix, i) => [prefix, [ctx.h.runCandy, ctx.h.runFingerprint, ctx.h.runPelican][i]])) {
       const targets = ctx.h.targetsFor(ctx.h.batchCredentials(prefix, new Set()).map((a) => a.id));
       await run({ targets });
@@ -522,6 +573,13 @@ function groupFixture() {
     assert.deepEqual(submissions.map((body) => [...body.targets].map((target) => target.account_id).sort((a, b) => a - b)),
       [[11, 33], [11, 33], [11, 33]]);
     assert.ok(submissions.every((body) => body.targets.every((target) => target.group_id === 101)));
+    assert.equal(submissions[2].variant, "all-in-one");
+    ctx.$("pl-rows").querySelector('[data-pl-run="11"]').click();
+    assert.equal(submissions.at(-1).variant, "all-in-one");
+    assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id), [11]);
+    ctx.$("pl-variant").value = "original";
+    ctx.$("pl-variant").dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(submissions[2].variant, "all-in-one", "Changing the toolbar cannot change an admitted payload");
     const modelRequests = fixture.calls.filter((url) => url.endsWith("/models")).length;
     await ctx.h.refreshCatalog();
     assert.equal(fixture.calls.filter((url) => url.endsWith("/models")).length, modelRequests, "Unchanged inventory must reuse raw models");
@@ -538,6 +596,7 @@ function groupFixture() {
     ctx.h.render();
     for (const prefix of prefixes) assert.deepEqual(ids(prefix), [11, 33], "Inspection polling must not replace inventory: " + prefix);
     ctx.h.setGroup(202);
+    assert.equal(ctx.$("pl-variant").value, "original");
     assert.equal(ctx.h.targetsFor(["11"]).length, 0, "A stale row cannot produce a target for a new group");
     await ctx.h.refreshCatalog();
     ctx.h.setCredentials(fixture.data);
