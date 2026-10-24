@@ -7,24 +7,26 @@
 ## Overview
 
 Active integration lives in a numbered production patch series under `patches/`.
-The build applies `patches/series` to an existing original Sub2API source tree and uses that tree's Go module.
+The standalone build applies top-level `patches/*.patch` files in lexical filename order to an existing Sub2API source tree.
 This repository has no root Go module or shared-library entry point.
 The user package replaces the server binary without compilation on the installation host.
 
-Evidence: [native build](../../../scripts/build.py), [patch order](../../../patches/series), and [installer source](../../../scripts/installer/).
+Evidence: [native build](../../../scripts/build.py), [patches](../../../patches/), and [installer source](../../../scripts/installer/).
 
 ---
 
 ## Directory Layout
 
 ```text
-patches/                 Numbered production patches and explicit series order
+patches/                 Contextual production patches in lexical filename order
 scripts/build.py         Apply patches, check, build, and package
 scripts/installer/       Go self-extracting installation and failure restoration
-tests/backend/           Go tests and test-only data, matching upstream package paths
-tests/installer/         Installer checks and native fixture
-tests/ui/                Page checks against the patched source tree
-licenses/                License texts and sole third-party notice source
+tests/test_*_test.go     Actual native Go test cases with package-context annotations
+tests/test_ui.cjs         Actual native UI assertions
+tests/support.py          Native test execution support
+tests/native_*            Manual test fixture and support programs
+assets/                   Data resources, including golden JSON
+licenses/                Original third-party license files
 dist/build/              Fixed ignored server and installer executables
 README.md AGENTS.md LICENSE  Project documentation and license
 .github/                 Release workflow
@@ -36,7 +38,8 @@ The self-extracting installer uses its embedded server and Docker CLI.
 Users select a running container, retain its backup and open 账户评估 in the native administrator sidebar.
 Builds use the existing original Sub2API tree and installed dependencies in a standard temporary workspace, rebuilding the patched native frontend before embedding it.
 Only the compressed server and required license texts enter the installer payload.
-The build assembles the installer in a temporary Go module. Installer checks copy `tests/installer/` Go tests into that module.
+The build assembles the compatibility installer in a temporary Go module.
+The common build repository owns the single authoritative installer test suite.
 Keep installer tests out of production source and keep the raw server as a local build output.
 
 Private configuration and reusable dependency caches remain outside source and package inputs.
@@ -55,7 +58,10 @@ Apply the production patches in this order:
 ```
 
 Keep test source and test-only data out of production patches.
-For checks, copy `tests/backend/` into the temporary tree's `backend/` directory to preserve package-private access.
+Keep all test cases and support code in flat `tests/`. Do not place test programs in assets or embedded source strings.
+Native suites use `// sub2api-package: backend/internal/codexeval` or their corresponding native package path.
+The runner stages native suites in the temporary package to preserve private access and executes discovered cases once.
+Manual `tests/native_*` helpers remain outside automatic `test_*` discovery.
 
 Evidence: [repository layout and private configuration](../../../AGENTS.md).
 
@@ -67,9 +73,9 @@ Evidence: [repository layout and private configuration](../../../AGENTS.md).
 - Keep each evaluation's request types, results, runner, and algorithm in its existing package.
 - Keep the LM detector in `fingerprint.go` and `fingerprint_detector.go`. Retired ModelTrace and probe algorithms have no runtime owner.
 - Keep detector assets under `codexeval/data/lm-detector/` in patch `0002`, including its Git binary hunk.
-- Keep the detector golden fixture under `tests/backend/internal/codexeval/testdata/`, outside production patches.
+- Keep the detector golden fixture at `assets/lm-detector-golden.json`, outside production patches.
 - Keep shared request retries in `model.go` and the shared context decoder in `codex.go`.
-- Keep corresponding Go tests under `tests/backend/` with the same package path.
+- Keep corresponding native Go tests directly under flat `tests/` with explicit package context.
 - Keep history persistence in `codexeval/state.go`.
 - Keep inspection scheduling and notifications in `codexeval/inspection*.go`.
 - Keep native settings persistence and upstream account sending in `internal/service/` additions.
@@ -87,11 +93,11 @@ Examples: [evaluation core](../../../patches/0001-evaluation-core.patch) and [na
 
 | Work | Owner | Existing verification |
 | --- | --- | --- |
-| Change tasks, cancellation, or history | `runtime.go` and `state.go` | `runtime_test.go` |
-| Change automatic Candy inspection | `inspection*.go` | `inspection_test.go` |
-| Change native account transport | `account_codex_eval_service.go` | Sender and lifetime tests under `tests/backend/internal/service/` |
-| Change settings storage | `codex_inspection_settings.go` | Settings tests under `tests/backend/internal/service/` |
-| Change embedded page behavior | `web.go` and `web/` | `tests/ui/sub2api-dropdowns.cjs` |
+| Change tasks, cancellation, or history | `runtime.go` and `state.go` | `tests/test_codexeval_runtime_test.go` |
+| Change automatic Candy inspection | `inspection*.go` | `tests/test_codexeval_inspection_test.go` |
+| Change native account transport | `account_codex_eval_service.go` | `tests/test_service_account_codex_eval_service_test.go` and lifetime suite |
+| Change settings storage | `codex_inspection_settings.go` | `tests/test_service_codex_inspection_settings_test.go` |
+| Change embedded page behavior | `web.go` and `web/` | `tests/test_ui.cjs` |
 
 When adding an embedded asset, update its Go embed declaration and page assembly.
 Keep source, tests, and package ownership aligned with [binary delivery](./minimal-linux-delivery.md).

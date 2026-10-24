@@ -1,3 +1,4 @@
+// sub2api-package: backend/internal/handler/admin
 package admin
 
 import (

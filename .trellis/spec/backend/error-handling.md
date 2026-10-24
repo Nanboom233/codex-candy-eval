@@ -66,7 +66,7 @@ Cancellation stops active streams, retry waits, and later sends. Release each re
 Inspection checks participation before every attempt, outside the runtime mutex.
 An intentional opt-out does not create a failed result or cancel unrelated accounts.
 
-Evidence: [evaluation core](../../../patches/0001-evaluation-core.patch) and [native lifetime test](../../../tests/backend/internal/service/codex_eval_lifetime_test.go).
+Evidence: [evaluation core](../../../patches/0001-evaluation-core.patch) and [native lifetime test](../../../tests/test_service_codex_eval_lifetime_test.go).
 
 ---
 
@@ -104,7 +104,7 @@ References: [evaluation UI](../../../patches/0006-evaluation-ui.patch), [adminis
 
 Verification:
 
-- [Runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go): admission, history, cancellation, and stream outcomes.
-- [Sender tests](../../../tests/backend/internal/service/account_codex_eval_service_test.go): native transport and conversion errors.
-- [Inspection tests](../../../tests/backend/internal/codexeval/inspection_test.go): confirmations, cancellation, priorities, and notification failures.
-- [Shared runner](../../../tests/backend/internal/codexeval/model_test.go): retry limits, request reuse, accumulated usage, validators, final errors, and cancellation.
+- [Runtime tests](../../../tests/test_codexeval_runtime_test.go): admission, history, cancellation, and stream outcomes.
+- [Sender tests](../../../tests/test_service_account_codex_eval_service_test.go): native transport and conversion errors.
+- [Inspection tests](../../../tests/test_codexeval_inspection_test.go): confirmations, cancellation, priorities, and notification failures.
+- [Shared runner](../../../tests/test_codexeval_model_test.go): retry limits, request reuse, accumulated usage, validators, final errors, and cancellation.

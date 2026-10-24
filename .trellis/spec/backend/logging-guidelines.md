@@ -59,7 +59,7 @@ Evidence: results and trace samples in the [evaluation core](../../../patches/00
 - Retain cancellation, incomplete response, and invalid-answer distinctions in the owning evaluation flow.
 - Use test failure messages and synthetic senders when investigating local behavior.
 
-Examples: stream errors in the [evaluation core](../../../patches/0001-evaluation-core.patch) and save failures in [runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go).
+Examples: stream errors in the [evaluation core](../../../patches/0001-evaluation-core.patch) and save failures in [runtime tests](../../../tests/test_codexeval_runtime_test.go).
 
 ---
 
@@ -73,6 +73,6 @@ Examples: stream errors in the [evaluation core](../../../patches/0001-evaluatio
 Inspection settings reads omit notification secrets and return configured flags.
 Empty secret updates retain saved values. Do not expose saved values in screenshots or reports.
 
-Evidence: [private configuration rules](../../../AGENTS.md), [native inspection](../../../patches/0005-inspection.patch), and [UI checks](../../../tests/ui/sub2api-dropdowns.cjs).
+Evidence: [private configuration rules](../../../AGENTS.md), [native inspection](../../../patches/0005-inspection.patch), and [UI checks](../../../tests/test_ui.cjs).
 
 Current errors can include upstream text. Check them for sensitive content before you share a report. This repository does not provide a universal redaction layer.

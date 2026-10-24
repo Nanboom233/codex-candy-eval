@@ -1,9 +1,11 @@
+// sub2api-package: backend/internal/codexeval
 package codexeval
 
 import (
 	"encoding/json"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,7 +13,7 @@ import (
 )
 
 func TestFingerprintUpstreamParity(t *testing.T) {
-	raw, err := os.ReadFile("testdata/lm-detector-golden.json")
+	raw, err := os.ReadFile(filepath.Join(os.Getenv("SUB2API_ASSETS"), "lm-detector-golden.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

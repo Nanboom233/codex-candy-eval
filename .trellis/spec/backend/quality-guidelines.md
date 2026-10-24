@@ -3,10 +3,11 @@
 ## Current Sub2API scope
 
 Use [administrator evaluation](./runtime-installation.md), [native inspection](./native-inspection.md), and [binary delivery](./minimal-linux-delivery.md) for current contracts.
-The delivery targets Sub2API v0.2.17 on Linux/amd64.
-The installer also accepts v0.2.16 as an upgrade source.
+The delivery targets Sub2API v0.2.18 on Linux/amd64.
+Installer version mismatches or unresolved probes produce advisory warnings and explicit confirmation, without a release allowlist.
 Use the original Sub2API source tree and this repository's native evaluation module.
-Active integration lives in numbered patches under `patches/`. All tests live under `tests/`.
+Active integration lives in contextual `patches/*.patch` files. All test cases and support code live in flat `tests/`.
+Keep `assets/` for data resources only.
 Use [Directory Structure](./directory-structure.md) for file ownership.
 
 For native behavior changes, use the approved focused checks:
@@ -22,13 +23,14 @@ Check affected scripts, resources, and references.
 Directory and documentation changes do not require another product build.
 Report actual failures, skipped checks, and execution limits.
 
-Use `tests/ui/sub2api-dropdowns.cjs` for existing native page assertions.
-Use `tests/installer/native_inspection_fixture.py` with the retained `sub2api-codex-eval-test` container for approved runtime checks.
-Its support files are `native_fixture_start.sh` and `native_fixture_supplier.py` in the same directory.
-Use [the focused Go installer tests](../../../tests/installer/installer_test.go) for self-extraction and the Docker transaction.
-Run these tests in the build's temporary host-platform installer module. Keep Linux/amd64 release flags separate.
-Reuse the existing fake-Docker and local HTTP harness for changed installer behavior.
-Do not overwrite the retained container's `/app/sub2api` fixture launcher for installer checks.
+Use `tests/test_ui.cjs` directly for existing native page assertions.
+Native Go cases live in `tests/test_*_test.go` with `// sub2api-package:` context annotations.
+Use native `go test` against the temporary target package. Execute discovered cases once and stop on failure.
+Keep execution support in `tests/support.py` and manual fixture helpers in flat `tests/native_*` files.
+The common build repository owns the authoritative fake-Docker and local HTTP installer suite.
+Standalone `--check` runs this plugin's backend/UI tests and vet, then compiles the standalone server and installer.
+Keep host test execution separate from Linux/amd64 release flags. Preserve standalone use without requiring a parent checkout.
+No retained Docker container or manual browser session is required for the approved build migration.
 Do not create another suite for retired interfaces.
 
 Preserve native administrator authentication, account transport, cancellation, history errors, and settings storage.
@@ -37,7 +39,7 @@ Use existing result and error owners.
 Review handler, service, runtime, and page fields together when a contract changes.
 Keep generated output outside the user package and work commits.
 
-The task removes compatibility profiles, legacy migrations, shims, and multi-version adapters.
+Compatibility profiles, legacy migrations, shims, and multi-version adapters are retired mechanisms.
 Gateway private keys, directed billing, activation, maintenance, and universal builders are retired mechanisms.
 Race, coverage, full-suite, architecture matrices, and source-resource parity are not current acceptance requirements.
 

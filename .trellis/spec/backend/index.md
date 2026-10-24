@@ -2,9 +2,10 @@
 
 ## Current scope
 
-Active delivery targets Sub2API v0.2.17 Linux/amd64 after the user's approved version update.
+Active delivery targets Sub2API v0.2.18 Linux/amd64.
 Use the existing original Sub2API source and this repository's native evaluation module.
-Current production code lives in numbered patches under `patches/`. All tests live under `tests/`.
+Production code lives in lexically ordered `patches/*.patch` files. All test cases and support code live in flat `tests/`.
+Use `assets/` for data resources only.
 Installation uses one self-extracting Go executable with an embedded server and numbered container selection.
 
 ## Active guidelines
@@ -47,7 +48,9 @@ For changed native code, use the current entry:
 python3 scripts/build.py --source /path/to/original-sub2api --check
 ```
 
-It applies the patch series, attaches existing tests, runs focused tests and vet, builds the frontend/server, and packages fixed outputs.
+It applies contextual patches, runs native tests and vet, builds the frontend/server, and packages fixed outputs.
+Native Go suites use target-package annotations. UI assertions run directly from `tests/test_ui.cjs`.
+The common build repository owns the authoritative installer test suite. Do not retain a second identical suite here.
 Reuse completed baseline and unchanged integration evidence.
 Add focused checks only for changed behavior lacking coverage.
 Format changed Go files and check affected scripts/resources.

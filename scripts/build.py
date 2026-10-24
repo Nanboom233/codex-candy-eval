@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Apply the production patches, check changes, build, and package Sub2API v0.2.17."""
+"""Build the standalone evaluation plugin for Sub2API v0.2.18."""
 import argparse
 import gzip
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = "0.2.18"
 
 
 def run(argv, cwd, env=None):
@@ -19,14 +21,9 @@ def run(argv, cwd, env=None):
 def prepare_tree(source, workspace, check=False):
     tree = workspace / "source"
     shutil.copytree(source, tree, ignore=shutil.ignore_patterns("node_modules", ".git", ".entc"))
-    for name in (ROOT / "patches/series").read_text().splitlines():
-        if not name.strip() or name.startswith("#"):
-            continue
-        print(f"Apply {name}", flush=True)
-        with (ROOT / "patches" / name).open("rb") as patch:
-            subprocess.run(["git", "apply", "--binary", "--unidiff-zero", "--whitespace=nowarn", "-"], cwd=tree, stdin=patch, check=True)
-    if check:
-        shutil.copytree(ROOT / "tests/backend", tree / "backend", dirs_exist_ok=True)
+    for path in sorted((ROOT / "patches").glob("*.patch")):
+        print(f"Apply {path.name}", flush=True)
+        run(["git", "apply", "--binary", path], tree)
     return tree
 
 
@@ -49,13 +46,16 @@ def build(source, workspace, check=False):
     run(["pnpm", "build"], tree / "frontend", env)
     env["GOFLAGS"] = "-mod=readonly"
     if check:
-        run(["node", ROOT / "tests/ui/sub2api-dropdowns.cjs", tree], ROOT, env)
-        run(["go", "test", "-tags=unit", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "-run", "Codex|FingerprintUpstreamParity|FingerprintParseAndChallenges|ExtractHTML|HasStandalone21"], backend, env)
-        run(["go", "vet", "./internal/codexeval", "./internal/service", "./internal/handler/admin", "./internal/server", "./internal/server/routes", "./internal/web"], backend, env)
+        host_env = dict(env, SUB2API_SOURCE=str(tree))
+        for name in ("GOOS", "GOARCH", "CGO_ENABLED"):
+            host_env.pop(name, None)
+        support = runpy.run_path(str(ROOT / "tests/support.py"))
+        support["test_entries"](ROOT, tree, host_env, run)
+        run(["go", "vet", "./internal/server", "./internal/server/routes", "./internal/web"], backend, host_env)
     output = ROOT / "dist/build/sub2api-codex-eval"
     output.parent.mkdir(parents=True, exist_ok=True)
     env.update(GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
-    run(["go", "build", "-v", "-tags=embed", "-trimpath", "-ldflags=-s -w -X main.Version=0.2.17 -X main.BuildType=release", "-o", output, "./cmd/server"], backend, env)
+    run(["go", "build", "-v", "-tags=embed", "-trimpath", f"-ldflags=-s -w -X main.Version={VERSION} -X main.BuildType=release", "-o", output, "./cmd/server"], backend, env)
     return output
 
 
@@ -68,11 +68,10 @@ def prepare_installer(binary, workspace, source):
     (staging / "go.mod").write_text("module sub2api-codex-eval-installer\n\n" + go_version + "\n" + "\n".join(toolchain) + "\n")
     with binary.open("rb") as original, gzip.open(staging / "payload.gz", "wb") as compressed:
         shutil.copyfileobj(original, compressed)
-    license_dir = staging / "LICENSE"
-    license_dir.mkdir()
-    shutil.copyfile(ROOT / "LICENSE", license_dir / "Project-MIT.txt")
-    for text in sorted((ROOT / "licenses").glob("*.txt")):
-        shutil.copyfile(text, license_dir / text.name)
+    license_dir = staging / "licenses/codex-candy-eval"
+    license_dir.mkdir(parents=True)
+    shutil.copyfile(ROOT / "LICENSE", license_dir / "LICENSE")
+    shutil.copytree(ROOT / "licenses", license_dir, dirs_exist_ok=True)
     return staging
 
 
@@ -83,15 +82,8 @@ def package(binary, workspace, source, check=False):
     staging = prepare_installer(binary, workspace, source)
     env = os.environ.copy()
     env["GOFLAGS"] = "-mod=readonly"
-    if check:
-        for test in sorted((ROOT / "tests/installer").glob("*_test.go")):
-            shutil.copyfile(test, staging / test.name)
-        host_env = env.copy()
-        for name in ("GOOS", "GOARCH"):
-            host_env.pop(name, None)
-        run(["go", "test", "."], staging, host_env)
     env.update(GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
-    run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", output, "."], staging, env)
+    run(["go", "build", "-trimpath", f"-ldflags=-s -w -X main.buildVersion={VERSION}", "-o", output, "."], staging, env)
     return output
 
 

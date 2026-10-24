@@ -14,7 +14,8 @@ Owners:
 - `patches/0001-evaluation-core.patch`: inspection-only admission before each Candy request.
 - `patches/0006-evaluation-ui.patch`: settings form, account participation switches, and runtime controls.
 - `patches/0007-sub2api-integration.patch`: routes, account metadata preservation, initialization, and shutdown integration.
-- `tests/backend/`: corresponding package tests and test-only data.
+- Flat `tests/test_*_test.go`: actual native package tests with explicit package context.
+- `tests/test_ui.cjs`: actual native UI assertions. `assets/` contains data only.
 
 ## 2. Signatures
 

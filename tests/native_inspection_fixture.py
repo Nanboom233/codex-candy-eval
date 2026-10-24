@@ -7,7 +7,7 @@ import tempfile
 import time
 import urllib.request
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = "sub2api-codex-eval-test"
 
 
@@ -87,8 +87,8 @@ def main():
     if current["State"]["Running"]:
         docker("stop", "--time", "30", CONTAINER)
     docker("cp", ROOT / "dist/build/sub2api-codex-eval", CONTAINER + ":/app/sub2api-bin")
-    docker("cp", ROOT / "tests/installer/native_fixture_start.sh", CONTAINER + ":/app/sub2api")
-    docker("cp", ROOT / "tests/installer/native_fixture_supplier.py", CONTAINER + ":/app/fixture-supplier.py")
+    docker("cp", ROOT / "tests/native_fixture_start.sh", CONTAINER + ":/app/sub2api")
+    docker("cp", ROOT / "tests/native_fixture_supplier.py", CONTAINER + ":/app/fixture-supplier.py")
     docker("start", CONTAINER)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:

@@ -24,15 +24,17 @@ import (
 )
 
 const binaryPath = "/app/sub2api"
-const stagedPath = "/app/sub2api.codex-eval-new"
+const stagedPath = "/app/sub2api.plugins-new"
 const readinessTimeout = 120 * time.Second
 
-//go:embed payload.gz LICENSE/*
+//go:embed payload.gz licenses
 var assets embed.FS
 
 var elfHeader = []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0x3e, 0}
-var installedVersion = regexp.MustCompile(`\b0\.2\.(16|17)\b`)
-var candidateVersion = regexp.MustCompile(`\b0\.2\.17\b`)
+var buildVersion string
+var versionRecord = regexp.MustCompile(`^Sub2API (\S+) \(commit: [^,\r\n]+, built: [^)\r\n]+\)$`)
+var versionToken = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+var standardLogPrefix = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `)
 
 type container struct {
 	ID    string `json:"Id"`
@@ -52,10 +54,39 @@ type container struct {
 }
 
 type installer struct {
-	in          io.Reader
-	out, errOut io.Writer
-	timeout     time.Duration
-	poll        time.Duration
+	in           io.Reader
+	out, errOut  io.Writer
+	timeout      time.Duration
+	poll         time.Duration
+	reader       *bufio.Reader
+	probeTimeout time.Duration
+}
+
+func (i *installer) readLine(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if i.reader == nil {
+		i.reader = bufio.NewReader(i.in)
+	}
+	type input struct {
+		line string
+		err  error
+	}
+	result := make(chan input, 1)
+	go func() {
+		line, err := i.reader.ReadString('\n')
+		result <- input{line, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case value := <-result:
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(value.line), value.err
+	}
 }
 
 func (i *installer) docker(ctx context.Context, quiet bool, args ...string) (string, error) {
@@ -120,29 +151,6 @@ func (i *installer) selectContainer(ctx context.Context) (container, error) {
 	if len(shown) == 0 {
 		shown = all
 	}
-	type input struct {
-		line string
-		err  error
-	}
-	lines := make(chan input)
-	go func() {
-		scanner := bufio.NewScanner(i.in)
-		for scanner.Scan() {
-			select {
-			case lines <- input{line: scanner.Text()}:
-			case <-ctx.Done():
-				return
-			}
-		}
-		err := scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		select {
-		case lines <- input{err: err}:
-		case <-ctx.Done():
-		}
-	}()
 	for {
 		for n, item := range shown {
 			fmt.Fprintf(i.out, "[%d] %s (%s)\n", n+1, strings.TrimPrefix(item.Name, "/"), shortID(item.ID))
@@ -153,16 +161,11 @@ func (i *installer) selectContainer(ctx context.Context) (container, error) {
 		}
 		for {
 			fmt.Fprint(i.out, "Select: ")
-			var value input
-			select {
-			case <-ctx.Done():
-				return container{}, ctx.Err()
-			case value = <-lines:
+			line, err := i.readLine(ctx)
+			if err != nil {
+				return container{}, err
 			}
-			if value.err != nil {
-				return container{}, value.err
-			}
-			n, err := strconv.Atoi(strings.TrimSpace(value.line))
+			n, err := strconv.Atoi(line)
 			if err != nil {
 				continue
 			}
@@ -381,12 +384,102 @@ func (i *installer) replace(ctx context.Context, cid, source string) error {
 	return err
 }
 
-func (i *installer) validateCandidate(ctx context.Context, cid, source string) (result error) {
-	if err := checkELF(source); err != nil {
+type versionResult struct {
+	version string
+	err     error
+}
+
+func parseVersion(stdout, stderr string) (string, error) {
+	version := ""
+	for _, stream := range []string{stdout, stderr} {
+		for _, line := range strings.Split(stream, "\n") {
+			message := strings.TrimSpace(line)
+			fields := strings.Split(message, "\t")
+			if len(fields) >= 4 && fields[1] == "INFO" && fields[2] == "stdlog" {
+				message = fields[3]
+			} else {
+				message = standardLogPrefix.ReplaceAllString(message, "")
+			}
+			record := versionRecord.FindStringSubmatch(message)
+			if record == nil {
+				continue
+			}
+			if !versionToken.MatchString(record[1]) {
+				return "", fmt.Errorf("Unresolved executable version: %s", record[1])
+			}
+			current := strings.TrimPrefix(record[1], "v")
+			if version != "" && current != version {
+				return "", errors.New("Conflicting executable version records")
+			}
+			version = current
+		}
+	}
+	if version == "" {
+		return "", errors.New("No executable version record")
+	}
+	return version, nil
+}
+
+func (i *installer) probeVersion(ctx context.Context, cid, path string) versionResult {
+	timeout := i.probeTimeout
+	if timeout == 0 {
+		timeout = 15 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := exec.CommandContext(probeCtx, "docker", "exec", cid, path, "-version")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	if probeCtx.Err() != nil {
+		err = probeCtx.Err()
+	}
+	if err != nil {
+		return versionResult{err: fmt.Errorf("Version command failed: %w. %s", err, strings.TrimSpace(stdout.String()+"\n"+stderr.String()))}
+	}
+	version, err := parseVersion(stdout.String(), stderr.String())
+	return versionResult{version: version, err: err}
+}
+
+func (result versionResult) String() string {
+	if result.err != nil {
+		return result.err.Error()
+	}
+	return result.version
+}
+
+func (i *installer) confirm(ctx context.Context) error {
+	fmt.Fprint(i.out, "Continue installation? [y/N] ")
+	line, err := i.readLine(ctx)
+	if err != nil {
+		return fmt.Errorf("Installation canceled: %w", err)
+	}
+	switch strings.ToLower(line) {
+	case "y", "yes":
+		return nil
+	default:
+		return errors.New("Installation canceled.")
+	}
+}
+
+func (i *installer) confirmVersions(ctx context.Context, installed, candidate versionResult) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if installed.err == nil && candidate.err == nil && installed.version == buildVersion && candidate.version == buildVersion {
+		return nil
+	}
+	fmt.Fprintf(i.errOut, "Version warning. Build: %s\nInstalled: %s\nCandidate: %s\n", buildVersion, installed, candidate)
+	return i.confirm(ctx)
+}
+
+func (i *installer) validateCandidate(ctx context.Context, cid, source string) (version versionResult, result error) {
+	if err := checkELF(source); err != nil {
+		return version, err
+	}
 	if _, err := i.docker(ctx, false, "cp", source, cid+":"+stagedPath); err != nil {
-		return err
+		return version, err
 	}
 	defer func() {
 		// An interrupt must not skip removal of the staged candidate.
@@ -394,16 +487,9 @@ func (i *installer) validateCandidate(ctx context.Context, cid, source string) (
 		result = errors.Join(result, err)
 	}()
 	if _, err := i.docker(ctx, false, "exec", "-u", "0", cid, "chmod", "755", stagedPath); err != nil {
-		return err
+		return version, err
 	}
-	version, err := i.docker(ctx, true, "exec", cid, stagedPath, "-version")
-	if err != nil {
-		return err
-	}
-	if !candidateVersion.MatchString(version) {
-		return fmt.Errorf("Expected candidate Sub2API v0.2.17, received: %s", strings.TrimSpace(version))
-	}
-	return nil
+	return i.probeVersion(ctx, cid, stagedPath), nil
 }
 
 func (i *installer) install(ctx context.Context, source string) error {
@@ -416,15 +502,16 @@ func (i *installer) install(ctx context.Context, source string) error {
 	if !item.State.Running {
 		return errors.New("Select a running container.")
 	}
-	fmt.Fprintln(i.out, "[1/4] Check v0.2.17 and the local binary.")
-	version, err := i.docker(ctx, true, "exec", cid, binaryPath, "-version")
+	fmt.Fprintln(i.out, "[1/4] Check executable versions and the local binary.")
+	installed := i.probeVersion(ctx, cid, binaryPath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	candidate, err := i.validateCandidate(ctx, cid, source)
 	if err != nil {
 		return err
 	}
-	if !installedVersion.MatchString(version) {
-		return fmt.Errorf("Expected Sub2API v0.2.16 or v0.2.17, received: %s", strings.TrimSpace(version))
-	}
-	if err := i.validateCandidate(ctx, cid, source); err != nil {
+	if err := i.confirmVersions(ctx, installed, candidate); err != nil {
 		return err
 	}
 	fmt.Fprintln(i.out, "[2/4] Back up the current executable.")
@@ -466,7 +553,7 @@ func (i *installer) install(ctx context.Context, source string) error {
 		fmt.Fprintln(i.errOut, "Original executable restored.")
 		return err
 	}
-	fmt.Fprintln(i.out, "Installed. Open 账户评估 in the native administrator sidebar.")
+	fmt.Fprintln(i.out, "Installed. The application is ready.")
 	return nil
 }
 

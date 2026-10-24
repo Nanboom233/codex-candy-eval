@@ -1,6 +1,28 @@
+diff --git a/backend/cmd/server/main.go b/backend/cmd/server/main.go
+index 8494713..7b59a69 100644
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -16,6 +16,7 @@ import (
+ 	"time"
+ 
+ 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
+ 	"github.com/Wei-Shaw/sub2api/internal/config"
+ 	"github.com/Wei-Shaw/sub2api/internal/handler"
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+@@ -183,6 +184,7 @@ func runMainServer() {
+ 	<-quit
+ 
+ 	log.Println("Shutting down server...")
++	codexeval.StopInspection()
+ 
+ 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+ 	defer cancel()
+diff --git a/backend/internal/server/router.go b/backend/internal/server/router.go
+index c0dde5c..d29d1c3 100644
 --- a/backend/internal/server/router.go
 +++ b/backend/internal/server/router.go
-@@ -113,6 +113,10 @@
+@@ -113,6 +113,10 @@ func registerRoutes(
  	cfg *config.Config,
  	redisClient *redis.Client,
  ) {
@@ -11,9 +33,11 @@
  	// 通用路由（健康检查、状态等）
  	routes.RegisterCommonRoutes(r)
  
+diff --git a/backend/internal/server/routes/admin.go b/backend/internal/server/routes/admin.go
+index 315fc20..0f477ed 100644
 --- a/backend/internal/server/routes/admin.go
 +++ b/backend/internal/server/routes/admin.go
-@@ -45,6 +45,15 @@
+@@ -45,6 +45,15 @@ func RegisterAdminRoutes(
  
  		// 账号管理
  		registerAccountRoutes(admin, h, stepUpAuth)
@@ -29,7 +53,7 @@
  
  		// 公告管理
  		registerAnnouncementRoutes(admin, h)
-@@ -391,6 +400,9 @@
+@@ -391,6 +400,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
  		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
  		accounts.DELETE("/:id", h.Admin.Account.Delete)
  		accounts.POST("/:id/test", h.Admin.Account.Test)
@@ -39,18 +63,34 @@
  		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
  		accounts.POST("/:id/refresh", h.Admin.Account.Refresh)
  		accounts.POST("/:id/apply-oauth-credentials", h.Admin.Account.ApplyOAuthCredentials)
-@@ -570,0 +582,2 @@
+@@ -569,6 +581,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+ 	{
+ 		adminSettings.GET("", h.Admin.Setting.GetSettings)
+ 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
 +		adminSettings.GET("/codex-eval-inspection", h.Admin.Setting.GetCodexInspectionSettings)
 +		adminSettings.PUT("/codex-eval-inspection", h.Admin.Setting.UpdateCodexInspectionSettings)
---- a/backend/cmd/server/main.go
-+++ b/backend/cmd/server/main.go
-@@ -18,0 +19 @@
-+	"github.com/Wei-Shaw/sub2api/internal/codexeval"
-@@ -185,0 +187 @@
-+	codexeval.StopInspection()
+ 		adminSettings.POST("/test-smtp", h.Admin.Setting.TestSMTPConnection)
+ 		adminSettings.POST("/send-test-email", h.Admin.Setting.SendTestEmail)
+ 		adminSettings.GET("/email-templates", h.Admin.Setting.ListEmailTemplates)
+diff --git a/backend/internal/service/admin_account.go b/backend/internal/service/admin_account.go
+index 256e488..3ebab25 100644
+--- a/backend/internal/service/admin_account.go
++++ b/backend/internal/service/admin_account.go
+@@ -687,6 +687,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
+ 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+ 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
+ 		for _, key := range []string{
++			"codex_eval_inspection_enabled",
++			"codex_eval_inspection_verdict",
++			"codex_eval_inspection_removed_models",
+ 			"quota_used",
+ 			"quota_daily_used",
+ 			"quota_daily_start",
+diff --git a/backend/internal/web/embed_on.go b/backend/internal/web/embed_on.go
+index d16b1c4..0ea9dfd 100644
 --- a/backend/internal/web/embed_on.go
 +++ b/backend/internal/web/embed_on.go
-@@ -353,6 +353,9 @@
+@@ -353,6 +353,9 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
  }
  
  func shouldBypassEmbeddedFrontend(path string) bool {
@@ -60,20 +100,61 @@
  	trimmed := strings.TrimSpace(path)
  	return strings.HasPrefix(trimmed, "/api/") ||
  		strings.HasPrefix(trimmed, "/v1/") ||
+diff --git a/frontend/src/components/layout/AppSidebar.vue b/frontend/src/components/layout/AppSidebar.vue
+index 1d20fef..19ab40b 100644
 --- a/frontend/src/components/layout/AppSidebar.vue
 +++ b/frontend/src/components/layout/AppSidebar.vue
-@@ -479,0 +480,4 @@
+@@ -481,6 +481,10 @@ const PluginIcon = {
+   render: () => h(Icon, { name: 'cube' })
+ }
+ 
 +const EvaluationIcon = {
 +  render: () => h(Icon, { name: 'beaker' })
 +}
 +
-@@ -795,0 +800 @@
+ const BellIcon = {
+   render: () =>
+     h(
+@@ -793,6 +797,7 @@ const adminNavItems = computed((): NavItem[] => {
+     // 「仅充值」站点连管理端的「订阅管理」入口也一并收起（路由本身不拦截）。
+     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
+     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
 +    { path: '/admin/codex-eval', label: t('nav.accountEvaluation'), icon: EvaluationIcon },
+     { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
+     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
+     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
+diff --git a/frontend/src/i18n/locales/en/common.ts b/frontend/src/i18n/locales/en/common.ts
+index 694dbb7..92767ae 100644
+--- a/frontend/src/i18n/locales/en/common.ts
++++ b/frontend/src/i18n/locales/en/common.ts
+@@ -182,6 +182,7 @@ export default {
+     modelPlaza: 'Model Plaza',
+     subscriptions: 'Subscriptions',
+     accounts: 'Accounts',
++    accountEvaluation: 'Account Evaluation',
+     plugins: 'Plugins',
+     proxies: 'Proxies',
+     redeemCodes: 'Redeem Codes',
+diff --git a/frontend/src/i18n/locales/zh/common.ts b/frontend/src/i18n/locales/zh/common.ts
+index d237724..eef4d0b 100644
+--- a/frontend/src/i18n/locales/zh/common.ts
++++ b/frontend/src/i18n/locales/zh/common.ts
+@@ -182,6 +182,7 @@ export default {
+     modelPlaza: '模型广场',
+     subscriptions: '订阅管理',
+     accounts: '账号管理',
++    accountEvaluation: '账户评估',
+     plugins: '插件管理',
+     proxies: 'IP管理',
+     redeemCodes: '兑换码',
+diff --git a/frontend/src/router/index.ts b/frontend/src/router/index.ts
+index 1881ff3..16ca080 100644
 --- a/frontend/src/router/index.ts
 +++ b/frontend/src/router/index.ts
-@@ -525,0 +526,11 @@
-+    }
-+  },
+@@ -525,6 +525,17 @@ const routes: RouteRecordRaw[] = [
+       descriptionKey: 'admin.accounts.description'
+     }
+   },
 +  {
 +    path: '/admin/codex-eval',
 +    name: 'AdminCodexEval',
@@ -83,22 +164,21 @@
 +      requiresAdmin: true,
 +      title: 'Account Evaluation',
 +      titleKey: 'nav.accountEvaluation'
++    }
++  },
+   {
+     path: '/admin/plugins',
+     name: 'AdminPlugins',
+diff --git a/frontend/src/utils/embedded-url.ts b/frontend/src/utils/embedded-url.ts
+index e70d30b..d1544ba 100644
 --- a/frontend/src/utils/embedded-url.ts
 +++ b/frontend/src/utils/embedded-url.ts
-@@ -25 +25 @@
+@@ -22,7 +22,7 @@ export function buildEmbeddedUrl(
+ ): string {
+   if (!baseUrl) return baseUrl
+   try {
 -    const url = new URL(baseUrl)
 +    const url = new URL(baseUrl, typeof window !== 'undefined' ? window.location.origin : undefined)
---- a/frontend/src/i18n/locales/en/common.ts
-+++ b/frontend/src/i18n/locales/en/common.ts
-@@ -184,0 +185 @@
-+    accountEvaluation: 'Account Evaluation',
---- a/frontend/src/i18n/locales/zh/common.ts
-+++ b/frontend/src/i18n/locales/zh/common.ts
-@@ -184,0 +185 @@
-+    accountEvaluation: '账户评估',
---- a/backend/internal/service/admin_account.go
-+++ b/backend/internal/service/admin_account.go
-@@ -689,0 +690,3 @@
-+			"codex_eval_inspection_enabled",
-+			"codex_eval_inspection_verdict",
-+			"codex_eval_inspection_removed_models",
+     if (userId) {
+       url.searchParams.set(EMBEDDED_USER_ID_QUERY_KEY, String(userId))
+     }

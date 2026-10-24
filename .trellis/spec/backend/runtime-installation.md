@@ -2,8 +2,8 @@
 
 ## 1. Scope / Trigger
 
-Use this contract for the current v0.2.17 administrator evaluation integration.
-Production source lives in the [ordered patch series](../../../patches/series).
+Use this contract for the current v0.2.18 administrator evaluation integration.
+Production source lives in [contextual patches](../../../patches/), applied in lexical filename order.
 The [integration patch](../../../patches/0007-sub2api-integration.patch) adds native routes, initialization, sidebar, URL resolution, page bypass, and navigation translations.
 The current implementation replaces the historical internal-key, activation, billing, maintenance and recovery designs.
 
@@ -213,12 +213,12 @@ Use the existing UI initialization harness for Settings-first entry followed by 
 Check the selected group and account rows without a manual refresh. Exercise that flow in an actual browser.
 The native delayed-stream lifetime test covers start/state request completion and explicit stop through both supported response protocols.
 Normal HTTP request completion preserves background work. Explicit stop cancels supplier work and retains the actual history outcome.
-[Runtime tests](../../../tests/backend/internal/codexeval/runtime_test.go) cover admission, cancellation, history and stream outcomes.
-[Sender tests](../../../tests/backend/internal/service/account_codex_eval_service_test.go) cover native transport and CC failures with observed usage.
-Original algorithm tests live under `tests/backend/` and enter the corresponding temporary upstream packages only for checks.
-The [independent review](../../tasks/10-11-sub2api-runtime-patch/research/fresh-native-check.md) records actual results and limits.
-The [browser/model review](../../tasks/10-11-sub2api-runtime-patch/research/native-browser-model-check.md) records actual Chrome sidebar/icon/iframe/CSP and raw model discovery through UI start to literal upstream sending against the final artifact.
-The [installer/discovery review](../../tasks/10-11-sub2api-runtime-patch/research/installer-disabled-model-check.md) records mixed disabled/enabled lookup, toggle refresh and retained direct model input checks.
+[Runtime tests](../../../tests/test_codexeval_runtime_test.go) cover admission, cancellation, history and stream outcomes.
+[Sender tests](../../../tests/test_service_account_codex_eval_service_test.go) cover native transport and CC failures with observed usage.
+Native suites live directly under flat `tests/`. Package-context annotations preserve private access in the temporary upstream packages.
+The [independent review](../../tasks/archive/2026-10/10-11-sub2api-runtime-patch/research/fresh-native-check.md) records actual results and limits.
+The [browser/model review](../../tasks/archive/2026-10/10-11-sub2api-runtime-patch/research/native-browser-model-check.md) records actual Chrome sidebar/icon/iframe/CSP and raw model discovery through UI start to literal upstream sending against the final artifact.
+The [installer/discovery review](../../tasks/archive/2026-10/10-11-sub2api-runtime-patch/research/installer-disabled-model-check.md) records mixed disabled/enabled lookup, toggle refresh and retained direct model input checks.
 Reuse completed pristine and local integration evidence unless a change or concrete finding requires another check.
 No race, coverage, full-suite, architecture matrix or source-resource parity gate is required.
 

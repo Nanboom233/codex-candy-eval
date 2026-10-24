@@ -153,9 +153,15 @@ diff --git a/backend/internal/repository/http_upstream.go b/backend/internal/rep
 index ff19b03..6ff02dd 100644
 --- a/backend/internal/repository/http_upstream.go
 +++ b/backend/internal/repository/http_upstream.go
-@@ -306 +306 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response,
+@@ -306,7 +306,7 @@
+ 	resp, err := servertiming.Do(client, req.WithContext(ctx))
+ 	if err != nil {
+ 		cancel()
 -		return resp, err
 +		return resp, &service.HTTPUpstreamRequestError{Err: err}
+ 	}
+ 	decompressResponseBody(resp)
+ 	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
 new file mode 100644
 index 0000000..2f41f43
@@ -462,7 +468,10 @@ diff --git a/backend/internal/service/http_upstream_port.go b/backend/internal/s
 index e8e7695..d690dc4 100644
 --- a/backend/internal/service/http_upstream_port.go
 +++ b/backend/internal/service/http_upstream_port.go
-@@ -8,0 +9,7 @@ import (
+@@ -6,6 +6,13 @@
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+ )
+ 
 +// HTTPUpstreamRequestError preserves an error from an actual transport attempt.
 +type HTTPUpstreamRequestError struct{ Err error }
 +
@@ -470,3 +479,6 @@ index e8e7695..d690dc4 100644
 +func (e *HTTPUpstreamRequestError) Unwrap() error          { return e.Err }
 +func (e *HTTPUpstreamRequestError) RequestAttempted() bool { return true }
 +
+ // HTTPUpstream 上游 HTTP 请求接口
+ // 用于向上游 API（Claude、OpenAI、Gemini 等）发送请求
+ type HTTPUpstream interface {

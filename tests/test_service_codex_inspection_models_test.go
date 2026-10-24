@@ -1,3 +1,4 @@
+// sub2api-package: backend/internal/service
 package service
 
 import (

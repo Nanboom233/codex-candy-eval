@@ -1,5 +1,6 @@
 //go:build unit
 
+// sub2api-package: backend/internal/service
 package service_test
 
 import (

@@ -117,7 +117,7 @@ Bad: a null history file must not become an empty snapshot after the next result
 Use existing native evaluation persistence tests for load protection, latest-20 retention, saves, and clear rollback.
 Extend that fixture for retained maps, original variants, migration copies, write failures, and schema-2 reload.
 Do not add a separate migration suite.
-Use `tests/backend/internal/service/codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
+Use `tests/test_service_codex_inspection_settings_test.go` for settings persistence, secrets, validation, and write failures.
 Reuse existing persistence evidence. Add focused checks only for changed storage behavior without coverage.
 Account participation needs key-only-save and full-edit-preservation assertions, without a separate restart or copy test matrix.
 Extend the same metadata fixtures for the verdict key and absent-state normal default.
