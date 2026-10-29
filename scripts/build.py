@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the standalone evaluation plugin for Sub2API v0.2.18."""
+"""Build the standalone evaluation plugin for Sub2API v0.2.19."""
 import argparse
 import gzip
 import os
@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.18"
+VERSION = "0.2.19"
 
 
 def run(argv, cwd, env=None):

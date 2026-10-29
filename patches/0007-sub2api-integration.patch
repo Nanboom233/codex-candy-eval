@@ -77,7 +77,7 @@ index 256e488..3ebab25 100644
 --- a/backend/internal/service/admin_account.go
 +++ b/backend/internal/service/admin_account.go
 @@ -687,6 +687,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
- 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+ 		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
  		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
  		for _, key := range []string{
 +			"codex_eval_inspection_enabled",
