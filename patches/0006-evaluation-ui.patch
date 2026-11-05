@@ -90,7 +90,7 @@ new file mode 100644
 index 0000000..3e1c544
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
-@@ -0,0 +1,582 @@
+@@ -0,0 +1,583 @@
 +"use strict";
 +const BASE = "/api/v1/admin/codex-eval";
 +const PREF_STORE = "sub2api-codex-eval.prefs";
@@ -393,6 +393,7 @@ index 0000000..3e1c544
 +  inspectionState = { results: [] };
 +  inspectionSettingsLoaded = false;
 +  inspectionDirtyFields.clear();
++  inspectionField("ntfy_password").value = "";
 +  loadError = storageError = "";
 +  for (const collection of [candySelected, fpSelected, plSelected, candyExpanded, fpExpanded, plExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
 +  for (const id of notices.keys()) setNotice(id, "");
@@ -1357,7 +1358,7 @@ new file mode 100644
 index 0000000..630cbc0
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
-@@ -0,0 +1,501 @@
+@@ -0,0 +1,504 @@
 +"use strict";
 +const INSPECTION_SETTINGS = "/api/v1/admin/settings/codex-eval-inspection";
 +const CANDY_SELECTION_FIELDS = { group_id: "group", account_type: "credential-type", account_plan: "credential-plan", enabled_only: "enabled-only" };
@@ -1386,7 +1387,7 @@ index 0000000..630cbc0
 +function fillInspectionSettings(settings, preserveDirty = false) {
 +  for (const [name, value] of Object.entries(settings)) {
 +    const field = inspectionField(name);
-+    if (!field || preserveDirty && inspectionDirtyFields.has(name)) continue;
++    if (!field || name === "ntfy_password" || preserveDirty && inspectionDirtyFields.has(name)) continue;
 +    if (name === "group_id") {
 +      const changed = selectedGroup !== value;
 +      selectedGroup = value;
@@ -1408,12 +1409,14 @@ index 0000000..630cbc0
 +    else field.value = value ?? "";
 +  }
 +  if (!preserveDirty || !inspectionDirtyFields.has("enabled")) document.getElementById("inspection-enabled").checked = settings.enabled;
++  inspectionField("ntfy_password").placeholder = settings.ntfy_password_configured ? "已配置，留空保持不变" : "";
 +  updateInspectionVisibility();
 +}
 +function updateInspectionVisibility() {
 +  document.getElementById("inspection-auto-fields").hidden = !document.getElementById("inspection-enabled").checked;
 +  document.getElementById("inspection-priority-fields").hidden = !inspectionField("adjust_priority").checked;
 +  $("inspection-model-fields").hidden = !inspectionField("control_models").checked;
++  $("inspection-notification-fields").hidden = !inspectionField("notify_enabled").checked;
 +  if ($("inspection-model-fields").hidden) closeInspectionModels();
 +}
 +function inspectionRemovedModels() { return JSON.parse(inspectionField("degraded_remove_models").value || "[]"); }
@@ -1797,6 +1800,7 @@ index 0000000..630cbc0
 +    if (!field.name) continue;
 +    body[field.name] = field.name === "degraded_remove_models" ? inspectionRemovedModels()
 +      : field.type === "checkbox" ? field.checked : field.type === "number" ? Number(field.value)
++      : field.name === "ntfy_password" && !inspectionDirtyFields.has(field.name) ? ""
 +      : field.type === "password" ? field.value : field.value.trim();
 +  }
 +  inspectionSettingsSaving = true;
@@ -1834,7 +1838,7 @@ index 0000000..630cbc0
 +  inspectionField("effort").innerHTML = `<option value="">未指定</option>` + DEFAULT_EFFORTS.map((value) => `<option>${value}</option>`).join("");
 +  const changed = (event) => {
 +    const name = event.target.name || (event.target.id === "inspection-enabled" ? "enabled" : "");
-+    if (!name) return;
++    if (!name || name === "ntfy_password" && event.type === "change") return;
 +    updateInspectionVisibility();
 +    markInspectionEdit(name);
 +  };
@@ -2050,7 +2054,7 @@ index 0000000..f1b5b12
 +.model-custom-row { display: flex; gap: 8px; }
 +.settings-card .model-custom-row input { flex: 1; min-width: 0; }
 +.settings-card .model-picker input { height: auto; padding: 10px 16px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; color: #111827; font-size: 14px; line-height: 20px; }
-+.model-picker input::placeholder { color: #9ca3af; }
++.model-picker input::placeholder, input[name="ntfy_password"]::placeholder { color: #9ca3af; }
 +.model-picker input:focus { outline: 0; border-color: #14b8a6; box-shadow: 0 0 0 2px rgb(20 184 166 / .3); }
 +.model-add { flex-shrink: 0; padding: 8px 16px; border: 0; border-radius: 8px; background: #f0fdfa; color: #0d9488; font-size: 14px; line-height: 20px; font-weight: 500; cursor: pointer; }
 +.model-add:hover { background: #ccfbf1; }
@@ -2386,7 +2390,7 @@ index 0000000..f1b5b12
 +}
 +@media (max-width: 900px) {
 +  #pl-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-+  #pl-toolbar > .btn { grid-column: 1 / -1; min-width: 0; width: 100%; }
++  #pl-toolbar > .btn { min-width: 0; width: 100%; }
 +}
 +@media (max-width: 768px) {
 +  :root { --list-padding: 16px; }
@@ -2428,7 +2432,7 @@ index 0000000..f1b5b12
 +  .answer-toggle { justify-self: end; }
 +  .answer-content { grid-column: 1 / -1; }
 +  .result-dialog { --dialog-padding: 16px; }
-+  :is(#fp-toolbar, #pl-toolbar) > .btn { grid-column: 1 / -1; }
++  #fp-toolbar > .btn { grid-column: 1 / -1; }
 +}
 +@media (prefers-reduced-motion: reduce) {
 +  .spin, #refresh[aria-busy="true"] .icon { animation: none; }
@@ -2497,7 +2501,7 @@ new file mode 100644
 index 0000000..9572706
 --- /dev/null
 +++ b/backend/internal/codexeval/web/ui.html
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,184 @@
 +<!doctype html>
 +<html lang="zh-CN">
 +<!--FINGERPRINT_LICENSE-->
@@ -2627,8 +2631,8 @@ index 0000000..9572706
 +            </div>
 +          </section>
 +          <section class="card settings-card">
-+            <div class="settings-card-header"><h2>通知</h2></div>
-+            <div class="settings-card-body settings-grid">
++            <div class="settings-card-header"><h2>通知</h2><label class="switch"><input name="notify_enabled" type="checkbox" role="switch" aria-label="通知" aria-controls="inspection-notification-fields"></label></div>
++            <div id="inspection-notification-fields" class="settings-card-body settings-grid">
 +              <label class="field"><span>ntfy 服务器</span><input name="ntfy_server" type="url"></label>
 +              <label class="field"><span>ntfy 主题</span><input name="ntfy_topic"></label>
 +              <label class="field"><span>ntfy 用户名</span><input name="ntfy_username" autocomplete="off"></label>
@@ -2664,6 +2668,7 @@ index 0000000..9572706
 +  <footer class="page-footer">
 +    <span>© 2026 <a href="https://github.com/haowang02/cpa-plugin-codex-candy-eval" target="_blank" rel="noopener noreferrer">CPA Codex Candy Eval</a></span>
 +    <span>&thinsp;·&thinsp;<a href="https://github.com/haowang02/cpa-plugin-codex-candy-eval/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT</a></span>
++    <span>&thinsp;·&thinsp;<a href="https://github.com/Wei-Shaw/sub2api/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">LGPL-3.0</a></span>
 +    <span>&thinsp;·&thinsp;版本 v<!--PLUGIN_VERSION--></span>
 +  </footer>
 +
@@ -2671,7 +2676,7 @@ index 0000000..9572706
 +  <script>/*CJK_FRIENDLY_SCRIPT*/</script>
 +  <script>/*TEXMATH_SCRIPT*/</script>
 +  <script>/*TEMML_SCRIPT*/</script>
-+  
++
 +  <script>/*CATALOG_SCRIPT*/</script>
 +  <script>/*COMPONENTS_SCRIPT*/</script>
 +  <script>/*CANDY_SCRIPT*/</script>

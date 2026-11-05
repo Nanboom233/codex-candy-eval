@@ -52,7 +52,8 @@ Each value contains the JSON representation of that field.
 | Fields | Type and default |
 | --- | --- |
 | `enabled`, `adjust_priority`, `control_models` | Boolean, false |
-| `degraded_remove_models` | String array, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-6-astra` |
+| `notify_enabled` | Boolean, true when absent. Preserve a stored false. |
+| `degraded_remove_models` | String array, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-6-astra`, `gpt-6.1-terra` |
 | `model`, `effort` | String, `gpt-6.1-sol` and `low` |
 | `max_tests_per_account` | Integer, 3 |
 | `min_wait_minutes`, `max_wait_minutes` | Integer, 15 and 35 |
@@ -99,13 +100,20 @@ Add only the account-level `启用自动巡检` column to the Candy list. Keep t
 Do not add a separate inspection card or result columns.
 Keep other evaluation headers unchanged. Wrap the Candy header on narrow screens without horizontal overflow.
 Align both Candy row switches on the same baseline at narrow widths, regardless of history length.
-Do not render notification configured-status text. Keep secret redaction and blank-secret preservation.
+Use the gray `已配置，留空保持不变` ntfy password placeholder when `ntfy_password_configured` is true.
+Start with an empty input on a fresh page load. Retain entered ntfy secrets as masked values during that page session.
+Saves and settings-tab rereads do not clear them. A page reload starts empty again.
+Do not store entered secrets in browser storage. Unrelated saves must not resubmit an unchanged retained secret.
+Password blur after automatic save must not mark the unchanged value dirty again. Use its input event to track edits.
+Show no configured placeholder without a saved secret. Do not add a separate status label or extend this placeholder to Bark.
+Keep secret redaction and blank-secret preservation.
 Catalog and save responses must preserve newer unsaved form edits.
 Read native settings on each settings-tab entry and retain fields with unsaved edits.
 Valid input edits save automatically after a short debounce. Serialize writes through one owner.
 Invalid input stays visible without replacing saved valid settings. Show actual validation and write errors.
-A save invalidates older reads. A successful save clears only submitted fields that have not changed again.
-Apply returned public values to those fields, including clearing submitted secret inputs.
+A save invalidates older reads. A successful save clears only submitted dirty markers whose fields have not changed again.
+Apply returned public values to those fields while retaining the user's same-page ntfy secret input.
+Other secret fields retain their existing behavior.
 Preserve edits made during the save, including when another field changed.
 Evaluation refresh and clear controls stay on their evaluation tabs.
 
@@ -121,6 +129,10 @@ Retain selected IDs absent from the catalog. An empty catalog still permits cust
 Trim model names and remove duplicates while preserving order.
 Absent removal settings select defaults. An explicit empty list stays empty.
 Use the existing model-name rules. Reject wildcard entries and the reserved name `blacklist`.
+
+Place the `通知` header switch beside its card title, parallel to priority adjustment and model control.
+Use one `notify_enabled` setting for both ntfy and Bark. Hide its fields while off, retaining their values.
+Reuse the current save owner and keep all three action switches independent.
 
 ### Scheduling and state
 
@@ -236,9 +248,13 @@ Recheck account availability, priority, and busy state before an update.
 An already matching actual priority needs no write.
 Stable states also use their configured target priority, including after adjustment becomes enabled.
 Do not add automatic priority-write retries.
-After actual priority updates succeed, send configured ntfy/Bark notifications.
-Notification text must not claim three tests for a stable-state correction.
-Notification failures remain separate and do not reverse successful updates.
+After confirmed verdict changes save successfully, collect normal-to-degraded and degraded-to-normal transitions for notification.
+Use the fresh saved verdict comparison, independently of priority adjustment and model control.
+An already matching priority or failed priority write does not suppress a saved transition.
+Stable-state priority repair, failed verdict saves, incomplete confirmations, and manual Candy tests do not notify.
+Send existing per-direction batches only when `notify_enabled` is true and a channel is configured.
+Describe the verdict transition without claiming an optional priority update occurred.
+Notification failures retain `notification_error` and do not reverse saved verdicts or priority updates. The page stays silent.
 
 ## 4. Validation & Error Matrix
 
@@ -265,11 +281,13 @@ Notification failures remain separate and do not reverse successful updates.
 | Account state or priority changes before update | Retain the backend account error without changing priority |
 | Verdict save fails | Keep the previous verdict. Do not write priority or send a success notification. |
 | Compound model update fails | Keep mapping, pending removals, and verdict unchanged. Do not write priority. |
-| Priority update fails after a verdict save | Retain the saved verdict and backend error without automatic retry |
+| Priority update fails after a verdict save | Retain the verdict and backend error. A saved transition can still notify. |
 | Account participation is false | Skip inspection selection and later sends. Keep manual tests and normal traffic usable. |
 | Account switch save fails | Keep the saved value and show the error beside that switch |
 | Account participation field is absent in the PUT body | Reject the request with 400 |
-| Notification fails after update | Keep the update and backend `notification_error`. Show no page notification error prompt. |
+| Notification is off or no channel is configured | Keep verdict/control behavior without an outbound notification |
+| Stable verdict needs priority repair | Apply existing priority rules without transition notification |
+| Notification fails after a saved transition | Keep the saved state and backend `notification_error`. Show no page notification error prompt. |
 
 ## 5. Good / Base / Bad Cases
 
@@ -289,7 +307,7 @@ Bad: recovery overwrites a model mapping that an administrator changed. Keep tha
 
 ## 6. Tests Required
 
-Use the existing build/check entry and focused inspection, runtime, admin, service, and UI tests.
+Use the default `python3 scripts/build.py` entry and existing inspection, runtime, admin, service, and UI tests.
 Use one adjustment-off lifecycle for confirmed degradation, a stable wrong round, confirmed recovery, and a stable correct round.
 Extend existing transition, mixed-answer, provider-error, cancellation, and opt-out cases with verdict assertions.
 Extend those cases for stable-state controls, matching-write suppression, and application before unrelated accounts complete.
@@ -302,6 +320,9 @@ Extend settings and metadata fixtures for model-control fields and pending-remov
 Use focused account-helper cases for partial/final removal, native admission, recovery, skipped entries, and failed compound writes.
 Reuse the existing adjustment-off lifecycle and unchanged sender evidence. Add no separate restart or sender matrix.
 Extend existing UI cases for the array field and widget. Compare the actual render with the native selector.
+Extend existing settings cases for the notification default, stored false, and saved-secret placeholder.
+Update the existing lifecycle and write-failure cases for saved-transition delivery and notification switch-off.
+Keep common fixtures and unchanged cases. Do not add another lifecycle or public-topic send.
 
 ## 7. Wrong vs Correct
 

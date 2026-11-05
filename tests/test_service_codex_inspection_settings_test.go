@@ -99,14 +99,15 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	repo := &codexInspectionSettingsRepo{values: map[string]string{}}
 	s := &SettingService{settingRepo: repo}
 	settings, err := s.GetCodexInspectionSettings(ctx)
-	if err != nil || settings.Enabled || settings.MaxTestsPerAccount != 3 || settings.MinWaitMinutes != 15 || settings.MaxWaitMinutes != 35 || settings.NormalPriority != 10 {
+	if err != nil || settings.Enabled || !settings.NotifyEnabled || settings.MaxTestsPerAccount != 3 || settings.MinWaitMinutes != 15 || settings.MaxWaitMinutes != 35 || settings.NormalPriority != 10 {
 		t.Fatalf("wrong defaults: %+v %v", settings, err)
 	}
-	if settings.ControlModels || !reflect.DeepEqual(settings.DegradedRemoveModels, []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"}) {
+	if settings.ControlModels || !reflect.DeepEqual(settings.DegradedRemoveModels, []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"}) {
 		t.Fatalf("wrong model control defaults: %+v", settings)
 	}
 	settings.Enabled = true
 	settings.ControlModels = true
+	settings.NotifyEnabled = false
 	settings.DegradedRemoveModels = []string{" gpt-6-sol ", "custom/model", "gpt-6-sol"}
 	settings.GroupID = 202
 	settings.AccountType, settings.AccountPlan, settings.EnabledOnly = "oauth", "Pro ALL", true
@@ -118,7 +119,7 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	// A fresh service reads the same native setting rows.
 	restarted := &SettingService{settingRepo: repo}
 	saved, err := restarted.GetCodexInspectionSettings(ctx)
-	if err != nil || !saved.Enabled || saved.GroupID != 202 || saved.AccountType != "oauth" || saved.AccountPlan != "Pro ALL" || !saved.EnabledOnly || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
+	if err != nil || !saved.Enabled || saved.NotifyEnabled || saved.GroupID != 202 || saved.AccountType != "oauth" || saved.AccountPlan != "Pro ALL" || !saved.EnabledOnly || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
 		t.Fatalf("restart lost settings: %+v %v", saved.Public(), err)
 	}
 	public := saved.Public()

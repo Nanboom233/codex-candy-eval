@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Use this contract for the current v0.2.18 administrator evaluation integration.
+Use this contract for the current v0.2.19 administrator evaluation integration.
 Production source lives in [contextual patches](../../../patches/), applied in lexical filename order.
 The [integration patch](../../../patches/0007-sub2api-integration.patch) adds native routes, initialization, sidebar, URL resolution, page bypass, and navigation translations.
 The current implementation replaces the historical internal-key, activation, billing, maintenance and recovery designs.
@@ -101,7 +101,7 @@ After sequence acceptance, three valid answers produce probabilities. One or two
 Sequence rejection produces `attribution.decision: not_model` without rankings or probabilities.
 Parse the longest numeric run within 64,000 bytes. Keep values from 1 through 355.
 Require `max(80, ceil(expected * 0.55))` values and truncate excess values to the expected count.
-Sequence acceptance requires median lag-one autocorrelation at most -0.23 and median small-step share at most 0.05.
+Sequence acceptance requires median lag-one autocorrelation at most -0.23 or median small-step share at most 0.05.
 Explicit failed or cancelled status takes precedence over attribution.
 Cancellation before three completed challenge events remains cancelled.
 Comparison aliases do not change the literal sent model.
@@ -163,6 +163,9 @@ Use the same-origin session in the frame rather than guessing its external origi
 Page-only headers permit same-origin framing and original inline scripts/styles.
 Native parent/global headers remain unchanged. Rebuild the patched native frontend before embedding it in the server.
 Retain original layout, controls, Markdown/math and Pelican sandbox behavior.
+Preserve the original CPA footer attribution, upstream MIT link, and dynamic version.
+Immediately after MIT, show the user-requested `LGPL-3.0` link to `https://github.com/Wei-Shaw/sub2api/blob/main/LICENSE`.
+License-file changes do not authorize other footer rewrites.
 Remove assistant-added explanatory small print and tooltips.
 Keep field labels, units, actual errors, result data, progress, and concise action feedback.
 Use native light/dark theme variables.

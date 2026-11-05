@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"embed"
 	"encoding/json"
@@ -17,9 +15,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -27,10 +25,9 @@ const binaryPath = "/app/sub2api"
 const stagedPath = "/app/sub2api.plugins-new"
 const readinessTimeout = 120 * time.Second
 
-//go:embed payload.gz licenses
+//go:embed payloads licenses
 var assets embed.FS
 
-var elfHeader = []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0x3e, 0}
 var buildVersion string
 var versionRecord = regexp.MustCompile(`^Sub2API (\S+) \(commit: [^,\r\n]+, built: [^)\r\n]+\)$`)
 var versionToken = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
@@ -58,30 +55,30 @@ type installer struct {
 	out, errOut  io.Writer
 	timeout      time.Duration
 	poll         time.Duration
-	reader       *bufio.Reader
+	lines        chan lineInput
 	probeTimeout time.Duration
+	ui           *terminalUI
+	apple        bool
+	arch         string
+}
+
+type lineInput struct {
+	line string
+	err  error
 }
 
 func (i *installer) readLine(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if i.reader == nil {
-		i.reader = bufio.NewReader(i.in)
-	}
-	type input struct {
-		line string
-		err  error
-	}
-	result := make(chan input, 1)
-	go func() {
-		line, err := i.reader.ReadString('\n')
-		result <- input{line, err}
-	}()
+	i.prepareInput()
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case value := <-result:
+	case value, ok := <-i.lines:
+		if !ok {
+			return "", io.EOF
+		}
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
@@ -90,16 +87,19 @@ func (i *installer) readLine(ctx context.Context) (string, error) {
 }
 
 func (i *installer) docker(ctx context.Context, quiet bool, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	// Only the installation context cancels Docker. Terminal signals must not interrupt rollback commands.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	name := "docker"
+	if i.apple {
+		name = "container"
+	}
+	return i.command(ctx, quiet, name, args...)
+}
+
+func (i *installer) command(ctx context.Context, quiet bool, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	isolateCommand(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	if !quiet {
-		fmt.Fprint(i.out, stdout.String())
-		fmt.Fprint(i.errOut, stderr.String())
-	}
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -108,28 +108,42 @@ func (i *installer) docker(ctx context.Context, quiet bool, args ...string) (str
 		if message == "" {
 			message = strings.TrimSpace(stdout.String())
 		}
-		return "", fmt.Errorf("docker %s failed: %w: %s", strings.Join(args[:min(2, len(args))], " "), err, message)
+		return "", fmt.Errorf(i.msg("%s %s failed: %w: %s"), name, strings.Join(args[:min(2, len(args))], " "), err, message)
+	}
+	if !quiet {
+		if stdout.Len()+stderr.Len() > 0 {
+			i.stopProgress()
+		}
+		fmt.Fprint(i.out, stdout.String())
+		fmt.Fprint(i.errOut, stderr.String())
 	}
 	return stdout.String(), nil
 }
 
 func (i *installer) inspect(ctx context.Context, cid string) (container, error) {
+	if i.apple {
+		return i.inspectApple(ctx, cid)
+	}
 	var items []container
 	output, err := i.docker(ctx, true, "inspect", cid)
 	if err != nil {
 		return container{}, err
 	}
 	if err := json.Unmarshal([]byte(output), &items); err != nil {
-		return container{}, fmt.Errorf("Read Docker inspect: %w", err)
+		return container{}, fmt.Errorf(i.msg("Read container details: %w"), err)
 	}
 	if len(items) != 1 {
-		return container{}, errors.New("Expected one container in Docker inspect.")
+		return container{}, errors.New(i.msg("Expected one container."))
 	}
 	return items[0], nil
 }
 
 func (i *installer) selectContainer(ctx context.Context) (container, error) {
-	ids, err := i.docker(ctx, true, "ps", "-q")
+	list := "ps"
+	if i.apple {
+		list = "list"
+	}
+	ids, err := i.docker(ctx, true, list, "-q")
 	if err != nil {
 		return container{}, err
 	}
@@ -145,29 +159,25 @@ func (i *installer) selectContainer(ctx context.Context) (container, error) {
 		}
 	}
 	if len(all) == 0 {
-		return container{}, errors.New("No running containers.")
+		return container{}, errors.New(i.msg("No running containers."))
 	}
 	shown := matches
 	if len(shown) == 0 {
 		shown = all
 	}
 	for {
+		var options []string
 		for n, item := range shown {
-			fmt.Fprintf(i.out, "[%d] %s (%s)\n", n+1, strings.TrimPrefix(item.Name, "/"), shortID(item.ID))
+			options = append(options, fmt.Sprintf("[%d] %s (%s)", n+1, strings.TrimPrefix(item.Name, "/"), shortID(item.ID)))
 		}
 		more := len(shown) < len(all)
 		if more {
-			fmt.Fprintf(i.out, "[%d] More\n", len(shown)+1)
+			options = append(options, fmt.Sprintf("[%d] %s", len(shown)+1, i.msg("More")))
 		}
 		for {
-			fmt.Fprint(i.out, "Select: ")
-			line, err := i.readLine(ctx)
+			n, err := i.choose(ctx, options)
 			if err != nil {
 				return container{}, err
-			}
-			n, err := strconv.Atoi(line)
-			if err != nil {
-				continue
 			}
 			if more && n == len(shown)+1 {
 				shown = all
@@ -211,10 +221,21 @@ func endpoint(item container) (string, error) {
 			return net.JoinHostPort(network.IPAddress, strconv.Itoa(port)), nil
 		}
 	}
-	return "", errors.New("No reachable application address in Docker inspect.")
+	return "", errors.New("No reachable application address in container details.")
 }
 
-func requestReady(ctx context.Context, address, path string) error {
+func (i *installer) containerEndpoint(item container) (string, error) {
+	address, err := endpoint(item)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "Invalid SERVER_PORT:") {
+			return "", fmt.Errorf(i.msg("Invalid SERVER_PORT: %w"), errors.Unwrap(err))
+		}
+		return "", errors.New(i.msg(err.Error()))
+	}
+	return address, nil
+}
+
+func (i *installer) requestReady(ctx context.Context, address, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+path, nil)
@@ -244,10 +265,10 @@ func requestReady(ctx context.Context, address, path string) error {
 		return err
 	}
 	if path == "/health" && data.Status != "ok" {
-		return fmt.Errorf("Health status: %s", data.Status)
+		return fmt.Errorf(i.msg("Health status: %s"), data.Status)
 	}
 	if path == "/setup/status" && (data.Data.NeedsSetup == nil || *data.Data.NeedsSetup) {
-		return errors.New("Application setup is incomplete.")
+		return errors.New(i.msg("Application setup is incomplete."))
 	}
 	return nil
 }
@@ -256,7 +277,7 @@ func (i *installer) readiness(ctx context.Context, cid string) error {
 	started := time.Now()
 	waitCtx, cancel := context.WithTimeout(ctx, i.timeout)
 	defer cancel()
-	lastError, previous := "not ready", ""
+	lastError, previous := i.msg("not ready"), ""
 	nextProgress := time.Time{}
 	var item container
 	for waitCtx.Err() == nil {
@@ -272,38 +293,39 @@ func (i *installer) readiness(ctx context.Context, cid string) error {
 		if !state.Running && !state.Restarting {
 			detail := state.Error
 			if detail == "" {
-				detail = "no runtime error reported"
+				detail = i.msg("no runtime error reported")
 			}
-			return fmt.Errorf("Container %s after %.1fs: exit=%d, OOMKilled=%t, error=%s; last request: %s", state.Status, time.Since(started).Seconds(), state.ExitCode, state.OOMKilled, detail, lastError)
+			return fmt.Errorf(i.msg("Container %s after %.1fs: exit=%d, OOMKilled=%t, error=%s; last request: %s"), state.Status, time.Since(started).Seconds(), state.ExitCode, state.OOMKilled, detail, lastError)
 		}
 		if state.Paused {
-			return fmt.Errorf("Container paused after %.1fs; last request: %s", time.Since(started).Seconds(), lastError)
+			return fmt.Errorf(i.msg("Container paused after %.1fs; last request: %s"), time.Since(started).Seconds(), lastError)
 		}
-		address := "no address yet"
+		address := i.msg("no address yet")
 		if state.Restarting {
-			err = errors.New("Container is restarting")
+			err = errors.New(i.msg("Container is restarting"))
 		} else {
-			address, err = endpoint(item)
+			address, err = i.containerEndpoint(item)
 			if err != nil {
-				address = "no address yet"
+				address = i.msg("no address yet")
 			}
 			if err == nil {
 				for _, path := range []string{"/health", "/setup/status"} {
-					if err = requestReady(waitCtx, address, path); err != nil {
-						err = fmt.Errorf("%s at %s: %w", path, address, err)
+					if err = i.requestReady(waitCtx, address, path); err != nil {
+						err = fmt.Errorf(i.msg("%s at %s: %w"), path, address, err)
 						break
 					}
 				}
 			}
 		}
 		if err == nil {
-			fmt.Fprintf(i.out, "Application ready after %.1fs: health OK, setup complete.\n", time.Since(started).Seconds())
+			i.stopProgress()
+			fmt.Fprintf(i.out, i.msg("Application ready after %.1fs: health OK, setup complete.\n"), time.Since(started).Seconds())
 			return nil
 		}
 		lastError = err.Error()
-		current := fmt.Sprintf("state=%s, restarts=%d, address=%s", state.Status, item.RestartCount, address)
+		current := fmt.Sprintf(i.msg("state=%s, restarts=%d, address=%s"), state.Status, item.RestartCount, address)
 		if time.Now().After(nextProgress) || current != previous {
-			fmt.Fprintf(i.out, "Application is starting; waiting for health and setup [%.1f/%gs, %s].\n", time.Since(started).Seconds(), i.timeout.Seconds(), current)
+			i.progressDetail(i.msg("Application is starting; waiting for health and setup [%.1f/%gs, %s]."), time.Since(started).Seconds(), i.timeout.Seconds(), current)
 			nextProgress, previous = time.Now().Add(5*time.Second), current
 		}
 		timer := time.NewTimer(i.poll)
@@ -316,72 +338,33 @@ func (i *installer) readiness(ctx context.Context, cid string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return fmt.Errorf("Readiness timed out after %.1fs: state=%s, restarts=%d, last request: %s", time.Since(started).Seconds(), item.State.Status, item.RestartCount, lastError)
+	return fmt.Errorf(i.msg("Readiness timed out after %.1fs: state=%s, restarts=%d, last request: %s"), time.Since(started).Seconds(), item.State.Status, item.RestartCount, lastError)
 }
 
-func checkELF(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	header := make([]byte, len(elfHeader))
-	if _, err := io.ReadFull(f, header); err != nil {
-		return errors.New("Expected a static Linux/amd64 ELF executable.")
-	}
-	if !bytes.Equal(header, elfHeader) {
-		return errors.New("Expected a static Linux/amd64 ELF executable.")
-	}
-	return nil
-}
-
-func extractPayload() (string, func(), error) {
-	directory, err := os.MkdirTemp("/tmp", "sub2api-codex-eval-payload-")
-	if err != nil {
-		return "", nil, err
-	}
-	cleanup := func() { os.RemoveAll(directory) }
-	path := filepath.Join(directory, "sub2api")
-	err = func() error {
-		compressed, err := assets.Open("payload.gz")
-		if err != nil {
-			return err
-		}
-		defer compressed.Close()
-		reader, err := gzip.NewReader(compressed)
-		if err != nil {
-			return err
-		}
-		defer reader.Close()
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(f, reader)
-		closeErr := f.Close()
-		return errors.Join(copyErr, closeErr)
-	}()
-	if err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return path, cleanup, nil
-}
-
-func (i *installer) replace(ctx context.Context, cid, source string) error {
+func (i *installer) replace(ctx context.Context, cid, source string) (bool, error) {
 	item, err := i.inspect(ctx, cid)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !item.State.Running {
-		_, err = i.docker(ctx, false, "cp", source, cid+":"+binaryPath)
-		return err
+		if i.apple {
+			if _, err := i.docker(ctx, true, "start", cid); err != nil {
+				return false, err
+			}
+		} else {
+			_, err = i.docker(ctx, false, "cp", source, cid+":"+binaryPath)
+			return true, err
+		}
 	}
-	if _, err = i.docker(ctx, false, "cp", source, cid+":"+stagedPath); err != nil {
-		return err
+	path, stage := i.containerPaths()
+	if _, err = i.docker(ctx, false, "cp", source, cid+":"+stage); err != nil {
+		return false, err
 	}
-	_, err = i.docker(ctx, false, "exec", "-u", "0", cid, "sh", "-c", "chmod 755 "+stagedPath+" && mv -f "+stagedPath+" "+binaryPath)
-	return err
+	defer func() {
+		_, _ = i.docker(context.Background(), true, "exec", "-u", "0", cid, "rm", "-f", stage)
+	}()
+	_, err = i.docker(ctx, false, "exec", "-u", "0", cid, "sh", "-c", "chown $(stat -c '%u:%g' "+path+") "+stage+" && chmod 755 "+stage+" && mv -f "+stage+" "+path)
+	return true, err
 }
 
 type versionResult struct {
@@ -427,8 +410,16 @@ func (i *installer) probeVersion(ctx context.Context, cid, path string) versionR
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := exec.CommandContext(probeCtx, "docker", "exec", cid, path, "-version")
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	name := "docker"
+	if i.apple {
+		name = "container"
+	}
+	args := []string{"exec", cid, path, "-version"}
+	if cid == "" {
+		name, args = path, []string{"-version"}
+	}
+	command := exec.CommandContext(probeCtx, name, args...)
+	isolateCommand(command)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -436,9 +427,16 @@ func (i *installer) probeVersion(ctx context.Context, cid, path string) versionR
 		err = probeCtx.Err()
 	}
 	if err != nil {
-		return versionResult{err: fmt.Errorf("Version command failed: %w. %s", err, strings.TrimSpace(stdout.String()+"\n"+stderr.String()))}
+		return versionResult{err: fmt.Errorf(i.msg("Version command failed: %w. %s"), err, strings.TrimSpace(stdout.String()+"\n"+stderr.String()))}
 	}
 	version, err := parseVersion(stdout.String(), stderr.String())
+	if err != nil {
+		if value, ok := strings.CutPrefix(err.Error(), "Unresolved executable version: "); ok {
+			err = fmt.Errorf(i.msg("Unresolved executable version: %s"), value)
+		} else {
+			err = errors.New(i.msg(err.Error()))
+		}
+	}
 	return versionResult{version: version, err: err}
 }
 
@@ -450,17 +448,7 @@ func (result versionResult) String() string {
 }
 
 func (i *installer) confirm(ctx context.Context) error {
-	fmt.Fprint(i.out, "Continue installation? [y/N] ")
-	line, err := i.readLine(ctx)
-	if err != nil {
-		return fmt.Errorf("Installation canceled: %w", err)
-	}
-	switch strings.ToLower(line) {
-	case "y", "yes":
-		return nil
-	default:
-		return errors.New("Installation canceled.")
-	}
+	return i.askConfirmation(ctx, "Continue installation?")
 }
 
 func (i *installer) confirmVersions(ctx context.Context, installed, candidate versionResult) error {
@@ -470,26 +458,28 @@ func (i *installer) confirmVersions(ctx context.Context, installed, candidate ve
 	if installed.err == nil && candidate.err == nil && installed.version == buildVersion && candidate.version == buildVersion {
 		return nil
 	}
-	fmt.Fprintf(i.errOut, "Version warning. Build: %s\nInstalled: %s\nCandidate: %s\n", buildVersion, installed, candidate)
+	i.stopProgress()
+	fmt.Fprintf(i.errOut, i.msg("Version warning. Build: %s\nInstalled: %s\nCandidate: %s\n"), buildVersion, installed, candidate)
 	return i.confirm(ctx)
 }
 
 func (i *installer) validateCandidate(ctx context.Context, cid, source string) (version versionResult, result error) {
-	if err := checkELF(source); err != nil {
+	if err := i.checkProgram(source, "linux", i.containerArch()); err != nil {
 		return version, err
 	}
-	if _, err := i.docker(ctx, false, "cp", source, cid+":"+stagedPath); err != nil {
+	_, stage := i.containerPaths()
+	if _, err := i.docker(ctx, false, "cp", source, cid+":"+stage); err != nil {
 		return version, err
 	}
 	defer func() {
 		// An interrupt must not skip removal of the staged candidate.
-		_, err := i.docker(context.Background(), false, "exec", "-u", "0", cid, "rm", "-f", stagedPath)
+		_, err := i.docker(context.Background(), false, "exec", "-u", "0", cid, "rm", "-f", stage)
 		result = errors.Join(result, err)
 	}()
-	if _, err := i.docker(ctx, false, "exec", "-u", "0", cid, "chmod", "755", stagedPath); err != nil {
+	if _, err := i.docker(ctx, false, "exec", "-u", "0", cid, "chmod", "755", stage); err != nil {
 		return version, err
 	}
-	return i.probeVersion(ctx, cid, stagedPath), nil
+	return i.probeVersion(ctx, cid, stage), nil
 }
 
 func (i *installer) install(ctx context.Context, source string) error {
@@ -498,12 +488,17 @@ func (i *installer) install(ctx context.Context, source string) error {
 		return err
 	}
 	cid := item.ID
-	fmt.Fprintf(i.out, "Container: %s (%s)\n", strings.TrimPrefix(item.Name, "/"), shortID(cid))
+	path, _ := i.containerPaths()
+	fmt.Fprintf(i.out, i.msg("Container: %s (%s)\nProgram: %s\n"), strings.TrimPrefix(item.Name, "/"), shortID(cid), path)
 	if !item.State.Running {
-		return errors.New("Select a running container.")
+		return errors.New(i.msg("Select a running container."))
 	}
-	fmt.Fprintln(i.out, "[1/4] Check executable versions and the local binary.")
-	installed := i.probeVersion(ctx, cid, binaryPath)
+	if err := i.checkContainerArch(ctx, cid); err != nil {
+		return err
+	}
+	i.startProgress("Check programs")
+	defer i.stopProgress()
+	installed := i.probeVersion(ctx, cid, path)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -514,56 +509,90 @@ func (i *installer) install(ctx context.Context, source string) error {
 	if err := i.confirmVersions(ctx, installed, candidate); err != nil {
 		return err
 	}
-	fmt.Fprintln(i.out, "[2/4] Back up the current executable.")
-	directory, err := os.MkdirTemp("/tmp", "sub2api-codex-eval-"+shortID(cid)+"-")
+	i.startProgress("Back up the original program")
+	directory, err := os.MkdirTemp("", "sub2api-plugins-"+shortID(cid)+"-")
 	if err != nil {
 		return err
 	}
 	backup := filepath.Join(directory, "sub2api")
-	if _, err := i.docker(ctx, false, "cp", cid+":"+binaryPath, backup); err != nil {
+	if _, err := i.docker(ctx, false, "cp", cid+":"+path, backup); err != nil {
 		return err
 	}
-	if err := checkELF(backup); err != nil {
-		return errors.New("The existing executable must also be Linux/amd64.")
+	if err := i.checkProgram(backup, "linux", i.containerArch()); err != nil {
+		return fmt.Errorf(i.msg("Check the existing executable: %w"), err)
 	}
-	fmt.Fprintf(i.out, "Backup: %s\n", backup)
-	fmt.Fprintln(i.out, "[3/4] Replace the binary and restart the selected container.")
-	err = i.replace(ctx, cid, source)
-	if err == nil {
-		_, err = i.docker(ctx, false, "restart", cid)
+	i.stopProgress()
+	fmt.Fprintf(i.out, i.msg("Backup: %s\n"), backup)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	i.startProgress("Replace the program")
+	mutated, err := i.replace(ctx, cid, source)
+	if err != nil && !mutated {
+		return err
 	}
 	if err == nil {
-		fmt.Fprintln(i.out, "[4/4] Wait for native health and setup status.")
+		i.startProgress("Restart the application")
+		err = i.restartContainer(ctx, cid)
+	}
+	if err == nil {
+		i.startProgress("Wait for application readiness")
 		err = i.readiness(ctx, cid)
 	}
 	if err != nil {
-		fmt.Fprintln(i.errOut, "Installation failed; restoring the original executable.")
+		i.stopProgress()
+		fmt.Fprintln(i.errOut, i.msg("Installation failed; restoring the original executable."))
 		// Rollback uses a separate context so Ctrl-C cannot cancel restoration.
 		restoreCtx := context.Background()
-		restoreErr := i.replace(restoreCtx, cid, backup)
+		i.startProgress("Restore the original program")
+		_, restoreErr := i.replace(restoreCtx, cid, backup)
 		if restoreErr == nil {
-			_, restoreErr = i.docker(restoreCtx, false, "restart", cid)
+			restoreErr = i.restartContainer(restoreCtx, cid)
 		}
 		if restoreErr == nil {
 			restoreErr = i.readiness(restoreCtx, cid)
 		}
 		if restoreErr != nil {
-			return fmt.Errorf("Installation failed: %w. Restoration failed: %v. Backup: %s", err, restoreErr, backup)
+			return fmt.Errorf(i.msg("Installation failed: %w. Restoration failed: %v. Backup: %s"), err, restoreErr, backup)
 		}
-		fmt.Fprintln(i.errOut, "Original executable restored.")
+		i.stopProgress()
+		fmt.Fprintln(i.errOut, i.msg("Original executable restored."))
 		return err
 	}
-	fmt.Fprintln(i.out, "Installed. The application is ready.")
+	i.stopProgress()
+	fmt.Fprintln(i.out, i.msg("Installed. The application is ready."))
 	return nil
 }
 
 func run(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
-	source, cleanup, err := extractPayload()
+	i := installer{in: in, out: out, errOut: errOut, timeout: readinessTimeout, poll: time.Second}
+	i.ui = newTerminalUI(in, out)
+	defer i.stopProgress()
+	fmt.Fprintf(out, "Sub2API Plugins v%s\n\n", buildVersion)
+	options := []string{"[1] Docker / Compose", "[2] " + i.msg("Native executable")}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		options = append(options, "[3] Apple container")
+	}
+	choice, err := i.choose(ctx, options)
+	if err != nil {
+		return err
+	}
+	if choice == 2 {
+		fmt.Fprintf(out, i.msg("Installation: %s\n"), i.msg("Native executable"))
+		return i.installNative(ctx)
+	}
+	i.apple = choice == 3
+	form := "Docker / Compose"
+	if i.apple {
+		form = "Apple container"
+	}
+	fmt.Fprintf(out, i.msg("Installation: %s\n"), form)
+	i.arch = runtime.GOARCH
+	source, cleanup, err := extractPayload("linux", i.arch)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	i := installer{in: in, out: out, errOut: errOut, timeout: readinessTimeout, poll: time.Second}
 	return i.install(ctx, source)
 }
 
@@ -571,7 +600,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := run(ctx, os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		i := installer{ui: &terminalUI{chinese: chineseLocale(os.Getenv)}}
+		fmt.Fprintln(os.Stderr, i.msg("Error:"), err)
 		os.Exit(1)
 	}
 }

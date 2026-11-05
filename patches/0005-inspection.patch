@@ -2,7 +2,7 @@ diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexev
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
-@@ -0,0 +1,681 @@
+@@ -0,0 +1,684 @@
 +package codexeval
 +
 +import (
@@ -475,20 +475,20 @@ new file mode 100644
 +	}
 +	for _, target := range []int{s.NormalPriority, s.DegradedPriority} {
 +		indexes := changed[target]
-+		if len(indexes) == 0 || ctx.Err() != nil {
++		if !s.NotifyEnabled || len(indexes) == 0 || ctx.Err() != nil {
 +			continue
 +		}
 +		title := "账号确认降智"
-+		verdict := "答错"
++		verdict := "正常 → 降级"
 +		if target == s.NormalPriority {
 +			title = "账号恢复正常"
-+			verdict = "答对"
++			verdict = "降级 → 正常"
 +		}
 +		lines := []string{fmt.Sprintf("糖果测试 · %s\n确认状态：%s", s.Model, verdict)}
 +		snapshot := i.snapshot()
 +		for _, n := range indexes {
 +			r := snapshot.Results[n]
-+			lines = append(lines, fmt.Sprintf("%s：priority %d → %d", r.AccountName, r.Priority, target))
++			lines = append(lines, fmt.Sprintf("%s：%s", r.AccountName, verdict))
 +		}
 +		if err := i.hooks.Notify(ctx, s, "Sub2API 巡检："+title, strings.Join(lines, "\n")); err != nil {
 +			for _, n := range indexes {
@@ -501,6 +501,7 @@ new file mode 100644
 +	i.mu.Unlock()
 +}
 +
++// applyAccount returns whether a verdict transition was saved, independently of priority writes.
 +func (i *inspector) applyAccount(ctx context.Context, s InspectionSettings, n int, a InspectionAccount, baseline, target int) bool {
 +	current, err := i.hooks.Get(ctx, a.AccountID)
 +	if err == nil && !current.AutoInspectionEnabled {
@@ -510,11 +511,13 @@ new file mode 100644
 +	if ctx.Err() != nil {
 +		return false
 +	}
++	changed := false
 +	if err == nil {
 +		verdict := InspectionVerdictDegraded
 +		if target == s.NormalPriority {
 +			verdict = InspectionVerdictNormal
 +		}
++		changed = (current.Verdict == InspectionVerdictDegraded) != (verdict == InspectionVerdictDegraded)
 +		err = i.hooks.PersistVerdict(ctx, a.AccountID, verdict, s)
 +	}
 +	if err != nil {
@@ -522,7 +525,7 @@ new file mode 100644
 +		return false
 +	}
 +	if !s.AdjustPriority {
-+		return false
++		return changed
 +	}
 +	if !inspectionEligible(current, s) || current.Priority != baseline {
 +		err = fmt.Errorf("账户状态或优先级已改变")
@@ -534,7 +537,7 @@ new file mode 100644
 +		err = fmt.Errorf("账户正在测试")
 +	}
 +	if err == nil && current.Priority == target {
-+		return false
++		return changed
 +	}
 +	if err == nil && ctx.Err() == nil {
 +		err = i.hooks.UpdatePriority(ctx, a.AccountID, target)
@@ -544,10 +547,10 @@ new file mode 100644
 +	}
 +	if err != nil {
 +		i.result(n, func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
-+		return false
++		return changed
 +	}
 +	i.result(n, func(r *InspectionResult) { p := target; r.TargetPriority = &p; r.Outcome = "updated" })
-+	return true
++	return changed
 +}
 +
 +func waitInspection(ctx context.Context, d time.Duration) bool {
@@ -743,7 +746,7 @@ diff --git a/backend/internal/codexeval/inspection_settings.go b/backend/interna
 new file mode 100644
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection_settings.go
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,113 @@
 +package codexeval
 +
 +import (
@@ -766,6 +769,7 @@ new file mode 100644
 +	MaxWaitMinutes         int      `json:"max_wait_minutes"`
 +	AdjustPriority         bool     `json:"adjust_priority"`
 +	ControlModels          bool     `json:"control_models"`
++	NotifyEnabled          bool     `json:"notify_enabled"`
 +	DegradedRemoveModels   []string `json:"degraded_remove_models"`
 +	NormalPriority         int      `json:"normal_priority"`
 +	DegradedPriority       int      `json:"degraded_priority"`
@@ -780,8 +784,8 @@ new file mode 100644
 +
 +func DefaultInspectionSettings() InspectionSettings {
 +	return InspectionSettings{Model: "gpt-6.1-sol", Effort: "low", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35,
-+		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NtfyServer: "https://ntfy.sh",
-+		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"}}
++		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NotifyEnabled: true, NtfyServer: "https://ntfy.sh",
++		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"}}
 +}
 +
 +func (s *InspectionSettings) NormalizeModels() {

@@ -2,11 +2,13 @@
 
 ## Current scope
 
-Active delivery targets Sub2API v0.2.18 Linux/amd64.
-Use the existing original Sub2API source and this repository's native evaluation module.
+Active delivery builds the selected upstream tag on Linux amd64/arm64, Darwin amd64/arm64, and Windows amd64.
+The verified integration baseline is Sub2API v0.2.19.
+The complete standalone build kit downloads upstream source and applies this repository's native evaluation patches.
 Production code lives in lexically ordered `patches/*.patch` files. All test cases and support code live in flat `tests/`.
 Use `assets/` for data resources only.
-Installation uses one self-extracting Go executable with an embedded server and numbered container selection.
+Each platform has a self-contained Go installer for Docker/Compose, native programs, and supported Apple container installations.
+The installer uses dynamic terminal interaction where supported, plain numbered prompts otherwise, and automatic Chinese/English terminal locale.
 
 ## Active guidelines
 
@@ -15,7 +17,7 @@ Installation uses one self-extracting Go executable with an embedded server and 
 | [Directory Structure](./directory-structure.md) | Current native code, tests, and delivery owners |
 | [Administrator Evaluation](./runtime-installation.md) | Sending, task APIs, history, page and native session contracts |
 | [Native Candy Inspection](./native-inspection.md) | Automatic rounds, native settings, priority changes and the Settings tab |
-| [Binary Delivery](./minimal-linux-delivery.md) | Existing-source build, fixed package and replacement/restoration |
+| [Binary Delivery](./minimal-linux-delivery.md) | Automatic source download, fixed artifacts and replacement/restoration |
 | [Persistence](./database-guidelines.md) | Native settings and versioned three-map JSON history |
 | [Error Handling](./error-handling.md) | Actual errors, cancellation and shared bounded retries |
 | [Diagnostics](./logging-guidelines.md) | Error visibility and private-data boundaries |
@@ -23,7 +25,7 @@ Installation uses one self-extracting Go executable with an embedded server and 
 
 The current task and active contracts supersede historical adapter, gateway, key, activation, maintenance and recovery designs.
 Historical specification files remain evidence; they do not add implementation or test requirements.
-Standalone cleanup, source pinning, compatibility configurations and assistant-added race gates are removed.
+Standalone cleanup, compatibility configurations and assistant-added race gates are removed.
 
 ## Pre-Development Checklist
 
@@ -45,12 +47,12 @@ The shared guides contain upstream Trellis examples. Apply their general reasoni
 For changed native code, use the current entry:
 
 ```sh
-python3 scripts/build.py --source /path/to/original-sub2api --check
+python3 scripts/build.py
 ```
 
-It applies contextual patches, runs native tests and vet, builds the frontend/server, and packages fixed outputs.
+It downloads source, applies contextual patches, runs tests and vet, and builds versioned program and installer outputs.
 Native Go suites use target-package annotations. UI assertions run directly from `tests/test_ui.cjs`.
-The common build repository owns the authoritative installer test suite. Do not retain a second identical suite here.
+Keep aligned common build and installer tests in this standalone kit. Combined builds run the parent's common tests once.
 Reuse completed baseline and unchanged integration evidence.
 Add focused checks only for changed behavior lacking coverage.
 Format changed Go files and check affected scripts/resources.

@@ -4,6 +4,19 @@
 
 ---
 
+## License Files
+
+Keep root `LICENSE` limited to the unmodified standard LGPLv3 text, including its original FSF copyright.
+Do not add project scope statements, attribution preambles, or explanations to this file.
+Preserve inherited license texts and attribution under `licenses/`.
+
+## Temporary Caches
+
+Prevent workspace cache files when the command supports it. For Python, use `PYTHONDONTWRITEBYTECODE=1` or `python3 -B`.
+Immediately remove temporary caches created by the current command, including after failure.
+Examples include `__pycache__`, `.pyc`, `.pytest_cache`, `.mypy_cache`, and `.ruff_cache`.
+Preserve reusable dependency caches, user data, and resources used by active processes.
+
 ## Why Thinking Guides?
 
 **Most bugs and tech debt come from "didn't think of that"**, not from lack of skill:

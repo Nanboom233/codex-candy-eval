@@ -15,7 +15,7 @@ const settings = () => ({ enabled: false, group_id: 101, account_type: "all", ac
   model: "saved/literal", effort: "low", max_tests_per_account: 3,
   min_wait_minutes: 15, max_wait_minutes: 35,
   adjust_priority: false, normal_priority: 10, degraded_priority: 99,
-  control_models: false, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"],
+  control_models: false, notify_enabled: true, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"],
   ntfy_server: "https://ntfy.sh", ntfy_topic: "", ntfy_username: "", ntfy_password: "", bark_url: "",
   ntfy_password_configured: true, bark_url_configured: false });
 const idle = { phase: "idle", enabled: false, running: false, results: [] };
@@ -237,14 +237,16 @@ function groupFixture() {
   ctx = harness();
   try {
     const saveResponse = deferred();
+    const writes = [];
     let persisted = settings();
     ctx.h.setAPI(async (url, options = {}) => {
       if (url.includes("/accounts?")) return { pages: 1, items: [] };
       if (url.endsWith("/inspection/state")) return idle;
       if (url.endsWith("/state")) return emptyState();
       if (options.method === "PUT") {
+        writes.push({ ...options.body });
         persisted = { ...options.body, ntfy_password: "", bark_url: "", ntfy_password_configured: true };
-        return saveResponse.promise;
+        return writes.length === 1 ? saveResponse.promise : { ...persisted };
       }
       return { ...persisted };
     });
@@ -262,18 +264,44 @@ function groupFixture() {
     wait.value = "22";
     wait.dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
     ctx.h.setInspectionRemovedModels(["newer/absent-model"]);
+    const secret = form.elements.namedItem("ntfy_password");
+    secret.value = "newer-secret";
+    secret.dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
     saveResponse.resolve({ ...persisted });
     await tick();
     assert.equal(wait.value, "22", "A save response must preserve a later edit to another field");
     assert.deepEqual([...persisted.degraded_remove_models], ["saved/absent-model"]);
     assert.deepEqual([...ctx.h.inspectionRemovedModels()], ["newer/absent-model"], "A save must preserve newer model-list edits");
-    assert.equal(form.elements.namedItem("ntfy_password").value, "", "A saved secret must clear even when another field changes");
+    assert.equal(writes[0].ntfy_password, "fixture-secret");
+    assert.equal(secret.value, "newer-secret", "A save must preserve a newer secret draft");
+    assert.equal(secret.placeholder, "已配置，留空保持不变");
     assert.equal(ctx.$("inspection-save-status").textContent, "");
+    await ctx.h.saveInspectionSettings();
+    assert.equal(writes[1].ntfy_password, "newer-secret");
+    assert.equal(secret.value, "newer-secret", "A successful save must retain the masked input");
+    assert.equal(secret.type, "password");
+    assert.equal(ctx.h.dirty(), 0);
+    secret.dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(ctx.h.dirty(), 0, "Blur after a successful secret autosave must not mark it dirty again");
+    const topic = form.elements.namedItem("ntfy_topic");
+    topic.value = "unrelated-edit";
+    topic.dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
+    await ctx.h.saveInspectionSettings();
+    assert.equal(writes[2].ntfy_password, "", "An unrelated save must not resubmit the retained secret");
+    assert.equal(secret.value, "newer-secret");
     persisted.ntfy_topic = "saved-in-another-session";
     await ctx.h.loadInspectionSettings();
+    assert.equal(secret.value, "newer-secret", "Settings reentry must retain the masked session value");
     assert.equal(form.elements.namedItem("ntfy_topic").value, persisted.ntfy_topic, "A submitted field must no longer remain dirty");
     assert.equal(wait.value, "22");
-    assert.deepEqual([...ctx.h.inspectionRemovedModels()], ["newer/absent-model"], "A reread must preserve unsaved model-list edits");
+    assert.deepEqual([...ctx.h.inspectionRemovedModels()], ["newer/absent-model"]);
+    const reloaded = harness();
+    try {
+      reloaded.h.fillInspectionSettings(persisted);
+      const emptySecret = reloaded.$("inspection-settings").elements.namedItem("ntfy_password");
+      assert.equal(emptySecret.value, "", "A fresh page must not restore the session secret");
+      assert.equal(emptySecret.placeholder, "已配置，留空保持不变");
+    } finally { reloaded.close(); }
   } finally { ctx.close(); }
 
   ctx = harness();
@@ -353,6 +381,11 @@ function groupFixture() {
   try {
     ctx.h.fillInspectionSettings(settings());
     const form = ctx.$("inspection-settings");
+    assert.equal(form.elements.namedItem("ntfy_password").value, "");
+    assert.equal(form.elements.namedItem("ntfy_password").placeholder, "已配置，留空保持不变");
+    ctx.h.fillInspectionSettings({ ...settings(), ntfy_password_configured: false });
+    assert.equal(form.elements.namedItem("ntfy_password").placeholder, "");
+    assert.equal(form.elements.namedItem("bark_url").placeholder, "");
     const adjustment = form.elements.namedItem("adjust_priority");
     const normal = form.elements.namedItem("normal_priority");
     assert.equal(ctx.$("inspection-priority-fields").hidden, true);
@@ -428,11 +461,21 @@ function groupFixture() {
     const enabled = ctx.$("inspection-enabled");
     const fields = ctx.$("inspection-auto-fields");
     assert.equal(fields.hidden, true);
-    for (const input of [enabled, form.elements.namedItem("adjust_priority"), form.elements.namedItem("control_models")]) {
+    for (const input of [enabled, form.elements.namedItem("adjust_priority"), form.elements.namedItem("control_models"), form.elements.namedItem("notify_enabled")]) {
       assert.ok(input.getAttribute("aria-label"));
       assert.equal(input.closest("label").textContent.trim(), "", "Header switches must have no visible captions");
     }
     const modelSwitch = form.elements.namedItem("control_models"), modelFields = ctx.$("inspection-model-fields");
+    const notifySwitch = form.elements.namedItem("notify_enabled"), notifyFields = ctx.$("inspection-notification-fields");
+    assert.equal(notifySwitch.checked, true);
+    assert.equal(notifyFields.hidden, false);
+    const topic = form.elements.namedItem("ntfy_topic");
+    topic.value = "retained-topic";
+    topic.dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
+    notifySwitch.checked = false;
+    notifySwitch.dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(notifyFields.hidden, true);
+    assert.equal(topic.value, "retained-topic");
     assert.equal(modelFields.hidden, true);
     assert.equal(modelSwitch.closest("section").previousElementSibling.querySelector("h2").textContent, "优先级");
     assert.equal(modelFields.querySelectorAll("small,[title]").length, 0);
@@ -491,6 +534,10 @@ function groupFixture() {
     assert.equal(saved.max_wait_minutes, 31);
     assert.equal(saved.max_tests_per_account, 2);
     assert.equal(saved.control_models, false);
+    assert.equal(saved.notify_enabled, false);
+    assert.equal(saved.ntfy_topic, "retained-topic");
+    assert.equal(notifySwitch.checked, false);
+    assert.equal(notifyFields.hidden, true);
     assert.deepEqual([...saved.degraded_remove_models], [...settings().degraded_remove_models, "custom/absent"]);
     assert.equal(fields.hidden, true);
     assert.equal(ctx.$("inspection-start").disabled, false);

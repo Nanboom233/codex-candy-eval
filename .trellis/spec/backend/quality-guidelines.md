@@ -3,9 +3,10 @@
 ## Current Sub2API scope
 
 Use [administrator evaluation](./runtime-installation.md), [native inspection](./native-inspection.md), and [binary delivery](./minimal-linux-delivery.md) for current contracts.
-The delivery targets Sub2API v0.2.18 on Linux/amd64.
+Delivery uses the selected upstream tag on Linux amd64/arm64, Darwin amd64/arm64, and Windows amd64.
+Sub2API v0.2.19 remains the verified integration baseline.
 Installer version mismatches or unresolved probes produce advisory warnings and explicit confirmation, without a release allowlist.
-Use the original Sub2API source tree and this repository's native evaluation module.
+Download upstream source automatically and apply this repository's native evaluation module.
 Active integration lives in contextual `patches/*.patch` files. All test cases and support code live in flat `tests/`.
 Keep `assets/` for data resources only.
 Use [Directory Structure](./directory-structure.md) for file ownership.
@@ -13,7 +14,7 @@ Use [Directory Structure](./directory-structure.md) for file ownership.
 For native behavior changes, use the approved focused checks:
 
 ```sh
-python3 scripts/build.py --source /path/to/original-sub2api --check
+python3 scripts/build.py
 ```
 
 Reuse completed baseline and unchanged integration evidence.
@@ -27,9 +28,13 @@ Use `tests/test_ui.cjs` directly for existing native page assertions.
 Native Go cases live in `tests/test_*_test.go` with `// sub2api-package:` context annotations.
 Use native `go test` against the temporary target package. Execute discovered cases once and stop on failure.
 Keep execution support in `tests/support.py` and manual fixture helpers in flat `tests/native_*` files.
-The common build repository owns the authoritative fake-Docker and local HTTP installer suite.
-Standalone `--check` runs this plugin's backend/UI tests and vet, then compiles the standalone server and installer.
-Keep host test execution separate from Linux/amd64 release flags. Preserve standalone use without requiring a parent checkout.
+This complete kit carries aligned common build tests and the fake-Docker/local HTTP installer suite.
+The default build runs common and business tests once, then compiles the standalone server and installer.
+Combined builds run this plugin's business tests and the parent's common tests once.
+Keep host tests separate from cross-compilation flags. Preserve standalone use without requiring a parent checkout.
+Extend existing cases for changed native/Apple control and recovery, payload selection, locale precedence, plain streams, and cancellation.
+Inspect actual dynamic terminal selection, spinner-to-prompt transitions, and cancellation for terminal presentation changes.
+Compile the five approved outputs in one default combined build. Cross-compilation does not prove runtime installation on every platform.
 No retained Docker container or manual browser session is required for the approved build migration.
 Do not create another suite for retired interfaces.
 

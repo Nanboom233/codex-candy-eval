@@ -86,7 +86,7 @@ def main():
             Path(mount["Source"]).mkdir(mode=0o700, parents=True, exist_ok=True)
     if current["State"]["Running"]:
         docker("stop", "--time", "30", CONTAINER)
-    docker("cp", ROOT / "dist/build/sub2api-codex-eval", CONTAINER + ":/app/sub2api-bin")
+    docker("cp", ROOT / "dist/build/sub2api-plugins", CONTAINER + ":/app/sub2api-bin")
     docker("cp", ROOT / "tests/native_fixture_start.sh", CONTAINER + ":/app/sub2api")
     docker("cp", ROOT / "tests/native_fixture_supplier.py", CONTAINER + ":/app/fixture-supplier.py")
     docker("start", CONTAINER)

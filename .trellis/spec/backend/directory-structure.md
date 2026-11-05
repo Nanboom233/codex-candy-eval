@@ -7,7 +7,7 @@
 ## Overview
 
 Active integration lives in a numbered production patch series under `patches/`.
-The standalone build applies top-level `patches/*.patch` files in lexical filename order to an existing Sub2API source tree.
+The standalone build downloads the selected upstream tag and applies top-level `patches/*.patch` files in lexical filename order.
 This repository has no root Go module or shared-library entry point.
 The user package replaces the server binary without compilation on the installation host.
 
@@ -19,27 +19,32 @@ Evidence: [native build](../../../scripts/build.py), [patches](../../../patches/
 
 ```text
 patches/                 Contextual production patches in lexical filename order
-scripts/build.py         Apply patches, check, build, and package
+scripts/build.py         Download source, apply patches, test, build, and package
 scripts/installer/       Go self-extracting installation and failure restoration
 tests/test_*_test.go     Actual native Go test cases with package-context annotations
 tests/test_ui.cjs         Actual native UI assertions
+tests/test_build.py       Common source-composition and test-discovery cases
+tests/test_installer_test.go  Common installer transaction tests
 tests/support.py          Native test execution support
 tests/native_*            Manual test fixture and support programs
 assets/                   Data resources, including golden JSON
 licenses/                Original third-party license files
-dist/build/              Fixed ignored server and installer executables
+dist/build/<os>-<arch>/  Ignored platform server and installer executables
 README.md AGENTS.md LICENSE  Project documentation and license
-.github/                 Release workflow
+.github/                 Artifact-only build workflow
 .trellis/                Workflow, specifications, tasks, and session records
 .agents/ .codex/ .claude/ .devin/  Tool integration and skills
 ```
 
-The self-extracting installer uses its embedded server and Docker CLI.
-Users select a running container, retain its backup and open 账户评估 in the native administrator sidebar.
-Builds use the existing original Sub2API tree and installed dependencies in a standard temporary workspace, rebuilding the patched native frontend before embedding it.
-Only the compressed server and required license texts enter the installer payload.
-The build assembles the compatibility installer in a temporary Go module.
-The common build repository owns the single authoritative installer test suite.
+The self-contained installer carries native and required Linux container payloads.
+Users select Docker/Compose, a native program, or supported Apple container installation and retain the original program backup.
+Builds download upstream source and use frozen dependencies in a temporary workspace, rebuilding the patched frontend before embedding it.
+Only compressed application programs and required license texts enter the installer payload.
+The build assembles the installer in a temporary Go module.
+Prepare PTerm dependencies there. Keep terminal messages under `scripts/installer/`, separate from installation decisions.
+Names use `sub2api-plugins-[installer-]<upstream-tag>-<os>-<arch>`, where `installer-` is present only for installers.
+Windows outputs add `.exe`. CI uploads each file directly, with its basename as the artifact name.
+The parent and standalone kits carry aligned common tests. Execute common cases once per build.
 Keep installer tests out of production source and keep the raw server as a local build output.
 
 Private configuration and reusable dependency caches remain outside source and package inputs.

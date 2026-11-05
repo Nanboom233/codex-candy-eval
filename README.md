@@ -1,175 +1,124 @@
-# Codex Account Evaluation
+# Codex 降智测试
 
-Use Candy tests, fingerprint detection, and Pelican tests in the Sub2API administrator panel.
-The plugin targets Sub2API v0.2.18.
+在 Sub2API 管理面板中使用糖果测试、指纹检测和鹈鹕测试。
 
-## Install
+## 使用
 
-Use a Linux/amd64 Docker host with a running Sub2API container.
-Download `sub2api-codex-eval-installer` from the standalone release, then run:
+1. 登录 Sub2API 管理面板。
+2. 打开侧栏中的「账户评估」。
+3. 选择「糖果」「指纹」或「鹈鹕」。
+4. 选择 OpenAI 分组。
 
-```sh
-chmod +x sub2api-codex-eval-installer
-./sub2api-codex-eval-installer
-```
+账户右侧的「测试」按钮用于单账户测试，列表上方的「测试全部」或「测试所选」用于批量测试。勾选账户后，批量操作只测试所选账户。未勾选时，批量操作测试当前筛选下的全部可用账户。
+模型列表支持选择已有模型，也可以通过「自定义模型…」输入完整模型名称。
+账户右侧的「启用」开关会直接修改该账户在 Sub2API 中的可调度状态。
 
-Select the target container number. If necessary, select the numbered `More` entry to show all running containers.
-The installer compares actual executable versions with its build version.
-A mismatch or unreadable version produces a warning. Enter `y` or `yes` to continue.
-Other input, empty input, EOF, or interruption cancels before backup or replacement.
-Image references such as `latest` do not determine executable versions.
+### 糖果测试
 
-Keep the printed backup path. Wait for `Application ready`.
-The installer restarts the selected container and waits up to 120 seconds for health and setup readiness.
-Failure or interruption after replacement triggers restoration. If restoration fails, use the backup for manual recovery.
-Recreate the container only when you can install the plugin again.
+1. 选择模型。
+2. 选择推理强度。
+3. 设置每账户次数。
+4. 点击「测试」。
 
-For multiple plugins, use the parent project's common build and `sub2api-plugins-installer` instead.
+糖果题的正确答案是 **21**。展开账户可查看历次回答。正确率按当前选择的模型和推理强度统计。
 
-## Evaluate Accounts
+### 指纹检测
 
-1. Sign in to the administrator panel.
-2. Open 账户评估 in the sidebar.
-3. Select Candy, Fingerprint, or Pelican.
-4. Select an OpenAI group.
+1. 选择模型。
+2. 设置每账户并发，范围为 1–3。
+3. 点击「测试」。
 
-Use the account button for one account. Use the list button for a batch.
-A batch uses selected accounts. Without a selection, it uses all available accounts in the current filter.
-Select an existing model or enter its full name.
+每轮随机选择三道数字挑战，与参考库中的候选模型比对。结果显示最接近的模型和排名。
+三道挑战均得到有效回答时显示概率。只有部分回答有效时，概率显示为「—」。
+结果为「不像语言模型回答」时不显示排名。展开账户可查看历史记录，点击「查看详情」可查看候选模型排行、挑战回答和尝试次数。
 
-### Candy
+### 鹈鹕测试
 
-Select the model, reasoning effort, and attempts per account. Start the test.
-The correct answer is **21**. Expand an account to read previous answers.
-The success rate uses the selected model and reasoning effort.
+1. 选择模型。
+2. 选择推理强度。
+3. 选择「原版」或「多合一版」。
+4. 点击「测试」。
 
-### Fingerprint
+原版生成鹈鹕骑自行车的 HTML 动画。多合一版生成 SVG 图片，加入孙悟空、秦始皇和北极熊，并让鹈鹕喊出糖果题的答案。
+切换版本会更新「查看题目」中的内容，并保存选择。
 
-Select a model and concurrency from 1 to 3 per account. Start the test.
-Each round selects three random number challenges and compares answers with the reference models.
-The result shows the closest model and ranking.
-Probability appears only when all three answers are valid. Partial results show a dash.
-A result that does not resemble a language-model answer has no ranking.
-Expand an account to read answers, attempts, and details.
+列表和历史记录显示画面缩略图，点击可放大查看。最近一次结果、历史记录和详情均显示该次测试的版本。
+两种版本共用每账户最近 20 条鹈鹕记录。画面内容和其中的糖果答案由用户判断。
 
-### Pelican
+### 记录、额度与停止
 
-Select the model, reasoning effort, and original or combined version. Start the test.
-The original version requests an HTML animation of a pelican riding a bicycle.
-The combined version requests an SVG with Sun Wukong, Qin Shi Huang, and a polar bear.
-The pelican also states the Candy answer.
-The prompt view changes with the selected version. The page saves that selection.
+测试会消耗供应商额度。失败或无法使用的回答可能触发重试，每个请求最多尝试三次。糖果题答错不重试，除 408 外的 4xx 错误（如身份认证失败和限流）也不重试。耗时和用量包含所有尝试。
+每个账户的每种测试保留最近 20 次记录，刷新或重启后仍可查看。
 
-Select a thumbnail to enlarge the result. Current results, history, and details show the test version.
-Both versions share the latest 20 Pelican records per account.
-You judge the image and its Candy answer.
+标签栏右侧的垃圾桶清空全部测试记录。账户列表右上角的垃圾桶清空当前测试类型的记录。两者都对所有分组的全部账户生效。
+指纹检测可点击「停止」中断。糖果和鹈鹕测试开始后不能在页面中停止。重启不会继续未完成的测试。
 
-### Records, Usage, and Cancellation
+指纹检测每次尝试限时 3 分钟。糖果和鹈鹕测试每次尝试限时 10 分钟。超时的尝试会计入重试。
 
-Tests consume supplier quota. A failed or unusable answer can trigger up to three request attempts.
-An incorrect Candy answer does not retry. Authentication failures and rate limits do not retry.
-Duration and usage include all attempts.
-Each account retains the latest 20 records for each test type across page refreshes and application restarts.
+## 糖果巡检
 
-The tab-bar trash button clears all test records. The account-list trash button clears records for the current test type.
-Stop cancels the current test. Restart does not resume unfinished tests.
-Fingerprint attempts have a three-minute limit. Candy and Pelican attempts have a ten-minute limit.
+1. 在「糖果」页选择分组。
+2. 设置账户筛选条件。
+3. 按需设置各账户的「启用自动巡检」开关。
+4. 打开「设置」标签页。
+5. 开启「自动巡检」。
+6. 设置模型、推理强度、每账户最多测试次数和等待范围。
 
-## Automatic Candy Inspection
+设置会自动保存。巡检使用普通糖果测试，结果计入糖果历史和正确率。「糖果」页显示巡检状态、下次巡检时间和账户进度。确认降级的账户会显示「降级」标签。
+如需立即运行一轮，可点击「设置」底部的「立即巡检」。自动巡检关闭时也可以使用。
 
-Select a group and account filters on the Candy page. Set each account's inspection participation as needed.
-Open Settings and set the inspection model and wait range. Enable automatic inspection for scheduled rounds.
-Settings save automatically. The Candy page shows results, history, and the next inspection time.
-Use the Settings action to start a round immediately.
+### 模型控制
 
-### Model Control
+1. 开启「模型控制」。
+2. 在「降级移除模型」中选择模型。
 
-Enable model control and select models for removal after a confirmed downgrade.
-Inspection removes matching allowed models after a downgrade and restores those models after recovery.
-Recovery still uses the saved removal record when model control stops or the removal selection changes.
-Removed models do not block recovery inspection.
+巡检确认账户降级后，会从该账户的允许模型中移除匹配项。账户恢复后，巡检会恢复此前移除的模型。
+关闭模型控制或修改移除列表后，恢复仍会使用此前的移除记录。移除模型不会阻断恢复巡检。
 
-### Priorities and Notifications
+### 优先级
 
-Enable automatic priority changes. Set normal and downgraded priorities.
-Lower numbers have higher priority.
-Model control and priority changes operate independently.
-Scheduled rounds and immediate inspection use these settings. Ordinary manual account and batch tests do not.
-Configure ntfy or Bark in Settings to receive priority-change notifications.
+1. 开启「优先级」中的自动调整开关。
+2. 设置正常优先级。
+3. 设置降级优先级。
 
-### Stop Inspection
+数值越小，账户优先级越高。降级优先级必须大于正常优先级。模型控制和优先级调整相互独立。
+定时巡检和「立即巡检」会应用这些设置。手动单账户和批量测试不会应用这些设置。
 
-Use the Settings stop action to cancel the current round.
-Disable automatic inspection to stop future scheduled rounds. This does not cancel the current round.
+### 通知
 
-## Restore the Original Executable
+开启「通知」并配置 ntfy 或 Bark 后，账户被确认降级或恢复正常时会收到通知。两者都配置时会同时发送。通知与优先级调整无关。
 
-If automatic restoration fails, use the backup path printed by the installer.
-The executable backup does not include evaluation history.
+## 安装
 
-The first read of older history saves `history.v1.json` under `codex-eval` in the application data directory.
-An earlier history format saves `history.v0.json`.
-Before a rollback, stop Sub2API and save the current `history.json` separately.
-Restore the matching older history copy as `history.json`, then restore the executable as described below.
-The older copy does not include records created after the upgrade.
+在本仓库的 [Actions](actions/workflows/build.yml) 中打开一次成功的 `Build` 运行，下载对应平台的 `sub2api-plugins-installer-<upstream_tag>-<os>-<arch>` 并运行。安装方式、注意事项和手动恢复步骤见 [Sub2API-Plugins](https://github.com/Nanboom233/Sub2API-Plugins#installation)。
 
-For a running container, substitute the actual container name and backup path:
+如需同时安装多个插件，请使用 Sub2API-Plugins 的组合安装器。
+
+### 回退测试记录
+
+首次读取旧格式历史时，程序会在数据目录的 `codex-eval` 下保存 `history.v1.json`，更早格式保存为 `history.v0.json`。安装器的程序备份不包含这些文件。
+
+如需回退到旧程序并保留对应的测试记录：
+
+1. 停止 Sub2API。
+2. 另存当前的 `history.json`。
+3. 将匹配的旧历史副本恢复为 `history.json`。
+4. 按 [Sub2API-Plugins](https://github.com/Nanboom233/Sub2API-Plugins#restore) 中对应安装方式的步骤恢复程序。
+
+旧历史副本不包含升级后新增的记录。
+
+## 构建
 
 ```sh
-docker cp /path/to/backup/sub2api sub2api:/app/sub2api.restore
-docker exec -u 0 sub2api sh -c 'chmod 755 /app/sub2api.restore && mv -f /app/sub2api.restore /app/sub2api'
-docker restart sub2api
+python3 scripts/build.py
 ```
 
-For a stopped container, copy directly to the executable path:
+构建流程、`UPSTREAM_TAG` 和产物说明见 [Sub2API 插件模板](https://github.com/Nanboom233/sub2api-plugin-template)。
 
-```sh
-docker cp /path/to/backup/sub2api sub2api:/app/sub2api
-docker restart sub2api
-```
+## 致谢
 
-Open the administrator panel and check application readiness after restoration.
-
-## Standalone Build
-
-The standalone build retains its source-path interface. It needs Python 3, Git, Go, Node.js, pnpm, and original Sub2API v0.2.18 source.
-Install frontend dependencies in that source first:
-
-```sh
-cd /path/to/original/sub2api/frontend
-pnpm install --frozen-lockfile
-```
-
-Run this command from the plugin repository:
-
-```sh
-python3 scripts/build.py --source /path/to/original/sub2api --check
-```
-
-The existing command without `--check` remains available.
-The parent project's `python3 scripts/build.py` downloads source, prepares dependencies, and always runs tests.
-
-| Output | Use |
-| --- | --- |
-| `dist/build/sub2api-codex-eval` | Standalone server |
-| `dist/build/sub2api-codex-eval-installer` | Standalone Docker-host installer |
-
-Patches use lexical filename order without a series file.
-Flat `tests/` contains the actual Go regression suites, UI assertions, and test support.
-Native `test_*_test.go` suites declare `// sub2api-package: backend/internal/<package>` and use ordinary `testing.T` assertions.
-The build stages each group in its native temporary package, preserving private-helper access.
-It executes only the discovered test names, once, and stops on failure.
-Python entries retain `test_*.py`. Existing standalone Go programs retain `test_*.go` with `main()`.
-The UI suite executes directly as `tests/test_ui.cjs` through Node.
-`SUB2API_SOURCE` supplies patched source. `SUB2API_ASSETS` supplies data resources.
-Only the golden JSON remains under `assets/`. Manual container fixtures live under `tests/native_*` and do not run automatically.
-The parent repository owns the shared installer transaction suite in `tests/test_installer_test.go`.
-Standalone `--check` runs backend and UI suites and compiles its compatibility installer without a second transaction suite.
-
-## Credits
-
-- [Sub2API](https://github.com/Wei-Shaw/sub2api): the host platform.
-- [CPA Codex Candy Eval](https://github.com/haowang02/cpa-plugin-codex-candy-eval): the original evaluation tool.
-- [codex-candy-eval](https://github.com/haowang02/codex-candy-eval): the original Candy test.
-- [LM Fingerprint Detector](https://github.com/Ikaleio/lm-detector): the number fingerprint method and reference data, under MIT.
-- [LINUX DO](https://linux.do/): community support.
+- [Sub2API](https://github.com/Wei-Shaw/sub2api)：本项目使用的管理平台。
+- [CPA Codex Candy Eval](https://github.com/haowang02/cpa-plugin-codex-candy-eval)：原始评估工具。
+- [codex-candy-eval](https://github.com/haowang02/codex-candy-eval)：糖果测试原项目。
+- [LM Fingerprint Detector](https://github.com/Ikaleio/lm-detector)：数字指纹归因算法与参考库（MIT）。
+- [LINUX DO](https://linux.do/)：新的理想型社区。

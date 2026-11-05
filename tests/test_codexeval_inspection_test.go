@@ -177,12 +177,15 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		t.Fatalf("unexpected state: %+v", state)
 	}
 	for _, r := range state.Results {
-		if r.Outcome == "updated" && r.NotificationError == "" {
+		if verdicts[r.AccountID] != "" && r.NotificationError == "" {
 			t.Fatal("missing notification failure")
+		}
+		if verdicts[r.AccountID] == "" && r.NotificationError != "" {
+			t.Fatal("stable state sent a notification")
 		}
 	}
 
-	// Adjustment off still saves verdicts without priority writes or notifications.
+	// Verdict transitions notify even when both other actions are off.
 	clear(updates)
 	clear(verdicts)
 	notified = 0
@@ -192,8 +195,8 @@ func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-i.runDone
-	if len(updates) != 0 || notified != 0 {
-		t.Fatal("recommendations changed accounts")
+	if len(updates) != 0 || notified != 1 {
+		t.Fatal("adjustment-off transition lost its notification or wrote priority")
 	}
 	if len(verdicts) != 1 || verdicts[3] != InspectionVerdictDegraded {
 		t.Fatalf("adjustment off lost verdict transition: %v", verdicts)
@@ -413,7 +416,7 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 		},
 		Get: func(context.Context, int64) (InspectionAccount, error) { return current, nil },
 		PersistVerdict: func(_ context.Context, _ int64, verdict InspectionVerdict, settings InspectionSettings) error {
-			if !settings.ControlModels || settings.DegradedRemoveModels[0] != "gpt-6.1-sol" {
+			if settings.ControlModels || settings.DegradedRemoveModels[0] != "gpt-6.1-sol" {
 				t.Error("transition did not receive round model settings")
 			}
 			applications++
@@ -431,8 +434,8 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 		},
 		Notify: func(_ context.Context, _ InspectionSettings, _ string, message string) error {
 			notifications++
-			if strings.Contains(message, "连续 3 次") {
-				t.Error("stable-state notification claimed three tests")
+			if strings.Contains(message, "priority") || !strings.Contains(message, "→") {
+				t.Error("notification did not describe the verdict transition")
 			}
 			return nil
 		},
@@ -441,7 +444,6 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 	i.poll, i.recovery = time.Millisecond, time.Millisecond
 	s := DefaultInspectionSettings()
 	s.GroupID = 101
-	s.ControlModels = true
 	i.configure(s)
 	for _, step := range []struct {
 		name    string
@@ -449,30 +451,35 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 		tests   int
 		verdict InspectionVerdict
 		saves   int
+		notify  bool
+		sent    int
 	}{
-		{"degradation", "20", 3, InspectionVerdictDegraded, 1},
-		{"stable wrong", "20", 1, InspectionVerdictDegraded, 1},
-		{"recovery", "21", 3, InspectionVerdictNormal, 2},
-		{"stable correct", "21", 1, InspectionVerdictNormal, 2},
+		{"degradation", "20", 3, InspectionVerdictDegraded, 1, true, 1},
+		{"stable wrong", "20", 1, InspectionVerdictDegraded, 1, true, 1},
+		{"recovery", "21", 3, InspectionVerdictNormal, 2, true, 2},
+		{"stable correct", "21", 1, InspectionVerdictNormal, 2, true, 2},
+		{"muted degradation", "20", 3, InspectionVerdictDegraded, 3, false, 2},
 	} {
 		answer = step.answer
+		s.NotifyEnabled = step.notify
+		i.configure(s)
 		beforeCalls, beforeResults := calls, len(candyResults["91"])
 		if err := i.start(); err != nil {
 			t.Fatal(err)
 		}
 		<-i.runDone
 		r := i.snapshot().Results[0]
-		if calls-beforeCalls != step.tests || r.Tests != step.tests || len(candyResults["91"])-beforeResults != step.tests || current.Verdict != step.verdict || saves != step.saves || current.Priority != 10 || r.Error != "" {
+		if calls-beforeCalls != step.tests || r.Tests != step.tests || len(candyResults["91"])-beforeResults != step.tests || current.Verdict != step.verdict || saves != step.saves || notifications != step.sent || current.Priority != 10 || r.Error != "" {
 			t.Fatalf("%s: calls=%d result=%+v account=%+v saves=%d", step.name, calls-beforeCalls, r, current, saves)
 		}
 		if step.tests == 1 && (r.Outcome != "unchanged" || r.TargetPriority != nil) {
 			t.Fatalf("stable verdict changed: %+v", r)
 		}
 	}
-	if applications != 4 || priorityWrites != 0 || notifications != 0 {
+	if applications != 5 || priorityWrites != 0 || notifications != 2 {
 		t.Fatalf("stable states were skipped or adjustment-off changed priority: applications=%d writes=%d notifications=%d", applications, priorityWrites, notifications)
 	}
-	s.AdjustPriority, s.NormalPriority = true, 20
+	s.AdjustPriority, s.DegradedPriority, s.NotifyEnabled = true, 80, true
 	i.configure(s)
 	for _, wantWrites := range []int{1, 1} {
 		beforeCalls := calls
@@ -480,14 +487,14 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		<-i.runDone
-		if calls-beforeCalls != 1 || current.Priority != 20 || priorityWrites != wantWrites || saves != 2 || notifications != wantWrites {
-			t.Fatalf("stable normal did not apply changed priority or skip matching writes: calls=%d account=%+v writes=%d notifications=%d", calls-beforeCalls, current, priorityWrites, notifications)
+		if calls-beforeCalls != 1 || current.Priority != 80 || priorityWrites != wantWrites || saves != 3 || notifications != 2 {
+			t.Fatalf("stable degraded state did not repair priority silently: calls=%d account=%+v writes=%d notifications=%d", calls-beforeCalls, current, priorityWrites, notifications)
 		}
 	}
 }
 
 func TestCodexInspectionWriteFailures(t *testing.T) {
-	for _, failedWrite := range []string{"verdict", "priority"} {
+	for _, failedWrite := range []string{"verdict", "priority", "matching"} {
 		t.Run(failedWrite, func(t *testing.T) {
 			mu.Lock()
 			loaded, stateLoadError, storageError = false, nil, ""
@@ -497,7 +504,11 @@ func TestCodexInspectionWriteFailures(t *testing.T) {
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
 			}, func(context.Context, int64) (string, error) { return "write failure", nil })
 			a := InspectionAccount{Target: Target{AccountID: 93}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 42, Verdict: InspectionVerdictNormal}
-			verdictWrites, priorityWrites := 0, 0
+			if failedWrite == "matching" {
+				a.Priority = 99
+			}
+			originalPriority := a.Priority
+			verdictWrites, priorityWrites, notifications := 0, 0, 0
 			i := newInspector(InspectionHooks{
 				List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
 					return []InspectionAccount{a}, nil
@@ -519,7 +530,7 @@ func TestCodexInspectionWriteFailures(t *testing.T) {
 					return fmt.Errorf("fixture priority write failed")
 				},
 				Notify: func(context.Context, InspectionSettings, string, string) error {
-					t.Error("failed write notified")
+					notifications++
 					return nil
 				},
 			})
@@ -533,11 +544,15 @@ func TestCodexInspectionWriteFailures(t *testing.T) {
 			}
 			<-i.runDone
 			r := i.snapshot().Results[0]
-			wantVerdict, wantPriorityWrites := InspectionVerdictNormal, 0
+			wantVerdict, wantPriorityWrites, wantNotifications := InspectionVerdictNormal, 0, 0
+			wantOutcome, wantError := "error", "fixture "+failedWrite+" write failed"
 			if failedWrite == "priority" {
-				wantVerdict, wantPriorityWrites = InspectionVerdictDegraded, 1
+				wantVerdict, wantPriorityWrites, wantNotifications = InspectionVerdictDegraded, 1, 1
+			} else if failedWrite == "matching" {
+				wantVerdict, wantNotifications = InspectionVerdictDegraded, 1
+				wantOutcome, wantError = "recommended", ""
 			}
-			if verdictWrites != 1 || priorityWrites != wantPriorityWrites || a.Verdict != wantVerdict || a.Priority != 42 || r.Outcome != "error" || r.Error != "fixture "+failedWrite+" write failed" {
+			if verdictWrites != 1 || priorityWrites != wantPriorityWrites || notifications != wantNotifications || a.Verdict != wantVerdict || a.Priority != originalPriority || r.Outcome != wantOutcome || r.Error != wantError {
 				t.Fatalf("writes=%d/%d account=%+v result=%+v", verdictWrites, priorityWrites, a, r)
 			}
 		})
