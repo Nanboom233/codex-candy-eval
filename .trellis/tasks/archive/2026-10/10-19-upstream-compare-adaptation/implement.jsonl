@@ -1,9 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"Native Sub2API scope and bounded checks."}
-{"file":".trellis/spec/backend/directory-structure.md","reason":"Production patches and separate test ownership."}
-{"file":".trellis/spec/backend/runtime-installation.md","reason":"Native request, page, history, and retained account contracts."}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Native history maps, schema decoding, and atomic writes."}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Preserve shared retries, cancellation, and visible errors."}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Focused build checks and work-commit boundaries."}
-{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/upstream-comparison.md","reason":"Exact upstream revisions, native anchors, and compatibility decisions."}
-{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/plan-review.md","reason":"Approved item decisions and detailed native integration findings. Follow each item's discussion state."}
-{"file":".trellis/tasks/10-19-upstream-compare-adaptation/research/task-audit.md","reason":"Final approval, no added scope, and bounded verification ownership. Do not duplicate existing checks."}

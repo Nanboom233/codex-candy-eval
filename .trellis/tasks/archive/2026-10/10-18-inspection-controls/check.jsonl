@@ -1,9 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"Current check scope and patch ownership."}
-{"file":".trellis/spec/backend/native-inspection.md","reason":"Verify count, switch, scheduling, and cancellation contracts."}
-{"file":".trellis/spec/backend/runtime-installation.md","reason":"Verify preserved manual entry points and shared account UI behavior."}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review against implement.md check ownership. Reuse valid results and add no unrelated test gates."}
-{"file":".trellis/spec/backend/minimal-linux-delivery.md","reason":"Verify effective patch build and package outputs."}
-{"file":".trellis/tasks/10-18-inspection-controls/research/source-findings.md","reason":"Check the repair against the identified mechanisms and missing regressions."}
-{"file":".trellis/tasks/10-18-inspection-controls/research/inspection-count-contract.md","reason":"Verify stable and stale-priority call counts without changing manual tests."}
-{"file":".trellis/tasks/10-18-inspection-controls/research/account-participation-contract.md","reason":"Verify account switch isolation, metadata preservation, and opt-out between worker sends."}
-{"file":".trellis/tasks/10-18-inspection-controls/research/refresh-error-contract.md","reason":"Verify stable refresh, real failure admission, direct runtime/notification prompt removal, and retained next-run timestamp."}
