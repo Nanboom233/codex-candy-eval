@@ -5,6 +5,8 @@
 Active delivery builds the selected upstream tag on Linux amd64/arm64, Darwin amd64/arm64, and Windows amd64.
 The verified integration baseline is Sub2API v0.2.19.
 The complete standalone build kit downloads upstream source and applies this repository's native evaluation patches.
+One CI build job restores dependency caches, compiles selected targets sequentially, and uploads only final executable pairs.
+An optional Release step publishes those same local files within the build job. Errors stay in native Actions logs.
 Production code lives in lexically ordered `patches/*.patch` files. All test cases and support code live in flat `tests/`.
 Use `assets/` for data resources only.
 Each platform has a self-contained Go installer for Docker/Compose, native programs, and supported Apple container installations.
@@ -57,7 +59,7 @@ Reuse completed baseline and unchanged integration evidence.
 Add focused checks only for changed behavior lacking coverage.
 Format changed Go files and check affected scripts/resources.
 Do not run retired universal helpers, full root suites or a repeated pristine baseline for this task.
-No race, coverage, architecture matrix, source manifest or resource-parity gate is required.
+No race, coverage, runtime architecture matrix, source manifest or resource-parity gate is required.
 Report actual results and any visual or hardware execution limits.
 Keep task/fixture logs outside the user package.
 

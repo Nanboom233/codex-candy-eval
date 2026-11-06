@@ -29,8 +29,14 @@ Native Go cases live in `tests/test_*_test.go` with `// sub2api-package:` contex
 Use native `go test` against the temporary target package. Execute discovered cases once and stop on failure.
 Keep execution support in `tests/support.py` and manual fixture helpers in flat `tests/native_*` files.
 This complete kit carries aligned common build tests and the fake-Docker/local HTTP installer suite.
+The fake-Docker `writeState` helper must write, close, and rename a unique temporary file beside `state.json`.
+Readers must see complete JSON even when a timeout kills the writer. Keep malformed-state failures visible in `readState`.
 The default build runs common and business tests once, then compiles the standalone server and installer.
 Combined builds run this plugin's business tests and the parent's common tests once.
+One CI build job runs shared checks once and compiles selected programs and installers sequentially.
+Restore dependency caches once after source download. Upload only final executable pairs after the complete build succeeds.
+Use native Actions logs and status. Do not add custom summaries, duplicate log artifacts, or intermediate artifact transfers.
+Use builder output assembly and native Action/job failures instead of duplicate workflow output checks or successful-upload status aggregation.
 Keep host tests separate from cross-compilation flags. Preserve standalone use without requiring a parent checkout.
 Extend existing cases for changed native/Apple control and recovery, payload selection, locale precedence, plain streams, and cancellation.
 Inspect actual dynamic terminal selection, spinner-to-prompt transitions, and cancellation for terminal presentation changes.
@@ -46,7 +52,7 @@ Keep generated output outside the user package and work commits.
 
 Compatibility profiles, legacy migrations, shims, and multi-version adapters are retired mechanisms.
 Gateway private keys, directed billing, activation, maintenance, and universal builders are retired mechanisms.
-Race, coverage, full-suite, architecture matrices, and source-resource parity are not current acceptance requirements.
+Race, coverage, full-suite, runtime architecture matrices, and source-resource parity are not current acceptance requirements.
 
 ## Commit and Finish Work
 

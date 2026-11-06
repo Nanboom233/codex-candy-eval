@@ -30,8 +30,9 @@ tests/native_*            Manual test fixture and support programs
 assets/                   Data resources, including golden JSON
 licenses/                Original third-party license files
 dist/build/<os>-<arch>/  Ignored platform server and installer executables
+dist/work/              Ignored workspace retained within one CI build job
 README.md AGENTS.md LICENSE  Project documentation and license
-.github/                 Artifact-only build workflow
+.github/                 Single build job and optional Release publication
 .trellis/                Workflow, specifications, tasks, and session records
 .agents/ .codex/ .claude/ .devin/  Tool integration and skills
 ```

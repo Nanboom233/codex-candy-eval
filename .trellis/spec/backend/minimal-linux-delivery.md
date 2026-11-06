@@ -29,9 +29,14 @@ python3 scripts/build.py
 ```
 
 Actions exposes a required string input named `upstream_tag` for manual runs, with default `v0.2.19`. The user can replace it before the run starts.
+Manual runs also expose five platform booleans, all true: `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, and `windows_amd64`.
+The `release` boolean defaults false. Manual Release publication inherits the build's actual upstream tag. There is no `release_tag` input.
+Manual run titles use `Build <upstream_tag> · <ref_name>` without a run number. PR runs use their PR title.
+Top-level `run-name` reads existing inputs and GitHub context. Add no title input.
+Name the workflow and job `Build and Release`. Use one job with ID `build-release`.
 Pass the requested value through `UPSTREAM_TAG` in the process environment. Do not interpolate user input into shell commands.
 Local builds use the same entry and environment input, for example `UPSTREAM_TAG=v0.2.19 python3 scripts/build.py`.
-Push and pull-request builds resolve the latest official release through the public upstream release API.
+Pull-request builds resolve the latest official release through the public upstream release API.
 Local builds without `UPSTREAM_TAG` use the same resolver. Resolve once before source preparation and reuse the resulting actual `tag_name`.
 Use no user credentials for this public lookup. Query failure or an unusable response fails the build without a version fallback.
 
@@ -54,7 +59,7 @@ Discover Python, Go, CJS, and native Vue test entries directly from flat `tests/
 Use `// sub2api-package:` annotations to stage native suites in their temporary package and run the discovered cases with `go test`.
 Keep all assertions and execution support in `tests/`. Use `assets/` for data only.
 Local source checkouts remain untouched. The entry needs no source-path, check, or test-skipping argument.
-Prepare source, dependencies, and the frontend once. Run host tests once, then compile the five supported targets.
+Prepare source, dependencies, and the frontend once. Run host tests once and compile the selected targets, all five by default.
 Use CGO disabled and the native `embed` tag. Add `.exe` to Windows programs.
 The v0.2.19 source retains `0.2.18` in `backend/cmd/server/VERSION`.
 Resolve the actual selected tag once. Remove only its leading `v` for canonical server and installer version metadata.
@@ -71,9 +76,14 @@ Compile each installer for its host with CGO disabled. Keep each raw native prog
 Linux installers reuse their native payload for Docker. Darwin installers additionally embed the matching Linux architecture for containers.
 Darwin arm64 supports Apple container with Linux arm64. Windows amd64 embeds Linux amd64 for Docker.
 Use the selected upstream tag, including `v`, in output names. Windows names add `.exe`.
-Upload each executable directly with `archive: false`. Do not create tar files or another product archive.
-This mode ignores `name` and derives the artifact name from the file's basename.
-Five platform pairs produce ten direct product artifacts. Unix downloads need `chmod +x` before execution.
+Use one `actions/github-script@v9.0.0` upload step in each workflow.
+Install `@actions/artifact@6.3.1` under a unique `RUNNER_TEMP` directory in that step and import its ESM entry.
+Pass the source stage's actual tag and platform list through `UPSTREAM_TAG` and `SUB2API_BUILD_PLATFORMS`.
+For each selected server and installer, await `DefaultArtifactClient.uploadArtifact(name, [file], directory, {skipArchive: true})`.
+The SDK uses each file's basename as its artifact name. Keep each download raw without tar or ZIP packaging.
+Use runner artifact credentials inside the JavaScript action. Do not export them or add secrets.
+Artifact upload itself needs no repository write permission.
+Publish two direct files per selected platform, ten by default. Unix downloads need `chmod +x` before execution.
 Keep executable outputs under `dist/build/<os>-<arch>/`. Do not retain duplicate legacy output copies.
 Stage the complete new output set on the destination filesystem before publication.
 Swap directories through rename. If publication fails, restore the old directory at its original path.
@@ -83,21 +93,85 @@ Preserve original license text and its copyright notices without a fixed file co
 Use original license files only. Do not add a separate `THIRD_PARTY_NOTICES.txt` summary.
 Build helpers, tests, fixture logs, and private files stay outside the installer payload.
 Keep installation, manual rollback, and history instructions in `README.md`. There is no separate `docs/` directory.
-The approved exact README restoration retains historical names and arguments. Use the current entry and filenames in this spec.
+Preserve the user's current README edits. Use the current build entry and filenames in this spec.
 Use `LGPL-3.0-or-later` for this adaptation. Preserve inherited MIT and dependency notices and required GPL/LGPL texts.
 
 The complete standalone kit contains the builder, installer, aligned common tests, and `.github/workflows/build.yml`.
 Local and CI builds use the same argument-free entry without a parent checkout or remote build Action.
-Use push, pull request, and manual triggers on `ubuntu-latest` with read-only repository permissions.
+Use pull-request and manual triggers on `ubuntu-latest`. Keep workflow permissions at `contents: read`.
+Branch and tag pushes do not trigger builds. Keep the existing five platform checkboxes.
 Reference official Actions by exact release tags such as `@v7.0.1`, without commit hashes or major-only tags.
-Disable checkout credential persistence. Publish Actions artifacts only, not Releases or container images.
-Use verified current stable tools. Preserve failures through `pipefail` when capturing build output.
-Before upload, reject missing, empty, or non-executable outputs with an error annotation and an explicit job-summary message.
+Disable checkout credential persistence. PR and Release-disabled manual runs publish Actions artifacts only.
+Place `Save caches` after SDK artifact upload and before `Publish Release` in the same job.
+Release failure must not suppress saving successful build caches.
+Use `if: github.event_name == 'workflow_dispatch' && inputs.release` with normal success handling.
+Read the actual tag, source commit, and selected platforms from `steps.source.outputs`.
+Pass its `tag` output as `UPSTREAM_TAG` and use that value directly in the Release command.
+Pass only the current job's selected executable pairs. Do not add a duplicate tag variable.
+Use their existing `dist/build/<os>-<arch>/` paths. Do not add an artifact download or a separate Release job.
+The combined `build-release` job uses `contents: write` for Release publication.
+Permissions apply to the whole job, including runs where the Release step is skipped.
+Use the built-in job token. Delete any existing same-tag Release and its tag before publication:
+
+```sh
+gh release delete "$UPSTREAM_TAG" --cleanup-tag --yes 2>/dev/null || true
+```
+
+This command removes an existing Release, its old assets, and `refs/tags/$UPSTREAM_TAG` in one call.
+It is a no-op when no Release exists yet.
+Then run `gh release create` with selected assets, `--target`, the title, and `--generate-notes`.
+Keep the CLI's native create-with-assets path, which stages assets before publishing the Release and creating the tag.
+GitHub's automatic Source code archives follow this build's repository commit, and the tagged parent commit records exact plugin revisions.
+Native Release creation failures fail publication.
+Titles use `Sub2API-Plugin <first-seven-commit-characters> (v<canonical-upstream-version>)`, with exactly one leading `v`.
+Do not add Git reference lookups, annotated-tag traversal, or a tag-to-build-commit equality check before publication.
+Do not publish container images or add checksum/build-info manifests.
+Use verified current stable tools. Run build commands directly and retain their exit status.
+The builder assembles expected selected outputs once. SDK installation, import, missing-file, and upload errors fail the upload step.
+Do not add a separate workflow output-validation loop, repeat builder checks, or check executable access immediately after chmod.
 Treat output paths as data in shell messages. Do not evaluate them through command substitution.
-Upload available build logs as diagnostics only when the build step fails.
-Keep summaries to status, failed step, and available diagnostic locations. Do not copy build-log bodies or tails into summaries.
-Link a diagnostic artifact only after its upload succeeds. Otherwise, direct the reader to the native step log.
-Report output validation and upload failures through their own step logs and job-summary messages.
+Use native Actions step logs, annotations, and workflow status for build and upload failures.
+Do not add custom summaries, duplicate log artifacts, or file-capture pipelines.
+
+### Single build job and dependency caches
+
+Local `python3 scripts/build.py` without stage inputs retains the complete build and atomic publication.
+CI uses that entry with `SUB2API_BUILD_STAGE=source|resume` and `SUB2API_BUILD_WORKSPACE=dist/work` within one build job.
+`SUB2API_BUILD_PLATFORMS` contains whitespace-separated final `os-arch` names. Unset means all platforms.
+An empty or unsupported list fails before source work. There is no per-target stage or `SUB2API_BUILD_TARGET`.
+The source stage resolves the upstream tag once, downloads source, applies patches, and exports `tag`, `pnpm`, and `platforms`.
+The workflow also records `source_sha` from the checked-out build commit.
+Restore caches after source exists so workspace-relative lockfile expressions identify actual dependencies.
+Resume receives that same tag through `UPSTREAM_TAG`, the selected platforms, and the existing workspace.
+It runs remaining preparation, tests, compilation, and atomic publication without another source download or release lookup.
+Build the frontend, run plugin tests and vet, assemble installer dependencies/licenses, and run common tests once.
+Compile the host architecture's Linux payload for common installer tests. Ubuntu amd64 uses Linux/amd64.
+Preserve that host payload for local Darwin/arm64 builds even when it is outside the selected final platforms.
+Compile remaining selected native programs and matching Linux container payloads sequentially, reusing programs already compiled for common tests.
+Compile selected installers sequentially from their native and matching Linux programs. Each Go invocation retains native package parallelism.
+Keep all source, programs, and installer resources in the same job workspace. Do not upload intermediate or diagnostic artifacts.
+Publish selected final pairs only after the complete build succeeds. Unselected support payloads are not final products.
+Use exact official tags: cache restore/save `v6.1.0` and github-script `v9.0.0`.
+Declare effective cache paths in the job environment:
+
+```yaml
+GOMODCACHE: ${{ github.workspace }}/dist/cache/go-mod
+GOCACHE: ${{ github.workspace }}/dist/cache/go-build
+pnpm_config_store_dir: ${{ github.workspace }}/dist/cache/pnpm
+```
+
+The existing builder inherits these variables. Cache pnpm's configured parent directory, including its tool-managed versioned children.
+pnpm 12 ignores `npm_config_store_dir`. Use `pnpm_config_store_dir` and do not hardcode a store-version child.
+Use setup step IDs `go` and `node` with outputs `go-version` and `node-version`.
+Use the source step's `pnpm` output for the package-manager version. Do not add a separate cache-path discovery step.
+Restore all three paths in one `Load caches` step. Save the same paths in one `Save caches` step after successful work.
+Use one combined key for runner OS/architecture, Go and Node versions, selected pnpm, actual dependency files, builder, and source revision.
+The dependency files are downloaded `backend/go.mod`, `backend/go.sum`, and `frontend/pnpm-lock.yaml`.
+Use a restore prefix without the source revision. Save with the restore step's primary key unless the exact cache key hit.
+All three paths share cache hit and invalidation behavior. Do not add a cache SDK wrapper or separate workflow.
+One Go compilation cache holds multiple targets. Go distinguishes target OS and architecture internally.
+Use normal restore prefixes. Cache misses retain normal installation, frozen lockfiles, tests, and compilation.
+Do not cache patched source, node_modules, final programs, or installer payloads.
 
 Manual container fixture helpers live under flat `tests/native_*` and stay outside automatic discovery.
 No retained container or manual browser session is required for this build migration.
@@ -192,8 +266,12 @@ Data-only backups do not include that runtime program.
 | Blank, nonnumeric, or out-of-range selection | Repeat the selection prompt without a default |
 | Source download, dependency, patch, or test failure | Fail the build and preserve previous outputs |
 | A production patch cannot apply | Stop with the Git error before compilation |
-| Expected CI output is missing, empty, or non-executable | Fail validation, name the output in an annotation and summary, and skip product upload |
-| CI build step fails | Fail the job and retain its available build log as diagnostics |
+| SDK setup fails or an expected upload file is absent | Fail the upload step through its native exception |
+| An SDK upload fails | Fail the step and build; do not continue to later files |
+| Empty manual platform selection | Reject before source preparation |
+| Dependency cache misses | Install dependencies and build normally; do not skip checks |
+| Release creation fails | Fail publication and retain successful Actions artifacts |
+| CI build step fails | Fail the job, retain native step diagnostics, and prevent product uploads |
 | Automatic upstream release lookup fails | Report the lookup failure and preserve previous outputs |
 | Mismatched or unresolved release | Warn and require explicit confirmation before replacement |
 | Wrong executable architecture | Reject before replacement |
@@ -213,6 +291,12 @@ Data-only backups do not include that runtime program.
 Good: install v0.2.19 with an exact backup and an explicit user decision for version warnings.
 Base: a container recreated from its original image needs the same package reapplied.
 Bad: compile upstream sources or require nc/buildx/helper images on the user's host.
+Good: a Darwin/arm64-only CI build embeds Linux/arm64 while publishing only the selected Darwin pair.
+Bad: repeat shared tests per target or publish unselected support payloads as products.
+Good: one upload step publishes separate raw server and installer artifacts with their existing basenames.
+Good: repeated same-tag publication removes the old Release and tag, then creates a clean Release at the build commit.
+Good: one cache load uses declared effective tool paths, and a disabled Release skips only its publication step.
+Bad: claim that a step condition restricts job-wide token permissions.
 
 ## 6. Tests Required
 
@@ -238,10 +322,20 @@ The [installer/discovery review](../../tasks/archive/2026-10/10-11-sub2api-runti
 The [v0.2.17 review](../../tasks/archive/2026-10/10-11-sub2api-runtime-patch/research/native-v0217-integrated-check.md) records the final build and package after the settings-load repair.
 The [v0.2.17 browser check](../../tasks/archive/2026-10/10-11-sub2api-runtime-patch/research/native-v0217-browser.md) records actual settings controls and the rebuilt candidate's retained-container smoke.
 Reuse passed evidence when inputs and affected behavior remain unchanged.
-No standalone cleanup tests, repeated pristine baseline, architecture matrix, or additional full-suite requirements apply.
+Adapt existing builder cases for source/resume, selected targets/Linux payload closure, tests once, and publication failure.
+Inspect workflow conditions and Release CLI arguments directly. Do not add workflow-text tests or deliberate failing Release runs.
+For the SDK upload integration, inspect paths and failure propagation. Check YAML, copy alignment, and temporary SDK loading once.
+Add no upload test files, unchanged product rebuild, or hosted-run acceptance gate.
+For workflow-only cache and Release changes, check YAML, shell syntax, output wiring, and aligned copies.
+Reuse the completed path probes and SDK checks. Add no cache benchmark, repeated version probe, or test Release.
+No standalone cleanup tests, repeated pristine baseline, runtime architecture matrix, or additional full-suite requirements apply.
 Do not add naming compatibility cases, generated-repository fixtures, separate workflow-lint gates, or deliberate remote failure runs.
 
 ## 7. Wrong vs Correct
 
 Wrong: report a restored executable before checking the restarted application.
 Correct: complete readiness checks before reporting successful restoration.
+Wrong: add another file-validation loop before SDK uploads or test executable access immediately after chmod.
+Correct: assemble expected outputs once, restore permissions, and propagate native SDK/job failures.
+Wrong: add a cache-location step or download artifacts again for same-job Release publication.
+Correct: declare tool cache paths and publish the selected files already present in the build job.
