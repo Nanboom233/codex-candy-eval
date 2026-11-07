@@ -394,6 +394,132 @@ func TestCodexInspectionCandySelection(t *testing.T) {
 	if inspectionEligible(a, s) {
 		t.Fatal("an unavailable account matched")
 	}
+	a.Available = true
+	a.Platform = "anthropic"
+	a.Type = "apikey"
+	a.Name = "claude-prod-1"
+	a.Email = "ops@example.com"
+	s.AccountType = "anthropic:apikey"
+	s.IncludePatterns = []string{"claude-*"}
+	s.ExcludePatterns = []string{"*-backup"}
+	if !inspectionEligible(a, s) {
+		t.Fatal("anthropic:apikey matching include pattern was excluded")
+	}
+	s.IncludePatterns = []string{"*@example.com"}
+	if !inspectionEligible(a, s) {
+		t.Fatal("email matching include pattern was excluded")
+	}
+	s.ExcludePatterns = []string{"*@example.com"}
+	if inspectionEligible(a, s) {
+		t.Fatal("email matching exclude pattern was included")
+	}
+	a.Platform = "deepseek"
+	s.AccountType = "deepseek:apikey"
+	s.IncludePatterns = nil
+	s.ExcludePatterns = nil
+	if !inspectionEligible(a, s) {
+		t.Fatal("deepseek:apikey account was excluded")
+	}
+	if (InspectionSettings{GroupID: 202, AccountType: "deepseek:apikey", AccountPlan: "all", Model: "deepseek-chat", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35, NormalPriority: 10, DegradedPriority: 99}).Validate() != nil {
+		t.Fatal("deepseek:apikey account_type failed validation")
+	}
+}
+
+func TestCodexInspectionFingerprintModeAndWildcards(t *testing.T) {
+	oldDelay := retryDelay
+	retryDelay = time.Millisecond
+	t.Cleanup(func() { retryDelay = oldDelay })
+	mu.Lock()
+	loaded = false
+	stateLoadError = nil
+	storageError = ""
+	candyResults = map[string][]candyResult{}
+	fingerprintResults = map[string][]fingerprintResult{}
+	mu.Unlock()
+
+	accounts := []InspectionAccount{
+		{Target: Target{AccountID: 1}, Name: "codex-match", Email: "match@team.io", Platform: "openai", Type: "oauth", PlanType: "pro", GroupIDs: []int64{101}, Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 10},
+		{Target: Target{AccountID: 2}, Name: "codex-excluded", Email: "skip@team.io", Platform: "openai", Type: "oauth", PlanType: "pro", GroupIDs: []int64{101}, Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 10},
+	}
+	var lock sync.Mutex
+	calls := 0
+	verdicts := map[int64]InspectionVerdict{}
+	Initialize(t.TempDir(), func(_ context.Context, _ int64, _ []byte, _ http.Header) (*http.Response, error) {
+		lock.Lock()
+		calls++
+		lock.Unlock()
+		nums := make([]string, 320)
+		for idx := range nums {
+			nums[idx] = fmt.Sprintf("%d", (idx*37+13)%355+1)
+		}
+		answer := strings.Join(nums, ",")
+		body := fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", answer)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}, func(context.Context, int64) (string, error) { return "fp-account", nil })
+
+	i := newInspector(InspectionHooks{
+		List: func(context.Context, InspectionSettings) ([]InspectionAccount, error) {
+			return accounts, nil
+		},
+		Get: func(_ context.Context, id int64) (InspectionAccount, error) {
+			for _, acc := range accounts {
+				if acc.AccountID == id {
+					return acc, nil
+				}
+			}
+			return InspectionAccount{}, fmt.Errorf("missing %d", id)
+		},
+		PersistVerdict: func(_ context.Context, id int64, v InspectionVerdict, _ InspectionSettings) error {
+			verdicts[id] = v
+			for idx := range accounts {
+				if accounts[idx].AccountID == id {
+					accounts[idx].Verdict = v
+				}
+			}
+			return nil
+		},
+	})
+	defer i.cancel()
+	i.poll = time.Millisecond
+	i.recovery = time.Hour
+
+	s := DefaultInspectionSettings()
+	s.GroupID = 101
+	s.TestType = "fingerprint"
+	s.MaxTestsPerAccount = 3
+	s.Model = "unmatched-custom-model-for-degradation"
+	s.IncludePatterns = []string{"*@team.io"}
+	s.ExcludePatterns = []string{"codex-excluded"}
+	i.configure(s)
+	if err := i.start(); err != nil {
+		t.Fatal(err)
+	}
+	<-i.runDone
+	state := i.snapshot()
+	if len(state.Results) != 1 || state.Results[0].AccountID != 1 {
+		t.Fatalf("wildcard filter did not select only account 1: %+v", state.Results)
+	}
+	r := state.Results[0]
+	if r.Tests != 1 || len(r.RunIDs) != 1 || calls != 3 || r.Outcome != "recommended" || r.TargetPriority == nil || *r.TargetPriority != 99 {
+		t.Fatalf("fingerprint transition did not apply in a single run without confirmation rounds: calls=%d result=%+v", calls, r)
+	}
+	if verdicts[1] != InspectionVerdictDegraded {
+		t.Fatalf("expected fingerprint mismatch to mark account degraded: %+v", verdicts)
+	}
+
+	mu.Lock()
+	predicted := fingerprintResults["1"][0].Attribution.Prediction
+	mu.Unlock()
+	s.Model = predicted
+	i.configure(s)
+	if err := i.start(); err != nil {
+		t.Fatal(err)
+	}
+	<-i.runDone
+	r = i.snapshot().Results[0]
+	if r.Tests != 1 || len(r.RunIDs) != 1 || calls != 6 || r.Outcome != "recommended" || r.TargetPriority == nil || *r.TargetPriority != 10 || verdicts[1] != InspectionVerdictNormal {
+		t.Fatalf("fingerprint recovery did not apply in a single run without recovery_wait: calls=%d result=%+v verdicts=%+v", calls, r, verdicts)
+	}
 }
 
 func TestCodexInspectionDegradedWrongOnce(t *testing.T) {

@@ -1,9 +1,9 @@
 diff --git a/backend/internal/codexeval/web.go b/backend/internal/codexeval/web.go
 new file mode 100644
-index 0000000..e5bf9d3
+index 0000000..d4a1368
 --- /dev/null
 +++ b/backend/internal/codexeval/web.go
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,93 @@
 +package codexeval
 +
 +import (
@@ -13,7 +13,7 @@ index 0000000..e5bf9d3
 +	"strings"
 +)
 +
-+const pluginVersion = "0.3.14"
++const pluginVersion = "0.4.6"
 +
 +//go:embed web/ui.html
 +var uiTemplate string
@@ -39,6 +39,12 @@ index 0000000..e5bf9d3
 +//go:embed web/vendor/temml.css
 +var temmlStyles string
 +
++//go:embed web/storage.js
++var storageScript string
++
++//go:embed web/credentials.js
++var credentialsScript string
++
 +//go:embed web/app.js
 +var appScript string
 +
@@ -50,6 +56,9 @@ index 0000000..e5bf9d3
 +
 +//go:embed web/candy.js
 +var candyScript string
++
++//go:embed web/siwc.js
++var siwcScript string
 +
 +//go:embed web/fingerprint.js
 +var fingerprintScript string
@@ -74,9 +83,12 @@ index 0000000..e5bf9d3
 +		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
 +		"/*TEXMATH_SCRIPT*/", texmathScript,
 +		"/*TEMML_SCRIPT*/", temmlScript,
++		"/*STORAGE_SCRIPT*/", storageScript,
++		"/*CREDENTIALS_SCRIPT*/", credentialsScript,
 +		"/*CATALOG_SCRIPT*/", catalogScript,
 +		"/*COMPONENTS_SCRIPT*/", componentsScript,
 +		"/*CANDY_SCRIPT*/", candyScript,
++		"/*SIWC_SCRIPT*/", siwcScript,
 +		"/*FINGERPRINT_SCRIPT*/", fpScript,
 +		"/*PELICAN_SCRIPT*/", plScript,
 +		"/*INSPECTION_SCRIPT*/", inspectionScript,
@@ -87,23 +99,21 @@ index 0000000..e5bf9d3
 +func Page() []byte { return uiHTML }
 diff --git a/backend/internal/codexeval/web/app.js b/backend/internal/codexeval/web/app.js
 new file mode 100644
-index 0000000..3e1c544
+index 0000000..cbbe400
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
-@@ -0,0 +1,583 @@
+@@ -0,0 +1,548 @@
 +"use strict";
 +const BASE = "/api/v1/admin/codex-eval";
-+const PREF_STORE = "sub2api-codex-eval.prefs";
-+const MASK_STORE = "sub2api-codex-eval.masked";
 +const DEFAULT_MODEL = "gpt-6.1-sol";
 +const DEFAULT_EFFORT = "low";
 +const DEFAULT_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 +const HIDDEN_MODEL = (id) => id.toLowerCase().includes("image");
-+const tabNames = ["candy", "fingerprint", "pelican", "settings"];
++const tabNames = ["candy", "fingerprint", "pelican", "siwc", "settings"];
 +
 +let sessionBlocked = false;
 +let credentials = [];
-+let evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {} };
++let evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {}, siwc: {} };
 +let pollTimer = 0;
 +let loadError = "";
 +let loadController = null;
@@ -154,12 +164,6 @@ index 0000000..3e1c544
 +  return data.data;
 +}
 +
-+function stored(name) {
-+  try { return JSON.parse(localStorage.getItem(name)); } catch (_) { return null; }
-+}
-+function store(name, value) {
-+  try { localStorage.setItem(name, JSON.stringify(value)); } catch (_) {}
-+}
 +function fillModels() {
 +  const ids = [...new Set(catalogCache.models?.ids || [])].sort(compareModels);
 +  const probeModels = ids.filter((id) => !/[()]/.test(id));
@@ -171,6 +175,7 @@ index 0000000..3e1c544
 +  fill("model", ids, candyPrefs().model);
 +  fill("fp-model", probeModels, stored(PREF_STORE + ".fingerprint")?.model);
 +  fill("pl-model", ids, stored(PREF_STORE + ".pelican")?.model);
++  fill("siwc-model", probeModels, stored(PREF_STORE + ".siwc")?.model);
 +  updateModelPicker("inspection-model", ids);
 +  renderInspectionModelOptions();
 +}
@@ -237,7 +242,7 @@ index 0000000..3e1c544
 +}
 +
 +function renderPageActions() {
-+  $("clear-all").disabled = pending || credentials.every((a) => !a.results.length && !a.fingerprints?.length && !a.pelicans?.length);
++  $("clear-all").disabled = pending || credentials.every((a) => !a.results.length && !a.fingerprints?.length && !a.pelicans?.length && !a.siwc?.length);
 +  $("refresh").disabled = pending || refreshing;
 +  $("refresh").setAttribute("aria-busy", refreshing);
 +}
@@ -245,10 +250,11 @@ index 0000000..3e1c544
 +function render() {
 +  renderPageActions();
 +  setNotice("storage-error", storageError);
-+  for (const prefix of ["", "fp-", "pl-"]) fillPlanFilter(prefix);
++  for (const prefix of ["", "fp-", "pl-", "siwc-"]) fillPlanFilter(prefix);
 +  renderCandy();
 +  renderFingerprints();
 +  renderPelican();
++  renderSIWC();
 +}
 +
 +function stopPolling() {
@@ -266,13 +272,14 @@ index 0000000..3e1c544
 +   autoInspectionEnabled: inspectionSwitching.has(id) ? inspectionSwitching.get(id) : account.extra?.codex_eval_inspection_enabled !== false,
 +   unavailable: restrictions.length > 0, restrictions,
 +   plan_type: account.credentials?.plan_type || account.parent_plan_type || "",
-+   results: data.candy[id] || [], fingerprints: data.fingerprint[id] || [],
-+   pelicans: data.pelican[id] || [], task,
++   results: data.candy?.[id] || [], fingerprints: data.fingerprint?.[id] || [],
++   pelicans: data.pelican?.[id] || [], siwc: data.siwc?.[id] || [], task,
 +   task_in_scope: task?.target.group_id === selectedGroup };
 +  if (task && a.task_in_scope) {
 +   if (task.type === "candy") a.running = task.progress;
 +   if (task.type === "fingerprint") a.fingerprint_running = { ...task.progress, phase: task.status === "cancelling" ? "cancelling" : task.progress.phase };
 +   if (task.type === "pelican") a.pelican_running = true;
++   if (task.type === "siwc") a.siwc_running = { ...(task.progress || { done: 0, total: 1 }), phase: task.status === "cancelling" ? "cancelling" : task.progress?.phase };
 +  }
 +  return a;
 + });
@@ -303,10 +310,10 @@ index 0000000..3e1c544
 +  const usable = new Set(credentials.filter(usableCredential).map((a) => a.id));
 +  const answers = new Set(credentials.flatMap((a) => a.results.map((r) => answerKey(a.id, r))));
 +  const pages = new Set(credentials.flatMap((a) => a.pelicans.map((r) => pelicanKey(a.id, r.id))));
-+  for (const expanded of [candyExpanded, fpExpanded, plExpanded]) {
++  for (const expanded of [candyExpanded, fpExpanded, plExpanded, siwcExpanded]) {
 +    for (const id of expanded) if (!ids.has(id)) expanded.delete(id);
 +  }
-+  for (const selection of [candySelected, fpSelected, plSelected]) {
++  for (const selection of [candySelected, fpSelected, plSelected, siwcSelected]) {
 +    for (const id of selection) if (!usable.has(id)) selection.delete(id);
 +  }
 +  for (const id of candyAnswersExpanded) if (!answers.has(id)) candyAnswersExpanded.delete(id);
@@ -389,13 +396,13 @@ index 0000000..3e1c544
 +  sessionBlocked = true;
 +  resetCatalogCache();
 +  credentials = [];
-+  evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {} };
++  evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {}, siwc: {} };
 +  inspectionState = { results: [] };
 +  inspectionSettingsLoaded = false;
 +  inspectionDirtyFields.clear();
 +  inspectionField("ntfy_password").value = "";
 +  loadError = storageError = "";
-+  for (const collection of [candySelected, fpSelected, plSelected, candyExpanded, fpExpanded, plExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
++  for (const collection of [candySelected, fpSelected, plSelected, siwcSelected, candyExpanded, fpExpanded, plExpanded, siwcExpanded, candyAnswersExpanded, pelicanPages]) collection.clear();
 +  for (const id of notices.keys()) setNotice(id, "");
 +  hideTip();
 +  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
@@ -419,7 +426,7 @@ index 0000000..3e1c544
 +
 +function setMasked(masked) {
 +  document.body.classList.toggle("masked", masked);
-+  for (const id of ["mask", "fp-mask", "pl-mask"]) {
++  for (const id of ["mask", "fp-mask", "pl-mask", "siwc-mask"]) {
 +    $(id).setAttribute("aria-pressed", masked);
 +    $(id).innerHTML = icon(masked ? "eye" : "eye-off");
 +    setLabel($(id), masked ? "取消脱敏" : "脱敏");
@@ -437,13 +444,13 @@ index 0000000..3e1c544
 +  if (name === "settings" && loadSettings) loadInspectionSettings();
 +  store(PREF_STORE + ".tab", name);
 +}
-+const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["pelican_running", "鹈鹕测试"]];
-+const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", pelican: "鹈鹕测试" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
++const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["pelican_running", "鹈鹕测试"], ["siwc_running", "SIWC 检测"]];
++const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", pelican: "鹈鹕测试", siwc: "SIWC 检测" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
 +const credentialBusy = (a) => !!busyTest(a);
 +const usableCredential = (a) => !a.disabled && !a.unavailable;
 +const availableCredential = (a) => usableCredential(a) && !credentialBusy(a);
 +// Why a test cannot start, shown on its disabled button; empty when it can.
-+const pageBlocker = (prefix) => !selectedGroup ? "没有可用 OpenAI 分组" : catalogBlocker() || (!$(prefix + "model").value.trim() ? "请输入模型名称" : pending ? "正在处理上一个操作，请稍候" : "");
++const pageBlocker = (prefix) => !selectedGroup ? "没有可用分组" : catalogBlocker() || (!$(prefix + "model").value.trim() ? "请输入模型名称" : pending ? "正在处理上一个操作，请稍候" : "");
 +function runBlocker(prefix, a) {
 +  if (a.disabled) return "账户已停用，启用后才能测试";
 +  if (a.unavailable) return "账户暂不可用：" + unavailableReason(a);
@@ -541,42 +548,11 @@ index 0000000..3e1c544
 +  });
 +}
 +
-+const providerType = (a) => a.type;
-+const credentialType = (a) => a.type;
-+const credentialTypeLabel = (a) => a.type === "oauth" ? "OAuth" : a.type === "apikey" ? "API Key" : a.type;
-+const typedCredentials = (prefix) => credentials.filter((a) => $(prefix + "credential-type").value === "all" || credentialType(a) === $(prefix + "credential-type").value);
-+const PRO_ALL = "Pro ALL";
-+function visibleCredentials(prefix) {
-+  const filter = $(prefix + "credential-plan").value;
-+  const enabledOnly = $(prefix + "enabled-only").checked;
-+  const matches = (plan) => filter === "all" || (filter === PRO_ALL ? plan?.pro : plan?.label === filter);
-+  return typedCredentials(prefix).filter((a) => (!enabledOnly || !a.disabled) && matches(credentialPlan(a))).sort((a, b) => planRank(a) - planRank(b));
-+}
-+function fillPlanFilter(prefix) {
-+  const plans = [...new Map(typedCredentials(prefix).map(credentialPlan).filter(Boolean).map((plan) => [plan.label, plan])).values()]
-+    .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
-+  const groups = plans.filter((plan) => plan.pro).length > 1 ? [PRO_ALL] : [];
-+  const selected = $(prefix + "credential-plan").value;
-+  const options = [["all", "所有订阅类型"], ...groups, ...plans.map((plan) => plan.label)];
-+  if (!prefix && selected && selected !== "all" && !options.some((option) => (Array.isArray(option) ? option[0] : option) === selected)) options.push(selected);
-+  $(prefix + "plan-filter").hidden = !plans.length && !(selected && selected !== "all" && !prefix);
-+  fillSelect(prefix + "credential-plan", options, selected, "all");
-+}
-+function fillCredentialTypes() {
-+  const types = new Map(credentials.map((a) => [credentialType(a), credentialTypeLabel(a)]));
-+  const options = [["all", "全部账户"], ...[...types].sort(([a], [b]) => a.localeCompare(b))];
-+  for (const prefix of ["", "fp-", "pl-"]) {
-+    const selected = $(prefix + "credential-type").value;
-+    const values = [...options];
-+    if (!prefix && selected && !values.some(([value]) => value === selected)) values.push([selected, selected === "oauth" ? "OAuth" : "API Key"]);
-+    fillSelect(prefix + "credential-type", values, selected, "all");
-+  }
-+}
-+
 +function initializeLayout() {
 +  $("candy-credentials").innerHTML = credentialCard("", "糖果测试", ["账户", "最近一次", "正确率", "最近 20 次"]);
 +  $("fp-credentials").innerHTML = credentialCard("fp-", "指纹测试", ["账户", "指纹结果", "测试模型", "测试时间"]);
 +  $("pl-credentials").innerHTML = credentialCard("pl-", "鹈鹕测试", ["账户", "最近一次", "画面"]);
++  $("siwc-credentials").innerHTML = credentialCard("siwc-", "SIWC 检测", ["账户", "最近一次", "测试模型", "检测时间"]);
 +  $("notifications").innerHTML = ["flash", "load-error", "catalog-error", "storage-error"].map((id) => `<div id="${id}" class="global-flash" role="alert" hidden><span class="notice-symbol" aria-hidden="true"></span><span class="notice-message"></span><button class="notice-close" type="button" aria-label="隐藏提示" data-tip>${icon("x")}</button></div>`).join("");
 +}
 +
@@ -588,6 +564,7 @@ index 0000000..3e1c544
 +initializeCandy();
 +initializeFingerprint();
 +initializePelican();
++initializeSIWC();
 +initializeInspection();
 +document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon, el.dataset.class); });
 +
@@ -617,9 +594,9 @@ index 0000000..3e1c544
 +  setMasked(masked);
 +  store(MASK_STORE, masked);
 +});
-+for (const id of ["fp-mask", "pl-mask"]) $(id).addEventListener("click", () => $("mask").click());
++for (const id of ["fp-mask", "pl-mask", "siwc-mask"]) $(id).addEventListener("click", () => $("mask").click());
 +
-+for (const [id, scope] of [["clear", "candy"], ["fp-clear", "fingerprint"], ["pl-clear", "pelican"], ["clear-all", "all"]]) {
++for (const [id, scope] of [["clear", "candy"], ["fp-clear", "fingerprint"], ["pl-clear", "pelican"], ["siwc-clear", "siwc"], ["clear-all", "all"]]) {
 +  $(id).addEventListener("click", () => {
 +    clearScope = scope;
 +    $("clear-title").textContent = `${$(id).getAttribute("aria-label")}？`;
@@ -643,7 +620,7 @@ index 0000000..3e1c544
 +}
 +switchTab(tabNames.includes(stored(PREF_STORE + ".tab")) ? stored(PREF_STORE + ".tab") : "candy", { loadSettings: false });
 +
-+for (const [prefix, type, selection, submit] of [["", "candy", candySelected, runCandy], ["fp-", "fp", fpSelected, runFingerprint], ["pl-", "pl", plSelected, runPelican]]) {
++for (const [prefix, type, selection, submit] of [["", "candy", candySelected, runCandy], ["fp-", "fp", fpSelected, runFingerprint], ["pl-", "pl", plSelected, runPelican], ["siwc-", "siwc", siwcSelected, runSIWC]]) {
 +  for (const filter of ["credential-type", "credential-plan", "enabled-only"]) $(prefix + filter).addEventListener("change", () => { selection.clear(); render(); });
 +  $(prefix + "toolbar").addEventListener("submit", (e) => {
 +    e.preventDefault();
@@ -670,7 +647,7 @@ index 0000000..3e1c544
 + selectedGroup = Number(select.value);
 + store(PREF_STORE + ".group", selectedGroup);
 + stopPolling(); resetCatalogCache(); credentials = [];
-+ for (const selection of [candySelected, fpSelected, plSelected]) selection.clear();
++ for (const selection of [candySelected, fpSelected, plSelected, siwcSelected]) selection.clear();
 + syncGroupControls(); load({ refresh: true });
 +}));
 +localStorage.getItem("auth_token") ? start() : showLogin("请登录 Sub2API 管理面板，登录后刷新本页");
@@ -797,10 +774,10 @@ index 0000000..e3da0b1
 +}
 diff --git a/backend/internal/codexeval/web/catalog.js b/backend/internal/codexeval/web/catalog.js
 new file mode 100644
-index 0000000..8931a2a
+index 0000000..d94ab90
 --- /dev/null
 +++ b/backend/internal/codexeval/web/catalog.js
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,130 @@
 +"use strict";
 +let groups = [];
 +let selectedGroup = 0;
@@ -825,8 +802,8 @@ index 0000000..8931a2a
 +function syncGroupControls() {
 +  const options = groups.map((g) => [String(g.id), g.name]);
 +  if (selectedGroup && !groups.some((g) => g.id === selectedGroup)) options.push([String(selectedGroup), `分组 ${selectedGroup}（不可用）`]);
-+  for (const prefix of ["", "fp-", "pl-"]) {
-+    fillSelect(prefix + "group", options, String(selectedGroup), String(selectedGroup));
++  for (const prefix of ["", "fp-", "pl-", "siwc-"]) {
++    if ($(prefix + "group")) fillSelect(prefix + "group", options, String(selectedGroup), String(selectedGroup));
 +  }
 +}
 +// Keep the original model ordering; IDs are sent without CPA suffix conversion.
@@ -865,9 +842,9 @@ index 0000000..8931a2a
 +  const current = () => generation === catalogGeneration && !signal?.aborted;
 +  let inventoryRead = false;
 +  try {
-+    const available = reuseModels ? groups : await api("/api/v1/admin/groups/all?platform=openai", { signal });
++    const available = reuseModels ? groups : await api("/api/v1/admin/groups/all", { signal });
 +    if (!current() || selectedGroup !== initialGroup) return;
-+    groups = available;
++    groups = available || [];
 +    if (!groups.some((g) => g.id === selectedGroup) && !(inspectionSettingsLoaded && selectedGroup > 0)) {
 +      const remembered = Number(stored(PREF_STORE + ".group"));
 +      selectedGroup = groups.some((g) => g.id === remembered) ? remembered : groups[0]?.id || 0;
@@ -909,9 +886,10 @@ index 0000000..8931a2a
 +  const accounts = [];
 +  const filter = group == null ? "" : `&group=${group}`;
 +  for (let page = 1; ; page++) {
-+    const data = await api(`/api/v1/admin/accounts?platform=openai${filter}&lite=1&page=${page}&page_size=100`, { signal });
++    const data = await api(`/api/v1/admin/accounts?lite=1&page=${page}&page_size=100${filter}`, { signal });
 +    if (!current()) return [];
-+    accounts.push(...data.items);
++    const items = data.items || [];
++    accounts.push(...items);
 +    if (page >= data.pages || !data.items.length) return accounts;
 +  }
 +}
@@ -932,10 +910,10 @@ index 0000000..8931a2a
 +}
 diff --git a/backend/internal/codexeval/web/components.js b/backend/internal/codexeval/web/components.js
 new file mode 100644
-index 0000000..c62c6be
+index 0000000..34b9d0d
 --- /dev/null
 +++ b/backend/internal/codexeval/web/components.js
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,347 @@
 +"use strict";
 +
 +// Lucide icons (https://lucide.dev, ISC license).
@@ -1002,7 +980,7 @@ index 0000000..c62c6be
 +  picker.input.hidden = !picker.custom;
 +}
 +function initializeModelPickers() {
-+  for (const id of ["model", "fp-model", "pl-model", "inspection-model"]) {
++  for (const id of ["model", "fp-model", "pl-model", "siwc-model", "inspection-model"]) {
 +    const input = $(id), select = $(id + "-select");
 +    const picker = { input, select, models: [], custom: false };
 +    modelPickers.set(id, picker);
@@ -1033,13 +1011,12 @@ index 0000000..c62c6be
 +const listTime = (iso) => `<div class="test-time mono" ${iso ? `data-tip="${esc(fmtTime(iso))}"` : ""}>${iso ? esc(fmtTime(iso, false)) : "—"}</div>`;
 +const modelName = (r) => r.effort ? `${r.model}(${r.effort})` : r.model;
 +const metric = (name, label, value, cls = "") => `<span class="metric ${cls}" aria-label="${esc(`${label} ${value}`)}" data-tip>${icon(name)}<span class="meta mono">${esc(value)}</span></span>`;
-+const modelMeta = (r) => metric("astroid", "模型", modelName(r), "model-meta");
++const modelMeta = (r) => r.model ? metric("astroid", "模型", modelName(r), "model-meta") : "";
 +const STATUS_ICONS = { ok: "circle-check", bad: "circle-x", err: "circle-alert", skip: "ban" };
 +const statusPill = (kind, label) => `<span class="verdict ${kind}">${icon(STATUS_ICONS[kind])}${label}</span>`;
 +const metrics = (r) =>
 +  metric("clock", "耗时", r.duration_ms != null ? fmtSec(r.duration_ms) : "—") +
-+  metric("square-arrow-right-enter", "输入 Token", r.input_tokens != null ? fmtNum(r.input_tokens) : "—") +
-+  metric("square-arrow-right-exit", "输出 Token", r.output_tokens != null ? fmtNum(r.output_tokens) : "—") +
++  (r.input_tokens != null || r.output_tokens != null || r.model ? metric("square-arrow-right-enter", "输入 Token", r.input_tokens != null ? fmtNum(r.input_tokens) : "—") + metric("square-arrow-right-exit", "输出 Token", r.output_tokens != null ? fmtNum(r.output_tokens) : "—") : "") +
 +  (r.reasoning_tokens > 0 ? metric("brain", "推理 Token", fmtNum(r.reasoning_tokens)) : "") +
 +  (r.attempts ? `<span class="metric"><span>${r.attempts} 次尝试</span></span>` : "");
 +
@@ -1062,7 +1039,7 @@ index 0000000..c62c6be
 +];
 +const PLAN_BY_ID = new Map(CODEX_PLANS.flatMap((plan, rank) => plan.ids.map((id) => [id, { ...plan, rank }])));
 +function credentialPlan(a) {
-+  if (a.type !== "oauth") return null;
++  if ((a.platform && a.platform !== "openai") || a.type !== "oauth") return null;
 +  const id = String(a.plan_type || "").trim();
 +  return PLAN_BY_ID.get(id.toLowerCase()) || { label: id || "未知", badge: "", rank: CODEX_PLANS.length };
 +}
@@ -1284,6 +1261,88 @@ index 0000000..c62c6be
 +    });
 +  }
 +}
+diff --git a/backend/internal/codexeval/web/credentials.js b/backend/internal/codexeval/web/credentials.js
+new file mode 100644
+index 0000000..b864792
+--- /dev/null
++++ b/backend/internal/codexeval/web/credentials.js
+@@ -0,0 +1,76 @@
++"use strict";
++const PLATFORM_LABELS = {
++  openai: "OpenAI",
++  anthropic: "Anthropic",
++  gemini: "Gemini",
++  antigravity: "Antigravity",
++  grok: "Grok",
++  kimi: "Kimi",
++  zhipu: "Zhipu GLM",
++  deepseek: "DeepSeek",
++  minimax: "MiniMax",
++  opencode_go: "OpenCode",
++  typesafe: "TypeSafe",
++  command_code: "Command Code",
++  cline: "Cline",
++};
++const AUTH_TYPE_LABELS = {
++  oauth: "OAuth",
++  "setup-token": "Setup Token",
++  apikey: "API Key",
++  upstream: "Upstream",
++};
++
++const accountPlatform = (a) => String(a?.platform || "openai").trim().toLowerCase() || "openai";
++const providerType = (a) => accountPlatform(a) === "openai" ? a.type : `${accountPlatform(a)}:${a.type}`;
++const credentialType = (a) => `${accountPlatform(a)}:${a.type}`;
++function credentialTypeLabel(value) {
++  const key = typeof value === "string" ? value : credentialType(value);
++  if (key === "all") return "全部账户";
++  if (!key.includes(":")) return AUTH_TYPE_LABELS[key] || key;
++  const [platform, type] = key.split(/:(.*)/);
++  return `${PLATFORM_LABELS[platform] || platform} · ${AUTH_TYPE_LABELS[type] || type}`;
++}
++function matchesCredentialType(a, selected, prefix = "") {
++  if (prefix === "siwc-") return accountPlatform(a) === "openai" && a.type === "oauth";
++  if (!selected || selected === "all") return true;
++  if (selected.includes(":")) return credentialType(a) === selected;
++  return a.type === selected && accountPlatform(a) === "openai";
++}
++const typedCredentials = (prefix) => credentials.filter((a) => matchesCredentialType(a, $(prefix + "credential-type")?.value, prefix));
++const PRO_ALL = "Pro ALL";
++function visibleCredentials(prefix) {
++  const filter = $(prefix + "credential-plan").value;
++  const enabledOnly = $(prefix + "enabled-only").checked;
++  const matches = (plan) => filter === "all" || (filter === PRO_ALL ? plan?.pro : plan?.label === filter);
++  return typedCredentials(prefix).filter((a) => (!enabledOnly || !a.disabled) && matches(credentialPlan(a))).sort((a, b) => planRank(a) - planRank(b));
++}
++function fillPlanFilter(prefix) {
++  const plans = [...new Map(typedCredentials(prefix).map(credentialPlan).filter(Boolean).map((plan) => [plan.label, plan])).values()]
++    .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
++  const groups = plans.filter((plan) => plan.pro).length > 1 ? [PRO_ALL] : [];
++  const selected = $(prefix + "credential-plan").value;
++  const options = [["all", "所有订阅类型"], ...groups, ...plans.map((plan) => plan.label)];
++  if (!prefix && selected && selected !== "all" && !options.some((option) => (Array.isArray(option) ? option[0] : option) === selected)) options.push(selected);
++  $(prefix + "plan-filter").hidden = !plans.length && !(selected && selected !== "all" && !prefix);
++  fillSelect(prefix + "credential-plan", options, selected, "all");
++}
++function fillCredentialTypes() {
++  const types = new Map(credentials.map((a) => [credentialType(a), credentialTypeLabel(a)]));
++  const options = [["all", "全部账户"], ...[...types].sort(([a], [b]) => a.localeCompare(b))];
++  for (const prefix of ["", "fp-", "pl-", "siwc-"]) {
++    const select = $(prefix + "credential-type");
++    if (!select) continue;
++    if (prefix === "siwc-") {
++      select.parentElement.hidden = true;
++      fillSelect(prefix + "credential-type", [["openai:oauth", credentialTypeLabel("openai:oauth")]], "openai:oauth", "openai:oauth");
++      continue;
++    }
++    const selected = select.value;
++    const values = [...options];
++    if (selected && selected !== "all" && !values.some(([value]) => value === selected)) {
++      values.push([selected, credentialTypeLabel(selected)]);
++    }
++    fillSelect(prefix + "credential-type", values, selected, "all");
++  }
++}
 diff --git a/backend/internal/codexeval/web/fingerprint.js b/backend/internal/codexeval/web/fingerprint.js
 new file mode 100644
 index 0000000..bf1d843
@@ -1355,10 +1414,10 @@ index 0000000..bf1d843
 +}
 diff --git a/backend/internal/codexeval/web/inspection.js b/backend/internal/codexeval/web/inspection.js
 new file mode 100644
-index 0000000..630cbc0
+index 0000000..ddd5edb
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,545 @@
 +"use strict";
 +const INSPECTION_SETTINGS = "/api/v1/admin/settings/codex-eval-inspection";
 +const CANDY_SELECTION_FIELDS = { group_id: "group", account_type: "credential-type", account_plan: "credential-plan", enabled_only: "enabled-only" };
@@ -1394,16 +1453,22 @@ index 0000000..630cbc0
 +      syncGroupControls();
 +      if (changed && accountListReady) {
 +        stopPolling(); resetCatalogCache(); credentials = [];
-+        for (const selection of [candySelected, fpSelected, plSelected]) selection.clear();
++        for (const selection of [candySelected, fpSelected, plSelected, siwcSelected]) selection.clear();
 +        load({ refresh: true });
 +      }
 +    } else if (name === "account_type" || name === "account_plan") {
-+      if (![...field.options].some((option) => option.value === value)) field.add(new Option(value, value));
++      if (![...field.options].some((option) => option.value === value)) field.add(new Option(name === "account_type" ? credentialTypeLabel(value) : value, value));
 +      field.value = value;
 +    } else if (field.type === "checkbox") field.checked = value === true;
 +    else if (name === "degraded_remove_models") {
 +      field.value = JSON.stringify(value || []);
 +      renderInspectionModelTags();
++    }
++    else if (name === "include_patterns" || name === "exclude_patterns") {
++      field.value = Array.isArray(value) ? value.join(", ") : (value ?? "");
++    }
++    else if (name === "test_type") {
++      field.value = value || "candy";
 +    }
 +    else if (name === "model") updateModelPicker("inspection-model", catalogCache.models?.ids || [], value);
 +    else field.value = value ?? "";
@@ -1412,12 +1477,24 @@ index 0000000..630cbc0
 +  inspectionField("ntfy_password").placeholder = settings.ntfy_password_configured ? "已配置，留空保持不变" : "";
 +  updateInspectionVisibility();
 +}
++function currentInspectionTestType() {
++  return inspectionField("test_type")?.value === "fingerprint" ? "fingerprint" : "candy";
++}
++function syncInspectionStatusPlacement() {
++  const statusEl = document.getElementById("inspection-status");
++  const targetCard = document.getElementById(currentInspectionTestType() === "fingerprint" ? "fp-credentials" : "candy-credentials");
++  const targetHead = targetCard?.querySelector(".credential-head");
++  if (statusEl && targetHead && statusEl.parentElement !== targetHead) {
++    targetHead.insertBefore(statusEl, targetHead.querySelector(".credential-filters") || null);
++  }
++}
 +function updateInspectionVisibility() {
 +  document.getElementById("inspection-auto-fields").hidden = !document.getElementById("inspection-enabled").checked;
 +  document.getElementById("inspection-priority-fields").hidden = !inspectionField("adjust_priority").checked;
 +  $("inspection-model-fields").hidden = !inspectionField("control_models").checked;
 +  $("inspection-notification-fields").hidden = !inspectionField("notify_enabled").checked;
 +  if ($("inspection-model-fields").hidden) closeInspectionModels();
++  syncInspectionStatusPlacement();
 +}
 +function inspectionRemovedModels() { return JSON.parse(inspectionField("degraded_remove_models").value || "[]"); }
 +function setInspectionRemovedModels(models) {
@@ -1736,8 +1813,25 @@ index 0000000..630cbc0
 +    inspectionMessage(err.message, true);
 +  } finally { inspectionSettingsLoading = false; }
 +}
++function parseInspectionPatterns(value) {
++  return String(value || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
++}
++function validWildcardPatterns(value) {
++  for (const pattern of parseInspectionPatterns(value)) {
++    if (pattern.endsWith("\\")) return false;
++    let inClass = false;
++    for (let i = 0; i < pattern.length; i++) {
++      if (pattern[i] === "\\") { i++; continue; }
++      if (pattern[i] === "[") inClass = true;
++      else if (pattern[i] === "]" && inClass) inClass = false;
++    }
++    if (inClass) return false;
++  }
++  return true;
++}
 +function renderInspectionState(state) {
 +  inspectionState = state;
++  syncInspectionStatusPlacement();
 +  const phase = state.cancelling ? "正在停止" : ({ testing: "正在测试", recovery_wait: "等待恢复确认", cancelled: "巡检已停止" })[state.phase] || "";
 +  document.getElementById("inspection-phase").textContent = phase;
 +  document.getElementById("inspection-next").textContent = state.next_run_at ? "下次巡检：" + fmtTime(state.next_run_at, false) : "";
@@ -1746,6 +1840,7 @@ index 0000000..630cbc0
 +  document.getElementById("inspection-start").disabled = !inspectionSettingsLoaded || state.running || inspectionActionPending;
 +  document.getElementById("inspection-stop").disabled = !state.running || state.cancelling || inspectionActionPending;
 +  renderCandy();
++  renderFingerprints();
 +}
 +async function loadInspectionState() {
 +  clearTimeout(inspectionTimer);
@@ -1772,6 +1867,10 @@ index 0000000..630cbc0
 +  const normal = inspectionField("normal_priority"), degraded = inspectionField("degraded_priority");
 +  const invalidPriorityPair = Number(normal.value) >= Number(degraded.value);
 +  degraded.setCustomValidity(invalidPriorityPair ? "降级优先级须大于正常优先级" : "");
++  for (const [name, label] of [["include_patterns", "包含账户通配符语法无效"], ["exclude_patterns", "排除账户通配符语法无效"]]) {
++    const field = inspectionField(name);
++    if (field) field.setCustomValidity(validWildcardPatterns(field.value) ? "" : label);
++  }
 +}
 +function markInspectionEdit(name) {
 +  inspectionDirtyFields.set(name, ++inspectionFormRevision);
@@ -1799,6 +1898,7 @@ index 0000000..630cbc0
 +  for (const field of form.elements) {
 +    if (!field.name) continue;
 +    body[field.name] = field.name === "degraded_remove_models" ? inspectionRemovedModels()
++      : field.name === "include_patterns" || field.name === "exclude_patterns" ? parseInspectionPatterns(field.value)
 +      : field.type === "checkbox" ? field.checked : field.type === "number" ? Number(field.value)
 +      : field.name === "ntfy_password" && !inspectionDirtyFields.has(field.name) ? ""
 +      : field.type === "password" ? field.value : field.value.trim();
@@ -1865,7 +1965,7 @@ index 0000000..630cbc0
 +}
 diff --git a/backend/internal/codexeval/web/pelican.js b/backend/internal/codexeval/web/pelican.js
 new file mode 100644
-index 0000000..737e3b3
+index 0000000..8cd1fbd
 --- /dev/null
 +++ b/backend/internal/codexeval/web/pelican.js
 @@ -0,0 +1,110 @@
@@ -1979,12 +2079,95 @@ index 0000000..737e3b3
 +  addEventListener("resize", fitPelicanStage);
 +  bindCollectionActions({ type: "pl", scope: "pelican", expanded: plExpanded, renderRows: renderPelican, run: runPelican, showDetail: showPelicanDetail });
 +}
+diff --git a/backend/internal/codexeval/web/siwc.js b/backend/internal/codexeval/web/siwc.js
+new file mode 100644
+index 0000000..9a28a0e
+--- /dev/null
++++ b/backend/internal/codexeval/web/siwc.js
+@@ -0,0 +1,54 @@
++"use strict";
++
++const siwcSelected = new Set();
++const siwcExpanded = new Set();
++const siwcSavePrefs = () => store(PREF_STORE + ".siwc", { model: $("siwc-model").value });
++const SIWC_STATUS = {
++  available: ["ok", "SIWC 可用"],
++  restricted: ["bad", "订阅共享受限"],
++  limited: ["skip", "额度或频率受限"],
++  auth_error: ["err", "认证异常"],
++  cancelled: ["skip", "测试已停止"],
++  failed: ["err", "检测未完成"],
++  skipped: ["skip", "已跳过"],
++};
++const siwcVerdict = (r) => statusPill(...(SIWC_STATUS[r?.status] || SIWC_STATUS.failed));
++
++function showSIWCDetail(r) {
++  $("siwc-detail-body").innerHTML = `<p class="result-dialog-meta">${r.model ? `<span class="mono">${esc(r.model)}</span> · ` : ""}${esc(fmtTime(r.time))} · ${r.duration_ms != null ? fmtSec(r.duration_ms) : "—"}${r.http_status ? ` · HTTP ${esc(r.http_status)}` : ""}</p>
++    <div class="latest-top">${siwcVerdict(r)}${r.code ? `<span class="meta mono">${esc(r.code)}</span>` : ""}</div>
++    <div class="metrics">${metrics(r)}</div>
++    ${r.error ? `<p class="detail-warning">${esc(r.error)}</p>` : ""}`;
++}
++
++function renderSIWCRow(a) {
++  const records = a.siwc || [], last = records.at(-1), p = a.siwc_running;
++  const result = p ? collectionOutcome(p, p.total || 1, true) : latestResult(last, siwcVerdict);
++  return credentialRow({
++    type: "siwc", credential: a, selected: siwcSelected.has(a.id), open: siwcExpanded.has(a.id), selectable: runnable("siwc-", a),
++    button: collectionButton("siwc", a, p, "检测"),
++    result, tested: !!(last || p),
++    meta: `<div class="fp-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
++    history: () => [...records].reverse().map((r) => historyEntry("siwc", a.id, r,
++      `<div class="outcome"><div class="outcome-copy"><div class="outcome-title">${siwcVerdict(r)}${r.code ? ` <span class="meta mono">${esc(r.code)}</span>` : ""}</div>${r.error ? `<div class="detail-warning">${esc(r.error)}</div>` : ""}</div></div>`,
++      r.http_status ? `<span class="meta mono">HTTP ${esc(r.http_status)}</span>` : "")).join(""),
++  });
++}
++
++function renderSIWC() {
++  renderSelection("siwc-", siwcSelected, "检测");
++  $("siwc-clear").disabled = pending || !credentials.some((a) => a.siwc?.length);
++  renderList("siwc-", renderSIWCRow);
++}
++
++function runSIWC(body) {
++  if (!$("siwc-toolbar").reportValidity()) return;
++  siwcSavePrefs();
++  return update("/start", { method: "POST", body: { type: "siwc", ...body, model: $("siwc-model").value } }, "开始检测失败");
++}
++
++function initializeSIWC() {
++  $("siwc-model").addEventListener("input", () => { siwcSavePrefs(); renderSIWC(); });
++  $("siwc-model").addEventListener("change", () => { siwcSavePrefs(); renderSIWC(); });
++  bindCollectionActions({ type: "siwc", scope: "siwc", expanded: siwcExpanded, renderRows: renderSIWC, run: runSIWC, showDetail: showSIWCDetail });
++}
+diff --git a/backend/internal/codexeval/web/storage.js b/backend/internal/codexeval/web/storage.js
+new file mode 100644
+index 0000000..9ec731c
+--- /dev/null
++++ b/backend/internal/codexeval/web/storage.js
+@@ -0,0 +1,17 @@
++"use strict";
++const PREF_STORE = "sub2api-codex-eval.prefs";
++const MASK_STORE = "sub2api-codex-eval.masked";
++
++function stored(name) {
++  try { return JSON.parse(localStorage.getItem(name)); } catch (_) { return null; }
++}
++function store(name, value) {
++  try { localStorage.setItem(name, JSON.stringify(value)); } catch (_) {}
++}
++function preference(name, fallback) {
++  const value = stored(PREF_STORE + "." + name);
++  return value !== null && typeof value === typeof fallback ? value : fallback;
++}
++function savePreference(name, value) {
++  store(PREF_STORE + "." + name, value);
++}
 diff --git a/backend/internal/codexeval/web/style.css b/backend/internal/codexeval/web/style.css
 new file mode 100644
-index 0000000..f1b5b12
+index 0000000..853e34f
 --- /dev/null
 +++ b/backend/internal/codexeval/web/style.css
-@@ -0,0 +1,453 @@
+@@ -0,0 +1,454 @@
 +/* Layout */
 +:root {
 +  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
@@ -2188,6 +2371,7 @@ index 0000000..f1b5b12
 +#candy-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) 104px var(--action-width); }
 +#fingerprint-panel { --toolbar-columns: minmax(120px, 180px) 200px 84px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
 +#pelican-panel { --toolbar-columns: minmax(120px, 180px) 200px 120px 120px minmax(138px, 1fr); --preview-scale: .15; --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) calc(800px * var(--preview-scale)) var(--switch-width) var(--action-width); }
++#siwc-panel { --toolbar-columns: minmax(120px, 180px) 200px minmax(0, 1fr); --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) minmax(104px, 160px) 84px var(--switch-width) var(--action-width); }
 +#pelican-panel .latest-top { flex-wrap: wrap; }
 +#pelican-panel .latest-top > .metric:not(.model-meta) { flex: none; }
 +#settings-panel { --list-columns: var(--list-checkbox) var(--credential-track) var(--result-track) 56px var(--marks-width) var(--switch-width) var(--action-width); }
@@ -2413,7 +2597,7 @@ index 0000000..f1b5b12
 +  .row-meta > .marks { flex: 1; }
 +  .credential-head { flex-wrap: wrap; row-gap: 10px; }
 +  .credential-enabled-filter { margin-right: auto; }
-+  .candy-head .inspection-status { order: 1; flex-basis: 100%; }
++  .credential-head .inspection-status { order: 1; flex-basis: 100%; }
 +  .credential-filters { order: 1; flex-basis: 100%; }
 +  .credential-filter { flex: 1 1 0; }
 +  .rate { display: flex; flex-basis: 100%; align-items: baseline; gap: 5px; white-space: nowrap; }
@@ -2498,10 +2682,10 @@ index 0000000..b1851c0
 +}
 diff --git a/backend/internal/codexeval/web/ui.html b/backend/internal/codexeval/web/ui.html
 new file mode 100644
-index 0000000..9572706
+index 0000000..143ba9d
 --- /dev/null
 +++ b/backend/internal/codexeval/web/ui.html
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,209 @@
 +<!doctype html>
 +<html lang="zh-CN">
 +<!--FINGERPRINT_LICENSE-->
@@ -2525,6 +2709,7 @@ index 0000000..9572706
 +          <button id="tab-candy" class="tab" role="tab" aria-selected="true" aria-controls="candy-panel" type="button">糖果</button>
 +          <button id="tab-fingerprint" class="tab" role="tab" aria-selected="false" aria-controls="fingerprint-panel" tabindex="-1" type="button">指纹</button>
 +          <button id="tab-pelican" class="tab" role="tab" aria-selected="false" aria-controls="pelican-panel" tabindex="-1" type="button">鹈鹕</button>
++          <button id="tab-siwc" class="tab" role="tab" aria-selected="false" aria-controls="siwc-panel" tabindex="-1" type="button">SIWC</button>
 +          <button id="tab-settings" class="tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" type="button">设置</button>
 +        </div>
 +        <div class="page-actions">
@@ -2590,6 +2775,18 @@ index 0000000..9572706
 +        </form>
 +        <section id="pl-credentials" class="card"></section>
 +      </section>
++      <section id="siwc-panel" role="tabpanel" aria-labelledby="tab-siwc" hidden>
++        <div class="panel-intro">
++          <p>据社区反馈，部分受风控账号在使用 SIWC 时会返回 403 错误。检测结果可作为判断账号是否受到风控的参考。</p>
++        </div>
++        <form id="siwc-toolbar" class="card toolbar">
++          <label class="field"><span class="field-label">分组</span><span class="native-select"><select id="siwc-group" data-group-select></select></span></label>
++          <div class="field"><label class="field-label" for="siwc-model-select">模型</label><span class="native-select"><select id="siwc-model-select"></select></span><input id="siwc-model" maxlength="200" required aria-label="自定义模型" hidden></div>
++          <button id="siwc-run-batch" class="btn" type="submit" disabled>检测全部</button>
++        </form>
++        <div class="legend"><span>每个账户 1 次简短请求，插件不重试。</span></div>
++        <section id="siwc-credentials" class="card"></section>
++      </section>
 +      <section id="settings-panel" role="tabpanel" aria-labelledby="tab-settings" hidden>
 +        <form id="inspection-settings" class="inspection-settings" aria-busy="false">
 +          <section class="card settings-card">
@@ -2597,12 +2794,17 @@ index 0000000..9572706
 +            <div id="inspection-auto-fields" class="settings-card-body" hidden>
 +              <div class="settings-grid">
 +                <div class="field"><label for="inspection-model-select">模型</label><span class="native-select"><select id="inspection-model-select"></select></span><input id="inspection-model" name="model" maxlength="200" required aria-label="自定义巡检模型" hidden></div>
-+                <label class="field"><span>推理强度</span><span class="native-select"><select name="effort"></select></span></label>
++                <div class="settings-grid">
++                  <label class="field"><span>推理强度</span><span class="native-select"><select name="effort"></select></span></label>
++                  <label class="field"><span>检查方式</span><span class="native-select"><select name="test_type"><option value="candy">糖果</option><option value="fingerprint">指纹</option></select></span></label>
++                </div>
 +                <label class="field"><span>每账户最多测试次数</span><input name="max_tests_per_account" type="number" min="1" max="10" step="1" required></label>
 +                <div class="settings-grid">
 +                  <label class="field"><span>最短等待（分钟）</span><input name="min_wait_minutes" type="number" min="1" step="1" required></label>
 +                  <label class="field"><span>最长等待（分钟）</span><input name="max_wait_minutes" type="number" min="1" step="1" required></label>
 +                </div>
++                <label class="field"><span>包含账户通配符（INCLUDE）</span><input name="include_patterns" placeholder="例如 codex-*, *@example.com"></label>
++                <label class="field"><span>排除账户通配符（EXCLUDE）</span><input name="exclude_patterns" placeholder="例如 test-*, *-backup"></label>
 +              </div>
 +            </div>
 +          </section>
@@ -2663,6 +2865,10 @@ index 0000000..9572706
 +      <div class="section-head result-dialog-head"><h2 id="pl-detail-title">鹈鹕画面</h2><button id="pl-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭画面"><i data-icon="x"></i></button></div>
 +      <div id="pl-detail-body" class="result-dialog-body"></div>
 +    </dialog>
++    <dialog id="siwc-detail" class="result-dialog" aria-labelledby="siwc-detail-title">
++      <div class="section-head result-dialog-head"><h2 id="siwc-detail-title">SIWC 检测详情</h2><button id="siwc-detail-close" class="btn ghost icon-button" type="button" aria-label="关闭详情"><i data-icon="x"></i></button></div>
++      <div id="siwc-detail-body" class="result-dialog-body"></div>
++    </dialog>
 +    <div id="tip" class="tip" role="tooltip" hidden></div>
 +  </main>
 +  <footer class="page-footer">
@@ -2677,9 +2883,12 @@ index 0000000..9572706
 +  <script>/*TEXMATH_SCRIPT*/</script>
 +  <script>/*TEMML_SCRIPT*/</script>
 +
++  <script>/*STORAGE_SCRIPT*/</script>
++  <script>/*CREDENTIALS_SCRIPT*/</script>
 +  <script>/*CATALOG_SCRIPT*/</script>
 +  <script>/*COMPONENTS_SCRIPT*/</script>
 +  <script>/*CANDY_SCRIPT*/</script>
++  <script>/*SIWC_SCRIPT*/</script>
 +  <script>/*FINGERPRINT_SCRIPT*/</script>
 +  <script>/*PELICAN_SCRIPT*/</script>
 +  <script>/*INSPECTION_SCRIPT*/</script>

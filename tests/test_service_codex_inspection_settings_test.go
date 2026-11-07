@@ -108,9 +108,12 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	settings.Enabled = true
 	settings.ControlModels = true
 	settings.NotifyEnabled = false
+	settings.TestType = "fingerprint"
+	settings.IncludePatterns = []string{" codex-* ", "*@example.com", "codex-*"}
+	settings.ExcludePatterns = []string{" test-* "}
 	settings.DegradedRemoveModels = []string{" gpt-6-sol ", "custom/model", "gpt-6-sol"}
 	settings.GroupID = 202
-	settings.AccountType, settings.AccountPlan, settings.EnabledOnly = "oauth", "Pro ALL", true
+	settings.AccountType, settings.AccountPlan, settings.EnabledOnly = "anthropic:apikey", "Pro ALL", true
 	settings.NtfyPassword = "fixture-secret"
 	settings.BarkURL = "https://fixture.invalid/private-key"
 	if _, err = s.UpdateCodexInspectionSettings(ctx, settings); err != nil {
@@ -119,8 +122,21 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	// A fresh service reads the same native setting rows.
 	restarted := &SettingService{settingRepo: repo}
 	saved, err := restarted.GetCodexInspectionSettings(ctx)
-	if err != nil || !saved.Enabled || saved.NotifyEnabled || saved.GroupID != 202 || saved.AccountType != "oauth" || saved.AccountPlan != "Pro ALL" || !saved.EnabledOnly || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
+	if err != nil || !saved.Enabled || saved.NotifyEnabled || saved.GroupID != 202 || saved.AccountType != "anthropic:apikey" || saved.AccountPlan != "Pro ALL" || !saved.EnabledOnly || saved.TestType != "fingerprint" || saved.NtfyPassword != settings.NtfyPassword || saved.BarkURL != settings.BarkURL {
 		t.Fatalf("restart lost settings: %+v %v", saved.Public(), err)
+	}
+	if !reflect.DeepEqual(saved.IncludePatterns, []string{"codex-*", "*@example.com"}) || !reflect.DeepEqual(saved.ExcludePatterns, []string{"test-*"}) {
+		t.Fatalf("patterns did not normalize or persist: %+v", saved)
+	}
+	badPattern := saved.Public()
+	badPattern.IncludePatterns = []string{"bad["}
+	if _, err := s.UpdateCodexInspectionSettings(ctx, badPattern); err == nil {
+		t.Fatal("invalid wildcard pattern was accepted")
+	}
+	badTestType := saved.Public()
+	badTestType.TestType = "pelican"
+	if _, err := s.UpdateCodexInspectionSettings(ctx, badTestType); err == nil {
+		t.Fatal("invalid test_type was accepted")
 	}
 	public := saved.Public()
 	if !saved.ControlModels || !reflect.DeepEqual(saved.DegradedRemoveModels, []string{"gpt-6-sol", "custom/model"}) {
@@ -180,11 +196,6 @@ func TestCodexInspectionSettingsPriorityReadAndWrite(t *testing.T) {
 			if repo.writes != 0 || repo.values[codexInspectionSettingPrefix+"normal_priority"] != stored {
 				t.Fatal("settings read wrote the database")
 			}
-			for _, key := range repo.keys {
-				if key == codexInspectionSettingPrefix+"include_patterns" || key == codexInspectionSettingPrefix+"exclude_patterns" {
-					t.Fatal("removed filters are still read")
-				}
-			}
 			settings.NormalPriority = 0
 			if _, err := s.UpdateCodexInspectionSettings(ctx, settings); err == nil || repo.writes != 0 {
 				t.Fatal("new nonpositive priority was accepted or written")
@@ -195,9 +206,6 @@ func TestCodexInspectionSettingsPriorityReadAndWrite(t *testing.T) {
 			}
 			if repo.writes != 1 || repo.values[codexInspectionSettingPrefix+"normal_priority"] != "1" {
 				t.Fatal("valid explicit save did not write the selected priority")
-			}
-			if repo.values[codexInspectionSettingPrefix+"include_patterns"] != "invalid old value" || repo.values[codexInspectionSettingPrefix+"exclude_patterns"] != `['unused']` {
-				t.Fatal("save still writes removed filters")
 			}
 		})
 	}

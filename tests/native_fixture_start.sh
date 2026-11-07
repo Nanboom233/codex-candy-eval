@@ -3,6 +3,7 @@ set -eu
 if [ "${1:-}" = "-version" ]; then
     exec /app/sub2api-bin "$@"
 fi
+grep -q "chatgpt.com" /etc/hosts 2>/dev/null || printf "127.0.0.1 chatgpt.com api.openai.com\n" >> /etc/hosts 2>/dev/null || true
 if ! command -v postgres >/dev/null 2>&1 || [ ! -f /usr/share/postgresql18/extension/pg_trgm.control ]; then
     apk add --no-cache postgresql18 postgresql18-contrib redis python3 su-exec
 fi

@@ -97,11 +97,30 @@ func TestCodexInspectionAccountSwitch(t *testing.T) {
 	if inspectionAccount(s.account).Verdict != codexeval.InspectionVerdictNormal {
 		t.Fatal("absent verdict must default to normal at a degraded actual priority")
 	}
+	s.account.Extra["email"] = "extra@example.com"
+	s.account.Credentials = map[string]any{"email": "cred@example.com"}
+	if inspectionAccount(s.account).Email != "extra@example.com" {
+		t.Fatalf("expected Extra email precedence, got %q", inspectionAccount(s.account).Email)
+	}
+	delete(s.account.Extra, "email")
+	if inspectionAccount(s.account).Email != "cred@example.com" {
+		t.Fatalf("expected Credentials email fallback, got %q", inspectionAccount(s.account).Email)
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/accounts/20/codex-eval-inspection", bytes.NewBufferString(`{"enabled":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || len(s.updates) != 1 || s.updates["codex_eval_inspection_enabled"] != false || s.account.Extra["unrelated"] != "preserve" || !s.account.Schedulable || inspectionAccount(s.account).AutoInspectionEnabled {
 		t.Fatalf("switch save changed unrelated state: %d %s %+v", rec.Code, rec.Body, s.account)
+	}
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformAntigravity} {
+		s.account.Platform = platform
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPut, "/accounts/20/codex-eval-inspection", bytes.NewBufferString(`{"enabled":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("multi-provider platform %s rejected by inspection switch: %d %s", platform, rec.Code, rec.Body)
+		}
 	}
 }

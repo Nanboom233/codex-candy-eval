@@ -33,17 +33,63 @@ class Supplier(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         if self.path.startswith(("/ntfy/", "/bark/")):
-            events.append({"notification": self.path.split("/")[1]})
-            self.reply({"error": "fixture notification failure"}, status=503)
+            path_parts = self.path.split("?", 1)[0].split("/")
+            notification_status = 200 if len(path_parts) > 2 and path_parts[2] == "success" else 503
+            events.append({"notification": path_parts[1], "status": notification_status,
+                           "body": raw.decode(errors="replace")})
+            payload = {"ok": True} if notification_status == 200 else {"error": "fixture notification failure"}
+            self.reply(payload, status=notification_status)
             return
         body = json.loads(raw or b"{}")
-        account = self.headers.get("Authorization", "").removeprefix("Bearer fixture-")
-        model = body.get("model")
-        events.append({"account": account, "model": model, "stream": body.get("stream")})
+        raw_text = raw.decode(errors="replace")
+        account = (self.headers.get("Authorization", "").removeprefix("Bearer fixture-")
+                   or self.headers.get("x-api-key", "").removeprefix("fixture-")
+                   or self.headers.get("x-goog-api-key", "").removeprefix("fixture-"))
+        model = body.get("model") or self.path.split("/models/")[-1].split(":")[0]
+        events.append({"account": account, "model": model, "stream": body.get("stream"), "path": self.path})
         counts[account, model] += 1
         if model == "inspection-block":
             time.sleep(30)
-        answer = "20" if account == "wrong" or (account == "mixed" and counts[account, model] != 2) else "21"
+        if "355" in raw_text:
+            answer = ",".join(str((i * 37 + 13) % 355 + 1) for i in range(200))
+        elif "Reply with OK." in raw_text:
+            if account == "wrong" or "restricted" in model:
+                self.reply({"error": {"code": "subscription_sharing_user_not_eligible",
+                                      "message": "Your account is not eligible to use subscription sharing"}}, status=403)
+                return
+            answer = "OK"
+        elif "鹈鹕" in raw_text and "```svg" in raw_text:
+            answer = "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"#38bdf8\"/><text x=\"50\" y=\"55\" text-anchor=\"middle\">21</text></svg>\n```"
+        elif "鹈鹕" in raw_text:
+            answer = "```html\n<!DOCTYPE html><html><body><svg viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\"/></svg></body></html>\n```"
+        else:
+            is_wrong = (
+                account == "wrong"
+                or "wrong" in model
+                or (model == "inspection-degrade-a" and account == "a-only")
+                or (account == "mixed" and counts[account, model] != 2)
+            )
+            answer = "20" if is_wrong else "21"
+        if "/v1/messages" in self.path:
+            sse = (
+                "event: message_start\n"
+                'data: {"type":"message_start","message":{"id":"msg_fixture","type":"message","role":"assistant","usage":{"input_tokens":8,"output_tokens":1}}}\n\n'
+                "event: content_block_delta\n"
+                + "data: " + json.dumps({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": answer}}) + "\n\n"
+                + "event: message_delta\n"
+                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n'
+                "event: message_stop\n"
+                'data: {"type":"message_stop"}\n\n'
+            )
+            self.reply(sse, "text/event-stream")
+            return
+        if ":streamGenerateContent" in self.path:
+            chunk = {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": answer}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 3, "thoughtsTokenCount": 1},
+            }
+            self.reply("data: " + json.dumps(chunk) + "\n\n", "text/event-stream")
+            return
         if self.path.endswith("/chat/completions"):
             if body.get("stream"):
                 chunks = [{"id": "fixture", "object": "chat.completion.chunk", "model": model,

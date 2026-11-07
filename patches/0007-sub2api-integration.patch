@@ -37,7 +37,7 @@ diff --git a/backend/internal/server/routes/admin.go b/backend/internal/server/r
 index 315fc20..0f477ed 100644
 --- a/backend/internal/server/routes/admin.go
 +++ b/backend/internal/server/routes/admin.go
-@@ -45,6 +45,15 @@ func RegisterAdminRoutes(
+@@ -47,6 +47,15 @@ func RegisterAdminRoutes(
  
  		// 账号管理
  		registerAccountRoutes(admin, h, stepUpAuth)
@@ -53,7 +53,7 @@ index 315fc20..0f477ed 100644
  
  		// 公告管理
  		registerAnnouncementRoutes(admin, h)
-@@ -391,6 +400,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
+@@ -396,6 +405,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
  		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
  		accounts.DELETE("/:id", h.Admin.Account.Delete)
  		accounts.POST("/:id/test", h.Admin.Account.Test)
@@ -63,7 +63,7 @@ index 315fc20..0f477ed 100644
  		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
  		accounts.POST("/:id/refresh", h.Admin.Account.Refresh)
  		accounts.POST("/:id/apply-oauth-credentials", h.Admin.Account.ApplyOAuthCredentials)
-@@ -569,6 +581,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+@@ -575,6 +587,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
  	{
  		adminSettings.GET("", h.Admin.Setting.GetSettings)
  		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
@@ -76,7 +76,7 @@ diff --git a/backend/internal/service/admin_account.go b/backend/internal/servic
 index 256e488..3ebab25 100644
 --- a/backend/internal/service/admin_account.go
 +++ b/backend/internal/service/admin_account.go
-@@ -687,6 +687,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
+@@ -692,6 +692,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
  		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
  		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
  		for _, key := range []string{
@@ -99,13 +99,13 @@ index d16b1c4..0ea9dfd 100644
 +	}
  	trimmed := strings.TrimSpace(path)
  	return strings.HasPrefix(trimmed, "/api/") ||
- 		strings.HasPrefix(trimmed, "/v1/") ||
+ 		trimmed == "/.well-known/oauth-protected-resource" ||
 diff --git a/frontend/src/components/layout/AppSidebar.vue b/frontend/src/components/layout/AppSidebar.vue
 index 1d20fef..19ab40b 100644
 --- a/frontend/src/components/layout/AppSidebar.vue
 +++ b/frontend/src/components/layout/AppSidebar.vue
-@@ -481,6 +481,10 @@ const PluginIcon = {
-   render: () => h(Icon, { name: 'cube' })
+@@ -485,6 +485,10 @@ const MCPIcon = {
+   render: () => h(Icon, { name: 'mcp' })
  }
  
 +const EvaluationIcon = {
@@ -115,7 +115,7 @@ index 1d20fef..19ab40b 100644
  const BellIcon = {
    render: () =>
      h(
-@@ -793,6 +797,7 @@ const adminNavItems = computed((): NavItem[] => {
+@@ -799,6 +803,7 @@ const adminNavItems = computed((): NavItem[] => {
      // 「仅充值」站点连管理端的「订阅管理」入口也一并收起（路由本身不拦截）。
      { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
      { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
@@ -151,7 +151,7 @@ diff --git a/frontend/src/router/index.ts b/frontend/src/router/index.ts
 index 1881ff3..16ca080 100644
 --- a/frontend/src/router/index.ts
 +++ b/frontend/src/router/index.ts
-@@ -525,6 +525,17 @@ const routes: RouteRecordRaw[] = [
+@@ -548,6 +548,17 @@ const routes: RouteRecordRaw[] = [
        descriptionKey: 'admin.accounts.description'
      }
    },

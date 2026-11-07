@@ -1,14 +1,16 @@
 diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexeval/inspection.go
 new file mode 100644
+index 0000000..0ee668f
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,829 @@
 +package codexeval
 +
 +import (
 +	"context"
 +	"fmt"
 +	"math/rand/v2"
++	"path"
 +	"strconv"
 +	"strings"
 +	"sync"
@@ -25,6 +27,8 @@ new file mode 100644
 +type InspectionAccount struct {
 +	Target
 +	Name                  string
++	Email                 string            `json:"email,omitempty"`
++	Platform              string            `json:"platform,omitempty"`
 +	Priority              int
 +	Verdict               InspectionVerdict
 +	Available             bool
@@ -237,6 +241,13 @@ new file mode 100644
 +	return i.startRun(false)
 +}
 +
++func inspectionTestType(s InspectionSettings) string {
++	if strings.TrimSpace(s.TestType) == "fingerprint" {
++		return "fingerprint"
++	}
++	return "candy"
++}
++
 +func (i *inspector) startRun(automatic bool) error {
 +	i.mu.Lock()
 +	defer i.mu.Unlock()
@@ -282,8 +293,58 @@ new file mode 100644
 +	update(&i.state.Results[index])
 +}
 +
++func matchesInspectionAccountType(a InspectionAccount, filter string) bool {
++	filter = strings.TrimSpace(filter)
++	if filter == "" || filter == "all" {
++		return true
++	}
++	if platform, credType, ok := strings.Cut(filter, ":"); ok {
++		acctPlatform := strings.TrimSpace(a.Platform)
++		if acctPlatform == "" {
++			acctPlatform = "openai"
++		}
++		return strings.EqualFold(acctPlatform, platform) && strings.EqualFold(a.Type, credType)
++	}
++	return strings.EqualFold(a.Type, filter)
++}
++
++func matchesAnyInspectionPattern(a InspectionAccount, patterns []string) bool {
++	for _, raw := range patterns {
++		pattern := strings.TrimSpace(raw)
++		if pattern == "" {
++			continue
++		}
++		for _, value := range []string{a.Email, a.Name} {
++			if value == "" {
++				continue
++			}
++			if matched, err := path.Match(pattern, value); err == nil && matched {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func matchesInspectionPatterns(a InspectionAccount, include, exclude []string) bool {
++	hasInclude := false
++	for _, raw := range include {
++		if strings.TrimSpace(raw) != "" {
++			hasInclude = true
++			break
++		}
++	}
++	if hasInclude && !matchesAnyInspectionPattern(a, include) {
++		return false
++	}
++	if matchesAnyInspectionPattern(a, exclude) {
++		return false
++	}
++	return true
++}
++
 +func inspectionEligible(a InspectionAccount, s InspectionSettings) bool {
-+	if !a.AutoInspectionEnabled || !a.Available || s.EnabledOnly && !a.Enabled || s.AccountType != "all" && a.Type != s.AccountType {
++	if !a.AutoInspectionEnabled || !a.Available || s.EnabledOnly && !a.Enabled || !matchesInspectionAccountType(a, s.AccountType) {
 +		return false
 +	}
 +	member := false
@@ -293,10 +354,13 @@ new file mode 100644
 +	if !member {
 +		return false
 +	}
-+	if s.AccountPlan == "all" {
++	if !matchesInspectionPatterns(a, s.IncludePatterns, s.ExcludePatterns) {
++		return false
++	}
++	if s.AccountPlan == "" || s.AccountPlan == "all" {
 +		return true
 +	}
-+	if a.Type != "oauth" {
++	if a.Type != "oauth" || (a.Platform != "" && a.Platform != "openai") {
 +		return false
 +	}
 +	label, pro := candyPlan(a.PlanType)
@@ -341,6 +405,7 @@ new file mode 100644
 +}
 +
 +func (i *inspector) run(ctx context.Context, s InspectionSettings, done chan struct{}) {
++	testType := inspectionTestType(s)
 +	defer func() {
 +		i.mu.Lock()
 +		now := time.Now().UTC()
@@ -427,6 +492,11 @@ new file mode 100644
 +			apply(a, target)
 +			return
 +		}
++		if testType == "fingerprint" {
++			i.result(n, func(r *InspectionResult) { p := target; r.TargetPriority = &p; r.Outcome = "recommended" })
++			apply(a, target)
++			return
++		}
 +		groups[target] = append(groups[target], a)
 +	})
 +	if ctx.Err() != nil {
@@ -473,9 +543,13 @@ new file mode 100644
 +	if ctx.Err() != nil {
 +		return
 +	}
++	testLabel := "糖果测试"
++	if testType == "fingerprint" {
++		testLabel = "指纹检测"
++	}
 +	for _, target := range []int{s.NormalPriority, s.DegradedPriority} {
 +		indexes := changed[target]
-+		if !s.NotifyEnabled || len(indexes) == 0 || ctx.Err() != nil {
++		if !s.NotifyEnabled || i.hooks.Notify == nil || len(indexes) == 0 || ctx.Err() != nil {
 +			continue
 +		}
 +		title := "账号确认降智"
@@ -484,7 +558,7 @@ new file mode 100644
 +			title = "账号恢复正常"
 +			verdict = "降级 → 正常"
 +		}
-+		lines := []string{fmt.Sprintf("糖果测试 · %s\n确认状态：%s", s.Model, verdict)}
++		lines := []string{fmt.Sprintf("%s · %s\n确认状态：%s", testLabel, s.Model, verdict)}
 +		snapshot := i.snapshot()
 +		for _, n := range indexes {
 +			r := snapshot.Results[n]
@@ -565,8 +639,10 @@ new file mode 100644
 +}
 +
 +func (i *inspector) testPhase(ctx context.Context, s InspectionSettings, accounts []InspectionAccount, runs int, confirmation bool, completed func(InspectionAccount, []bool)) map[int64][]bool {
++	testType := inspectionTestType(s)
 +	answers := map[int64][]bool{}
-+	tracked := map[int64]string{}
++	accumulated := map[int64][]bool{}
++	failed := map[int64]bool{}
 +	index := map[int64]int{}
 +	byID := map[int64]InspectionAccount{}
 +	i.mu.Lock()
@@ -576,119 +652,190 @@ new file mode 100644
 +	i.mu.Unlock()
 +	for _, a := range accounts {
 +		byID[a.AccountID] = a
++	}
++	batches := 1
++	phaseCtx, cancel := context.WithTimeout(ctx, i.phaseLimit)
++	defer cancel()
++	currentAccounts := append([]InspectionAccount(nil), accounts...)
++	for step := 0; step < batches && len(currentAccounts) > 0; step++ {
 +		if ctx.Err() != nil {
 +			break
 +		}
-+		check := func(checkCtx context.Context, id int64) error {
-+			current, err := i.hooks.Get(checkCtx, id)
-+			if err == nil && !current.AutoInspectionEnabled {
-+				i.result(index[id], func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
-+				return errInspectionStopped
++		tracked := map[int64]string{}
++		for _, a := range currentAccounts {
++			if ctx.Err() != nil {
++				break
 +			}
-+			if err == nil && (!inspectionEligible(current, s) || confirmation && current.Priority != a.Priority) {
-+				err = fmt.Errorf("账户状态或优先级已改变")
++			check := func(checkCtx context.Context, id int64) error {
++				current, err := i.hooks.Get(checkCtx, id)
++				if err == nil && !current.AutoInspectionEnabled {
++					i.result(index[id], func(r *InspectionResult) { r.Outcome = "unchanged"; r.TargetPriority = nil })
++					return errInspectionStopped
++				}
++				if err == nil && (!inspectionEligible(current, s) || confirmation && current.Priority != a.Priority) {
++					err = fmt.Errorf("账户状态或优先级已改变")
++				}
++				if err != nil {
++					i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++				}
++				return err
++			}
++			i.result(index[a.AccountID], func(r *InspectionResult) { r.Outcome = "testing" })
++			var req StartRequest
++			if testType == "fingerprint" {
++				req = StartRequest{Type: "fingerprint", Targets: []Target{a.Target}, Model: s.Model, Concurrency: 1}
++			} else {
++				req = StartRequest{Type: "candy", Targets: []Target{a.Target}, Model: s.Model, Effort: s.Effort, Runs: runs}
++			}
++			summary, err := startChecked(ctx, req, true, check)
++			if err == nil && len(summary.Started) != 1 {
++				err = fmt.Errorf("账户忙碌或不可测试")
++				if len(summary.Unavailable) > 0 {
++					err = fmt.Errorf("%s", summary.Unavailable[0].Error)
++				}
 +			}
 +			if err != nil {
-+				i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++				failed[a.AccountID] = true
++				i.result(index[a.AccountID], func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
++				continue
 +			}
-+			return err
++			id := summary.Started[0].ID
++			tracked[a.AccountID] = id
++			i.result(index[a.AccountID], func(r *InspectionResult) { r.RunIDs = append(r.RunIDs, id) })
 +		}
-+		i.result(index[a.AccountID], func(r *InspectionResult) { r.Outcome = "testing" })
-+		summary, err := startChecked(ctx, StartRequest{Type: "candy", Targets: []Target{a.Target}, Model: s.Model, Effort: s.Effort, Runs: runs}, true, check)
-+		if err == nil && len(summary.Started) != 1 {
-+			err = fmt.Errorf("账户忙碌或不可测试")
-+			if len(summary.Unavailable) > 0 {
-+				err = fmt.Errorf("%s", summary.Unavailable[0].Error)
-+			}
-+		}
-+		if err != nil {
-+			i.result(index[a.AccountID], func(r *InspectionResult) { r.Outcome = "error"; r.Error = err.Error() })
-+			continue
-+		}
-+		id := summary.Started[0].ID
-+		tracked[a.AccountID] = id
-+		i.result(index[a.AccountID], func(r *InspectionResult) { r.RunIDs = append(r.RunIDs, id) })
-+	}
-+	collect := func(id int64, runID string) {
-+		mu.Lock()
-+		results := []candyResult{}
-+		for _, r := range candyResults[strconv.FormatInt(id, 10)] {
-+			if r.RunID == runID {
-+				results = append(results, r)
-+			}
-+		}
-+		mu.Unlock()
-+		valid := len(results) == runs
-+		out := []bool{}
-+		errorText := "测试结果不完整"
-+		for _, r := range results {
-+			valid = valid && r.Status == "completed" && r.Error == "" && !r.Skipped
-+			if r.Error != "" {
-+				errorText = r.Error
-+			}
-+			out = append(out, r.OK)
-+		}
-+		i.result(index[id], func(r *InspectionResult) {
-+			r.Tests += len(results)
-+			if !valid && r.Outcome == "testing" {
-+				r.Outcome = "error"
-+				r.Error = errorText
-+			}
-+		})
-+		if valid && ctx.Err() == nil {
-+			answers[id] = out
-+			completed(byID[id], out)
-+		}
-+	}
-+	phaseCtx, cancel := context.WithTimeout(ctx, i.phaseLimit)
-+	defer cancel()
-+	for len(tracked) > 0 {
-+		finished := map[int64]string{}
-+		mu.Lock()
-+		for id, runID := range tracked {
-+			if r := active[strconv.FormatInt(id, 10)]; r == nil || r.ID != runID {
-+				finished[id] = runID
-+			}
-+		}
-+		mu.Unlock()
-+		i.mu.Lock()
-+		i.state.Done = i.state.Total - len(tracked) + len(finished)
-+		i.mu.Unlock()
-+		for id, runID := range finished {
-+			collect(id, runID)
-+			delete(tracked, id)
-+		}
-+		if len(tracked) == 0 {
-+			break
-+		}
-+		if !waitInspection(phaseCtx, i.poll) {
-+			for _, id := range tracked {
-+				Cancel(id)
-+			}
-+			// Keep the round busy until its actual workers exit.
-+			for busy := true; busy; {
-+				busy = false
++		collect := func(id int64, runID string) {
++			if testType == "fingerprint" {
 +				mu.Lock()
-+				for id, runID := range tracked {
-+					if r := active[strconv.FormatInt(id, 10)]; r != nil && r.ID == runID {
-+						busy = true
++				results := []fingerprintResult{}
++				for _, r := range fingerprintResults[strconv.FormatInt(id, 10)] {
++					if r.RunID == runID {
++						results = append(results, r)
 +					}
 +				}
 +				mu.Unlock()
-+				if busy {
-+					time.Sleep(time.Millisecond * 10)
++				valid := len(results) == 1 && results[0].Attribution != nil && (results[0].Status == "completed" || results[0].Status == "partial") && results[0].Error == ""
++				errorText := "指纹归因结果不完整"
++				if len(results) > 0 && results[0].Error != "" {
++					errorText = results[0].Error
++				}
++				if valid {
++					ok := FingerprintModelID(results[0].Model) == FingerprintModelID(results[0].Attribution.Prediction)
++					accumulated[id] = append(accumulated[id], ok)
++				} else {
++					failed[id] = true
++				}
++				i.result(index[id], func(r *InspectionResult) {
++					r.Tests += len(results)
++					if !valid && r.Outcome == "testing" {
++						r.Outcome = "error"
++						r.Error = errorText
++					}
++				})
++				if !failed[id] && len(accumulated[id]) == runs && ctx.Err() == nil {
++					out := append([]bool(nil), accumulated[id]...)
++					answers[id] = out
++					completed(byID[id], out)
++				}
++				return
++			}
++			mu.Lock()
++			results := []candyResult{}
++			for _, r := range candyResults[strconv.FormatInt(id, 10)] {
++				if r.RunID == runID {
++					results = append(results, r)
 +				}
 +			}
-+			for id := range tracked {
-+				i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = phaseCtx.Err().Error() })
++			mu.Unlock()
++			valid := len(results) == runs
++			out := []bool{}
++			errorText := "测试结果不完整"
++			for _, r := range results {
++				valid = valid && r.Status == "completed" && r.Error == "" && !r.Skipped
++				if r.Error != "" {
++					errorText = r.Error
++				}
++				out = append(out, r.OK)
 +			}
-+			return answers
++			i.result(index[id], func(r *InspectionResult) {
++				r.Tests += len(results)
++				if !valid && r.Outcome == "testing" {
++					r.Outcome = "error"
++					r.Error = errorText
++				}
++			})
++			if valid && ctx.Err() == nil {
++				answers[id] = out
++				completed(byID[id], out)
++			} else {
++				failed[id] = true
++			}
++		}
++		for len(tracked) > 0 {
++			finished := map[int64]string{}
++			mu.Lock()
++			for id, runID := range tracked {
++				if r := active[strconv.FormatInt(id, 10)]; r == nil || r.ID != runID {
++					finished[id] = runID
++				}
++			}
++			mu.Unlock()
++			if step == batches-1 {
++				i.mu.Lock()
++				i.state.Done = i.state.Total - len(tracked) + len(finished)
++				i.mu.Unlock()
++			}
++			for id, runID := range finished {
++				collect(id, runID)
++				delete(tracked, id)
++			}
++			if len(tracked) == 0 {
++				break
++			}
++			if !waitInspection(phaseCtx, i.poll) {
++				for _, id := range tracked {
++					Cancel(id)
++				}
++				// Keep the round busy until its actual workers exit.
++				for busy := true; busy; {
++					busy = false
++					mu.Lock()
++					for id, runID := range tracked {
++						if r := active[strconv.FormatInt(id, 10)]; r != nil && r.ID == runID {
++							busy = true
++						}
++					}
++					mu.Unlock()
++					if busy {
++						time.Sleep(time.Millisecond * 10)
++					}
++				}
++				for id := range tracked {
++					i.result(index[id], func(r *InspectionResult) { r.Outcome = "error"; r.Error = phaseCtx.Err().Error() })
++				}
++				return answers
++			}
++		}
++		if step+1 < batches {
++			nextAccounts := make([]InspectionAccount, 0, len(currentAccounts))
++			for _, a := range currentAccounts {
++				if failed[a.AccountID] {
++					continue
++				}
++				i.mu.Lock()
++				testing := i.state.Results[index[a.AccountID]].Outcome == "testing"
++				i.mu.Unlock()
++				if testing {
++					nextAccounts = append(nextAccounts, a)
++				}
++			}
++			currentAccounts = nextAccounts
 +		}
 +	}
 +	return answers
 +}
 diff --git a/backend/internal/codexeval/inspection_notify.go b/backend/internal/codexeval/inspection_notify.go
 new file mode 100644
+index 0000000..8429d59
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection_notify.go
 @@ -0,0 +1,50 @@
@@ -744,14 +891,16 @@ new file mode 100644
 +}
 diff --git a/backend/internal/codexeval/inspection_settings.go b/backend/internal/codexeval/inspection_settings.go
 new file mode 100644
+index 0000000..d50e766
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection_settings.go
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,180 @@
 +package codexeval
 +
 +import (
 +	"fmt"
 +	"net/url"
++	"path"
 +	"strings"
 +	"time"
 +)
@@ -764,9 +913,12 @@ new file mode 100644
 +	EnabledOnly            bool     `json:"enabled_only"`
 +	Model                  string   `json:"model"`
 +	Effort                 string   `json:"effort"`
++	TestType               string   `json:"test_type"`
 +	MaxTestsPerAccount     int      `json:"max_tests_per_account"`
 +	MinWaitMinutes         int      `json:"min_wait_minutes"`
 +	MaxWaitMinutes         int      `json:"max_wait_minutes"`
++	IncludePatterns        []string `json:"include_patterns"`
++	ExcludePatterns        []string `json:"exclude_patterns"`
 +	AdjustPriority         bool     `json:"adjust_priority"`
 +	ControlModels          bool     `json:"control_models"`
 +	NotifyEnabled          bool     `json:"notify_enabled"`
@@ -783,12 +935,59 @@ new file mode 100644
 +}
 +
 +func DefaultInspectionSettings() InspectionSettings {
-+	return InspectionSettings{Model: "gpt-6.1-sol", Effort: "low", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35,
++	return InspectionSettings{Model: "gpt-6.1-sol", Effort: "low", TestType: "candy", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35,
 +		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NotifyEnabled: true, NtfyServer: "https://ntfy.sh",
++		IncludePatterns: []string{}, ExcludePatterns: []string{},
 +		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"}}
 +}
 +
++func normalizePatternSlice(patterns []string) []string {
++	if len(patterns) == 0 {
++		return []string{}
++	}
++	out := make([]string, 0, len(patterns))
++	seen := make(map[string]bool, len(patterns))
++	for _, pattern := range patterns {
++		pattern = strings.TrimSpace(pattern)
++		if pattern == "" || seen[pattern] {
++			continue
++		}
++		seen[pattern] = true
++		out = append(out, pattern)
++	}
++	return out
++}
++
++func validInspectionAccountType(accountType string) bool {
++	switch accountType {
++	case "all", "oauth", "apikey", "setup-token", "upstream":
++		return true
++	}
++	platform, credType, ok := strings.Cut(accountType, ":")
++	if !ok || platform == "" {
++		return false
++	}
++	for _, r := range platform {
++		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
++			return false
++		}
++	}
++	switch credType {
++	case "oauth", "setup-token", "apikey", "upstream":
++		return true
++	default:
++		return false
++	}
++}
++
 +func (s *InspectionSettings) NormalizeModels() {
++	if strings.TrimSpace(s.TestType) == "" {
++		s.TestType = "candy"
++	} else {
++		s.TestType = strings.TrimSpace(s.TestType)
++	}
++	s.IncludePatterns = normalizePatternSlice(s.IncludePatterns)
++	s.ExcludePatterns = normalizePatternSlice(s.ExcludePatterns)
 +	if s.DegradedRemoveModels == nil {
 +		s.DegradedRemoveModels = DefaultInspectionSettings().DegradedRemoveModels
 +	}
@@ -824,14 +1023,30 @@ new file mode 100644
 +	if s.GroupID < 0 || s.Enabled && s.GroupID == 0 {
 +		return fmt.Errorf("请选择糖果测试分组")
 +	}
-+	if s.AccountType != "all" && s.AccountType != "oauth" && s.AccountType != "apikey" {
++	if !validInspectionAccountType(s.AccountType) {
 +		return fmt.Errorf("请选择有效账户类型")
 +	}
 +	if strings.TrimSpace(s.AccountPlan) == "" {
 +		return fmt.Errorf("请选择有效订阅类型")
 +	}
-+	if !validModelName(strings.TrimSpace(s.Model), true) {
++	testType := strings.TrimSpace(s.TestType)
++	if testType == "" {
++		testType = "candy"
++	}
++	if testType != "candy" && testType != "fingerprint" {
++		return fmt.Errorf("请选择有效检查方式")
++	}
++	if !validModelName(strings.TrimSpace(s.Model), testType != "fingerprint") {
 +		return fmt.Errorf("请输入有效模型")
++	}
++	for _, pattern := range append(append([]string(nil), s.IncludePatterns...), s.ExcludePatterns...) {
++		pattern = strings.TrimSpace(pattern)
++		if pattern == "" {
++			continue
++		}
++		if _, err := path.Match(pattern, ""); err != nil {
++			return fmt.Errorf("请输入有效的账户匹配通配符")
++		}
 +	}
 +	if s.MaxTestsPerAccount < 1 || s.MaxTestsPerAccount > candyMaxRuns {
 +		return fmt.Errorf("每账户最多测试次数须为 1–%d", candyMaxRuns)
@@ -862,21 +1077,47 @@ new file mode 100644
 +}
 diff --git a/backend/internal/handler/admin/codex_inspection_handler.go b/backend/internal/handler/admin/codex_inspection_handler.go
 new file mode 100644
+index 0000000..930b225
 --- /dev/null
 +++ b/backend/internal/handler/admin/codex_inspection_handler.go
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,181 @@
 +package admin
 +
 +import (
 +	"context"
 +	"net/http"
 +	"strconv"
++	"strings"
 +
 +	"github.com/Wei-Shaw/sub2api/internal/codexeval"
 +	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 +	"github.com/Wei-Shaw/sub2api/internal/service"
 +	"github.com/gin-gonic/gin"
 +)
++
++func isInspectionSupportedAccount(a *service.Account) bool {
++	if a == nil {
++		return false
++	}
++	return a.IsOAuth() || a.Type == service.AccountTypeAPIKey || a.Type == service.AccountTypeUpstream
++}
++
++func extractAccountEmail(a *service.Account) string {
++	if a == nil {
++		return ""
++	}
++	for _, key := range []string{"email", "email_address"} {
++		if a.Extra != nil {
++			if v, ok := a.Extra[key].(string); ok && strings.TrimSpace(v) != "" {
++				return strings.TrimSpace(v)
++			}
++		}
++		if v := strings.TrimSpace(a.GetCredential(key)); v != "" {
++			return v
++		}
++	}
++	return ""
++}
 +
 +func inspectionAccount(a *service.Account) codexeval.InspectionAccount {
 +	enabled, exists := a.Extra["codex_eval_inspection_enabled"].(bool)
@@ -888,6 +1129,7 @@ new file mode 100644
 +		verdict = codexeval.InspectionVerdictDegraded
 +	}
 +	return codexeval.InspectionAccount{Target: codexeval.Target{AccountID: a.ID}, Name: a.Name,
++		Email: extractAccountEmail(a), Platform: a.Platform,
 +		Priority: a.Priority, Verdict: verdict, Available: a.IsSchedulable(), GroupIDs: a.GroupIDs, Type: a.Type,
 +		PlanType: a.GetCredential("plan_type"), Enabled: a.Schedulable, AutoInspectionEnabled: enabled}
 +}
@@ -910,7 +1152,7 @@ new file mode 100644
 +		response.ErrorFrom(c, err)
 +		return
 +	}
-+	if a.Platform != service.PlatformOpenAI || !(a.IsOAuth() || a.Type == service.AccountTypeAPIKey) {
++	if !isInspectionSupportedAccount(a) {
 +		response.BadRequest(c, "Account does not support Candy inspection")
 +		return
 +	}
@@ -947,14 +1189,14 @@ new file mode 100644
 +		List: func(ctx context.Context, settings codexeval.InspectionSettings) ([]codexeval.InspectionAccount, error) {
 +			out := []codexeval.InspectionAccount{}
 +			for page := 1; ; page++ {
-+				items, total, err := accounts.adminService.ListAccounts(ctx, page, 100, service.PlatformOpenAI, "", "", "", settings.GroupID, "", "id", "asc")
++				items, total, err := accounts.adminService.ListAccounts(ctx, page, 100, "", "", "", "", settings.GroupID, "", "id", "asc")
 +				if err != nil {
 +					return nil, err
 +				}
 +				resolved := accounts.inspectionAccounts(ctx, items)
 +				for n := range items {
 +					a := &items[n]
-+					if a.IsOAuth() || a.Type == service.AccountTypeAPIKey {
++					if isInspectionSupportedAccount(a) {
 +						out = append(out, resolved[n])
 +					}
 +				}
@@ -1020,89 +1262,9 @@ new file mode 100644
 +	codexeval.CancelInspection()
 +	response.Success(c, codexeval.CurrentInspectionState())
 +}
-diff --git a/backend/internal/service/codex_inspection_settings.go b/backend/internal/service/codex_inspection_settings.go
-new file mode 100644
---- /dev/null
-+++ b/backend/internal/service/codex_inspection_settings.go
-@@ -0,0 +1,76 @@
-+package service
-+
-+import (
-+	"context"
-+	"encoding/json"
-+	"fmt"
-+
-+	"github.com/Wei-Shaw/sub2api/internal/codexeval"
-+)
-+
-+const codexInspectionSettingPrefix = "codex_eval_inspection_"
-+
-+func inspectionSettingValues(s codexeval.InspectionSettings) map[string]json.RawMessage {
-+	raw, _ := json.Marshal(s)
-+	values := map[string]json.RawMessage{}
-+	_ = json.Unmarshal(raw, &values)
-+	delete(values, "ntfy_password_configured")
-+	delete(values, "bark_url_configured")
-+	return values
-+}
-+
-+func (s *SettingService) GetCodexInspectionSettings(ctx context.Context) (codexeval.InspectionSettings, error) {
-+	out := codexeval.DefaultInspectionSettings()
-+	fields := inspectionSettingValues(out)
-+	keys := make([]string, 0, len(fields))
-+	for field := range fields {
-+		keys = append(keys, codexInspectionSettingPrefix+field)
-+	}
-+	stored, err := s.settingRepo.GetMultiple(ctx, keys)
-+	if err != nil {
-+		return out, err
-+	}
-+	for field := range fields {
-+		if value, ok := stored[codexInspectionSettingPrefix+field]; ok {
-+			fields[field] = json.RawMessage(value)
-+		}
-+	}
-+	raw, err := json.Marshal(fields)
-+	if err != nil {
-+		return out, fmt.Errorf("Read inspection settings: %w", err)
-+	}
-+	if err = json.Unmarshal(raw, &out); err != nil {
-+		return out, fmt.Errorf("Read inspection settings: %w", err)
-+	}
-+	if out.NormalPriority < 1 {
-+		out.NormalPriority = codexeval.DefaultInspectionSettings().NormalPriority
-+	}
-+	out.NormalizeModels()
-+	return out, nil
-+}
-+
-+func (s *SettingService) UpdateCodexInspectionSettings(ctx context.Context, next codexeval.InspectionSettings) (codexeval.InspectionSettings, error) {
-+	next.NormalizeModels()
-+	current, err := s.GetCodexInspectionSettings(ctx)
-+	if err != nil {
-+		return current, err
-+	}
-+	if next.NtfyPassword == "" {
-+		next.NtfyPassword = current.NtfyPassword
-+	}
-+	if next.BarkURL == "" {
-+		next.BarkURL = current.BarkURL
-+	}
-+	if err = next.Validate(); err != nil {
-+		return current, err
-+	}
-+	values := map[string]string{}
-+	for field, value := range inspectionSettingValues(next) {
-+		values[codexInspectionSettingPrefix+field] = string(value)
-+	}
-+	if err = s.settingRepo.SetMultiple(ctx, values); err != nil {
-+		return current, err
-+	}
-+	codexeval.UpdateInspectionSettings(next)
-+	return next, nil
-+}
 diff --git a/backend/internal/service/codex_inspection_models.go b/backend/internal/service/codex_inspection_models.go
 new file mode 100644
+index 0000000..124b2be
 --- /dev/null
 +++ b/backend/internal/service/codex_inspection_models.go
 @@ -0,0 +1,94 @@
@@ -1199,4 +1361,89 @@ new file mode 100644
 +	next.Extra[codexInspectionRemovedModels] = removed
 +	next.Extra[codexInspectionVerdict] = string(verdict)
 +	return s.accountRepo.Update(ctx, &next)
++}
+diff --git a/backend/internal/service/codex_inspection_settings.go b/backend/internal/service/codex_inspection_settings.go
+new file mode 100644
+index 0000000..bf47682
+--- /dev/null
++++ b/backend/internal/service/codex_inspection_settings.go
+@@ -0,0 +1,79 @@
++package service
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++
++	"github.com/Wei-Shaw/sub2api/internal/codexeval"
++)
++
++const codexInspectionSettingPrefix = "codex_eval_inspection_"
++
++func inspectionSettingValues(s codexeval.InspectionSettings) map[string]json.RawMessage {
++	raw, _ := json.Marshal(s)
++	values := map[string]json.RawMessage{}
++	_ = json.Unmarshal(raw, &values)
++	delete(values, "ntfy_password_configured")
++	delete(values, "bark_url_configured")
++	return values
++}
++
++func (s *SettingService) GetCodexInspectionSettings(ctx context.Context) (codexeval.InspectionSettings, error) {
++	out := codexeval.DefaultInspectionSettings()
++	fields := inspectionSettingValues(out)
++	keys := make([]string, 0, len(fields))
++	for field := range fields {
++		keys = append(keys, codexInspectionSettingPrefix+field)
++	}
++	stored, err := s.settingRepo.GetMultiple(ctx, keys)
++	if err != nil {
++		return out, err
++	}
++	for field := range fields {
++		if value, ok := stored[codexInspectionSettingPrefix+field]; ok {
++			if (field == "include_patterns" || field == "exclude_patterns" || field == "test_type") && !json.Valid([]byte(value)) {
++				continue
++			}
++			fields[field] = json.RawMessage(value)
++		}
++	}
++	raw, err := json.Marshal(fields)
++	if err != nil {
++		return out, fmt.Errorf("Read inspection settings: %w", err)
++	}
++	if err = json.Unmarshal(raw, &out); err != nil {
++		return out, fmt.Errorf("Read inspection settings: %w", err)
++	}
++	if out.NormalPriority < 1 {
++		out.NormalPriority = codexeval.DefaultInspectionSettings().NormalPriority
++	}
++	out.NormalizeModels()
++	return out, nil
++}
++
++func (s *SettingService) UpdateCodexInspectionSettings(ctx context.Context, next codexeval.InspectionSettings) (codexeval.InspectionSettings, error) {
++	next.NormalizeModels()
++	current, err := s.GetCodexInspectionSettings(ctx)
++	if err != nil {
++		return current, err
++	}
++	if next.NtfyPassword == "" {
++		next.NtfyPassword = current.NtfyPassword
++	}
++	if next.BarkURL == "" {
++		next.BarkURL = current.BarkURL
++	}
++	if err = next.Validate(); err != nil {
++		return current, err
++	}
++	values := map[string]string{}
++	for field, value := range inspectionSettingValues(next) {
++		values[codexInspectionSettingPrefix+field] = string(value)
++	}
++	if err = s.settingRepo.SetMultiple(ctx, values); err != nil {
++		return current, err
++	}
++	codexeval.UpdateInspectionSettings(next)
++	return next, nil
 +}

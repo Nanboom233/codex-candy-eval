@@ -12,14 +12,15 @@ const variants = [...fs.readFileSync(path.join(web, "../pelican.go"), "utf8").ma
     [...prompt.matchAll(/"(?:[^"\\]|\\.)*"/g)].map(([literal]) => JSON.parse(literal)).join("") }));
 assert.equal(variants.length, 2, "Load the native shared Pelican definitions");
 const settings = () => ({ enabled: false, group_id: 101, account_type: "all", account_plan: "all", enabled_only: false,
-  model: "saved/literal", effort: "low", max_tests_per_account: 3,
+  model: "saved/literal", effort: "low", test_type: "candy", max_tests_per_account: 3,
   min_wait_minutes: 15, max_wait_minutes: 35,
+  include_patterns: [], exclude_patterns: [],
   adjust_priority: false, normal_priority: 10, degraded_priority: 99,
   control_models: false, notify_enabled: true, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"],
   ntfy_server: "https://ntfy.sh", ntfy_topic: "", ntfy_username: "", ntfy_password: "", bark_url: "",
   ntfy_password_configured: true, bark_url_configured: false });
 const idle = { phase: "idle", enabled: false, running: false, results: [] };
-const emptyState = () => ({ active: [], candy: {}, fingerprint: {}, pelican: {} });
+const emptyState = () => ({ active: [], candy: {}, fingerprint: {}, pelican: {}, siwc: {} });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function harness(preferences = {}, { initializePage = false, api } = {}) {
@@ -31,17 +32,17 @@ function harness(preferences = {}, { initializePage = false, api } = {}) {
   w.localStorage.setItem("sub2api-codex-eval.prefs", JSON.stringify({ model: "saved/literal" }));
   for (const [key, value] of Object.entries(preferences)) w.localStorage.setItem(key, value);
   w.eval([read("vendor/markdown-it.min.js"), read("vendor/markdown-it-cjk-friendly.min.js"),
-    read("vendor/texmath.js"), read("vendor/temml.min.js"), read("components.js"), read("catalog.js"),
+    read("vendor/texmath.js"), read("vendor/temml.min.js"), read("storage.js"), read("credentials.js"), read("components.js"), read("catalog.js"),
     read("candy.js"), read("fingerprint.js").replace('/*FINGERPRINT_CONFIG*/{}', JSON.stringify({ requests: 3, aliases: { "gpt-6.1-sol": "gpt-6-astra", "deepseek-flash": "deepseek-v4.1-flash-1017" } })),
-    read("pelican.js").replace("/*PELICAN_VARIANTS*/[]", JSON.stringify(variants)), read("inspection.js"), initializePage
+    read("pelican.js").replace("/*PELICAN_VARIANTS*/[]", JSON.stringify(variants)), read("siwc.js"), read("inspection.js"), initializePage
       ? read("app.js").replace("// Events and initialization.", "api = window.fixtureAPI;\n// Events and initialization.")
       : read("app.js").split("// Events and initialization.")[0], initializePage ? "" : `
-    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializePelican(); initializeInspection();`, `
+    initializeLayout(); initializeModelPickers(); initializeCandy(); initializeFingerprint(); initializePelican(); initializeSIWC(); initializeInspection();`, `
     window.test = {fillModels,fillInspectionSettings,loadInspectionSettings,saveInspectionSettings,markInspectionEdit,
       inspectionRemovedModels,setInspectionRemovedModels,
       updateModelPicker,renderInspectionState,validateInspectionFields,loadInspectionState,
       refreshCatalog,resetCatalogCache,stateCredentials,visibleCredentials,targetsFor,fillCredentialTypes,fillPlanFilter,renderCandyRow,renderList,render,
-      batchCredentials,runCandy,runFingerprint,runPelican,fpOutcome,showFingerprintDetail,showPelicanDetail,pelicanHistory,renderPelicanRow,initializeCopyButtons,candyTip,showLogin,load,
+      batchCredentials,runCandy,runFingerprint,runPelican,runSIWC,fpOutcome,showFingerprintDetail,showPelicanDetail,showSIWCDetail,pelicanHistory,renderPelicanRow,renderSIWCRow,renderSIWC,siwcVerdict,initializeCopyButtons,candyTip,showLogin,load,
       setAccountInspection, selectCandy(id){candySelected.add(id);render()}, setUpdate(fn){update=fn},
       setCredentials(data){credentials=stateCredentials(data)},
       setAPI(fn){api=fn}, setModels(ids){catalogCache.models={ids}}, setGroup(id){selectedGroup=id},
@@ -188,7 +189,7 @@ function groupFixture() {
     ctx.h.setModels(["provider/raw", "gpt-6.1-sol"]);
     ctx.h.fillModels();
     assert.equal(ctx.$("model-select").value, "saved/literal");
-    for (const id of ["model", "fp-model", "pl-model"]) {
+    for (const id of ["model", "fp-model", "pl-model", "siwc-model"]) {
       ctx.h.setModels(["provider/raw", "gpt-6.1-sol"]);
       ctx.h.fillModels();
       choose(ctx, id, "provider/raw");
@@ -211,7 +212,7 @@ function groupFixture() {
   ctx = harness();
   try {
     ctx.h.fillModels();
-    const ids = ["model", "fp-model", "pl-model"];
+    const ids = ["model", "fp-model", "pl-model", "siwc-model"];
     for (const id of ids) {
       const select = ctx.$(id + "-select");
       select.selectedIndex = select.options.length - 1;
@@ -401,16 +402,26 @@ function groupFixture() {
     adjustment.dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
     assert.equal(ctx.$("inspection-priority-fields").hidden, true);
     assert.equal(normal.value, "1");
-    assert.equal(form.elements.namedItem("include_patterns"), null);
-    assert.equal(form.elements.namedItem("exclude_patterns"), null);
+    assert.equal(form.elements.namedItem("test_type").value, "candy");
+    assert.equal(form.elements.namedItem("include_patterns").value, "");
+    assert.equal(form.elements.namedItem("exclude_patterns").value, "");
+    const autoGrid = ctx.$("inspection-auto-fields").querySelector(".settings-grid");
+    assert.equal(autoGrid.children.length, 6, "Inspection auto fields must use a 3-row 2-column grid");
+    assert.ok(autoGrid.children[0].contains(ctx.$("inspection-model")));
+    assert.ok(autoGrid.children[1].contains(form.elements.namedItem("effort")));
+    assert.ok(autoGrid.children[1].contains(form.elements.namedItem("test_type")));
+    assert.ok(autoGrid.children[4].contains(form.elements.namedItem("include_patterns")));
+    assert.ok(autoGrid.children[5].contains(form.elements.namedItem("exclude_patterns")));
     assert.equal(ctx.$("inspection-ntfy-configured"), null);
     assert.equal(ctx.$("inspection-bark-configured"), null);
     const header = ctx.$("candy-credentials").querySelector(".credential-head");
+    const fpHeader = ctx.$("fp-credentials").querySelector(".credential-head");
     assert.equal(ctx.$("inspection-runtime"), null);
+    assert.equal(ctx.$("inspection-round-summary"), null);
     assert.equal(ctx.$("inspection-status").parentElement, header);
     assert.equal(ctx.$("inspection-runtime-error"), null);
     assert.equal(ctx.$("candy-settings-status"), null);
-    for (const prefix of ["fp-", "pl-"]) assert.equal(ctx.$(prefix + "rows").parentElement.querySelector(".inspection-status"), null);
+    for (const prefix of ["fp-", "pl-", "siwc-"]) assert.equal(ctx.$(prefix + "rows").parentElement.querySelector(".inspection-status"), null);
     ctx.h.renderInspectionState(idle);
     assert.equal(ctx.$("inspection-status").hidden, true);
     assert.equal(ctx.$("inspection-phase").textContent, "");
@@ -418,10 +429,17 @@ function groupFixture() {
     ctx.h.renderInspectionState({ ...idle, enabled: true, next_run_at: "2026-10-17T12:00:00Z" });
     assert.equal(ctx.$("inspection-status").hidden, false);
     assert.ok(ctx.$("inspection-next").textContent.startsWith("下次巡检："));
+    form.elements.namedItem("test_type").value = "fingerprint";
+    form.elements.namedItem("test_type").dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(ctx.$("inspection-status").parentElement, fpHeader, "Fingerprint test_type must move #inspection-status to #fp-credentials");
+    form.elements.namedItem("test_type").value = "candy";
+    form.elements.namedItem("test_type").dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+    assert.equal(ctx.$("inspection-status").parentElement, header, "Candy test_type must move #inspection-status back to #candy-credentials");
     ctx.h.renderInspectionState({ ...idle, running: true, phase: "testing", started_at: "2026-10-17T12:00:00Z", done: 1, total: 2 });
     assert.equal(ctx.$("inspection-phase").textContent, "正在测试");
     assert.equal(ctx.$("inspection-progress").textContent, "账户进度：1/2");
     ctx.h.renderInspectionState({ ...idle, phase: "failed", error: "actual fixture failure" });
+    assert.equal(ctx.$("inspection-status").hidden, true);
     assert.equal(ctx.$("inspection-runtime-error"), null);
     assert.equal(ctx.$("inspection-phase").textContent, "");
     assert.equal(ctx.$("settings-panel").textContent.includes("actual fixture failure"), false);
@@ -584,7 +602,9 @@ function groupFixture() {
     ctx.$("inspection-settings").dispatchEvent(new ctx.w.Event("submit", { bubbles: true, cancelable: true }));
     await tick();
     assert.equal(saved.model, "custom/exact-model");
-    assert.ok(!("include_patterns" in saved) && !("exclude_patterns" in saved));
+    assert.equal(saved.test_type, "candy");
+    assert.deepEqual([...saved.include_patterns], []);
+    assert.deepEqual([...saved.exclude_patterns], []);
     assert.equal(saved.ntfy_password, "");
     assert.equal(saved.bark_url, "");
     ctx.$("inspection-model").value = "newer/unsaved-edit";
@@ -718,7 +738,7 @@ function groupFixture() {
     ctx.h.renderInspectionState({ ...idle, results: [{ account_id: 33, priority: 10, tests: 2, outcome: "testing" }] });
     assert.equal(list.querySelector('[data-row="33"]'), node, "Shared list patching must keep the existing row node");
     ctx.h.fillCredentialTypes();
-    ctx.$("credential-type").value = "oauth";
+    ctx.$("credential-type").value = "openai:oauth";
     ctx.h.render();
     assert.deepEqual([...list.querySelectorAll("[data-row]")].map((entry) => Number(entry.dataset.row)), [33]);
     ctx.h.showLogin("fixture session ended");
@@ -991,18 +1011,88 @@ function groupFixture() {
   ctx = harness();
   try {
     const fixture = groupFixture();
-    fixture.accounts.push(fixtureAccount(88, "shadow", [101], { type: "oauth", parent_plan_type: "pro" }));
-    ctx.h.setAPI(async (url) => url.includes("/settings/")
-      ? { ...settings(), account_type: "oauth", account_plan: "Pro ALL" } : fixture.api(url));
+    fixture.accounts.push(
+      fixtureAccount(88, "shadow", [101], { type: "oauth", parent_plan_type: "pro" }),
+      fixtureAccount(91, "claude-key", [101], { platform: "anthropic", type: "apikey" }),
+      fixtureAccount(92, "gemini-key", [101], { platform: "gemini", type: "apikey" }),
+      fixtureAccount(93, "antigravity-key", [101], { platform: "antigravity", type: "apikey" }),
+      fixtureAccount(94, "deepseek-key", [101, 303], { platform: "deepseek", type: "apikey" }),
+    );
+    fixture.data.siwc = {
+      "33": [{ id: "siwc-33", model: "gpt-5.4", status: "available", time: "2026-10-17T12:00:00Z", duration_ms: 42,
+        input_tokens: 5, output_tokens: 1 }],
+      "88": [{ id: "siwc-88", model: "gpt-5.4", status: "restricted", time: "2026-10-17T12:01:00Z", duration_ms: 30, http_status: 403,
+        code: "subscription_sharing_user_not_eligible", error: "Your account is not eligible to use subscription sharing" }],
+    };
+    let savedSettings;
+    const submissions = [];
+    ctx.h.setAPI(async (url, options = {}) => {
+      if (url.includes("/groups/all")) {
+        return [
+          { id: 101, name: "A", platform: "openai" },
+          { id: 202, name: "B", platform: "openai" },
+          { id: 303, name: "Composite Mix", platform: "composite" },
+          { id: 404, name: "DeepSeek Pool", platform: "deepseek" },
+        ];
+      }
+      if (url.includes("/settings/")) {
+        if (options.method === "PUT") { savedSettings = options.body; return savedSettings; }
+        return { ...settings(), account_type: "oauth", account_plan: "Pro ALL", test_type: "fingerprint",
+          include_patterns: ["*team*", "*@company.com"], exclude_patterns: ["*staging*"] };
+      }
+      return fixture.api(url);
+    });
+    ctx.h.setUpdate((_path, options) => submissions.push(options.body));
     await ctx.h.loadInspectionSettings();
     await ctx.h.refreshCatalog();
     ctx.h.setCredentials(fixture.data);
+    ctx.h.fillCredentialTypes();
     ctx.h.render();
+    assert.deepEqual([...ctx.$("group").options].map((option) => option.textContent), ["A", "B", "Composite Mix", "DeepSeek Pool"],
+      "All Sub2API groups including composite and deepseek must remain selectable");
+    assert.equal(ctx.$("inspection-status").parentElement, ctx.$("fp-credentials").querySelector(".credential-head"),
+      "Loaded fingerprint test_type must place #inspection-status in #fp-credentials");
     assert.deepEqual([...ctx.h.batchCredentials("", new Set())].map((a) => Number(a.id)).sort((a, b) => a - b), [33, 88],
       "Candy Pro ALL must include the shadow's native parent plan");
     ctx.$("credential-plan").value = "Pro 200";
     assert.deepEqual([...ctx.h.batchCredentials("", new Set())].map((a) => Number(a.id)).sort((a, b) => a - b), [33, 88],
       "Candy's specific plan filter must include the same shadow account");
+    ctx.$("credential-plan").value = "all";
+    for (const [value, expected] of [["anthropic:apikey", [91]], ["gemini:apikey", [92]], ["antigravity:apikey", [93]], ["deepseek:apikey", [94]]]) {
+      ctx.$("credential-type").value = value;
+      ctx.h.render();
+      assert.deepEqual([...ctx.$("rows").querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)), expected, value);
+    }
+    assert.ok([...ctx.$("credential-type").options].some((o) => o.value === "deepseek:apikey" && o.textContent === "DeepSeek · API Key"));
+    const form = ctx.$("inspection-settings");
+    assert.equal(form.elements.namedItem("test_type").value, "fingerprint");
+    assert.equal(form.elements.namedItem("include_patterns").value, "*team*, *@company.com");
+    assert.equal(form.elements.namedItem("exclude_patterns").value, "*staging*");
+    form.elements.namedItem("include_patterns").value = "[unclosed";
+    ctx.h.validateInspectionFields();
+    assert.equal(form.elements.namedItem("include_patterns").validationMessage, "包含账户通配符语法无效");
+    form.elements.namedItem("include_patterns").value = "*prod*, *@example.com";
+    form.elements.namedItem("include_patterns").dispatchEvent(new ctx.w.Event("input", { bubbles: true }));
+    await ctx.h.saveInspectionSettings();
+    assert.equal(savedSettings.test_type, "fingerprint");
+    assert.deepEqual([...savedSettings.include_patterns], ["*prod*", "*@example.com"]);
+    assert.deepEqual([...savedSettings.exclude_patterns], ["*staging*"]);
+    assert.equal(ctx.$("tab-siwc").textContent, "SIWC");
+    ctx.h.setModels(["gpt-5.4", "gpt-6.1-sol"]);
+    ctx.h.fillModels();
+    choose(ctx, "siwc-model", "gpt-5.4");
+    const siwcRows = [...ctx.$("siwc-rows").querySelectorAll("[data-row]")].map((row) => Number(row.dataset.row)).sort((a, b) => a - b);
+    assert.deepEqual(siwcRows, [33, 88], "SIWC tab must only show OpenAI OAuth accounts");
+    assert.ok(ctx.h.siwcVerdict(fixture.data.siwc["33"][0]).includes("SIWC 可用"));
+    assert.ok(ctx.h.siwcVerdict(fixture.data.siwc["88"][0]).includes("订阅共享受限"));
+    ctx.h.showSIWCDetail(fixture.data.siwc["33"][0]);
+    assert.ok(ctx.$("siwc-detail-body").textContent.includes("SIWC 可用"));
+    ctx.h.showSIWCDetail(fixture.data.siwc["88"][0]);
+    assert.ok(ctx.$("siwc-detail-body").textContent.includes("subscription_sharing_user_not_eligible"));
+    await ctx.h.runSIWC({ targets: ctx.h.targetsFor(ctx.h.batchCredentials("siwc-", new Set()).map((a) => a.id)) });
+    assert.equal(submissions.at(-1).type, "siwc");
+    assert.equal(submissions.at(-1).model, "gpt-5.4");
+    assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id).sort((a, b) => a - b), [33, 88]);
   } finally { ctx.close(); }
-  console.log("Settings and account checks passed: autosave, native shared selection, manual actions, inventory failure protections, Candy history, and independent inspection controls.");
+  console.log("Settings and account checks passed: autosave, native shared selection, manual actions, inventory failure protections, Candy history, multi-provider credentials, SIWC, and independent inspection controls.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

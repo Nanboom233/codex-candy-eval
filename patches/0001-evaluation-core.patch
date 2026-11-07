@@ -368,10 +368,10 @@ index 0000000..e335ce8
 +}
 diff --git a/backend/internal/codexeval/fingerprint.go b/backend/internal/codexeval/fingerprint.go
 new file mode 100644
-index 0000000..9a15946
+index 0000000..640f9d3
 --- /dev/null
 +++ b/backend/internal/codexeval/fingerprint.go
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,272 @@
 +package codexeval
 +
 +import (
@@ -437,14 +437,18 @@ index 0000000..9a15946
 +// The page compares models with the same table.
 +var fingerprintAliases = map[string]string{"gpt-6.1-sol": "gpt-6-astra", "deepseek-flash": "deepseek-v4.1-flash-1017"}
 +
-+// fingerprintModelID is the candidate a model name stands for, without a provider prefix such as "openai/".
-+func fingerprintModelID(model string) string {
++// FingerprintModelID is the candidate a model name stands for, without a provider prefix such as "openai/".
++func FingerprintModelID(model string) string {
 +	model = strings.ToLower(strings.TrimSpace(model))
 +	model = model[strings.LastIndex(model, "/")+1:]
 +	if alias, ok := fingerprintAliases[model]; ok {
 +		return alias
 +	}
 +	return model
++}
++
++func fingerprintModelID(model string) string {
++	return FingerprintModelID(model)
 +}
 +
 +type fingerprintSample struct {
@@ -499,8 +503,13 @@ index 0000000..9a15946
 +)
 +
 +func runFingerprint(ctx context.Context, auth credential, model string, p *fingerprintProgress) {
++	runFingerprintChecked(ctx, auth, model, p, nil)
++}
++
++func runFingerprintChecked(ctx context.Context, auth credential, model string, p *fingerprintProgress, check func() error) {
 +	started := time.Now()
 +	done := 0
++	stopped := false
 +	r := fingerprintResult{Info: auth.info(), ID: fmt.Sprint(started.UnixNano()), Time: started.UTC(), Model: model, DetectorRevision: detectorRevision, Concurrency: p.Concurrency}
 +	r.Status = "completed"
 +	defer func() {
@@ -513,8 +522,11 @@ index 0000000..9a15946
 +		r.DurationMS = time.Since(started).Milliseconds()
 +		mu.Lock()
 +		defer mu.Unlock()
-+		fingerprintResults[auth.ID] = appendRecent(fingerprintResults[auth.ID], r)
 +		delete(fingerprintRunning, auth.ID)
++		if stopped {
++			return
++		}
++		fingerprintResults[auth.ID] = appendRecent(fingerprintResults[auth.ID], r)
 +		_ = saveStateLocked()
 +	}()
 +	challenges := fingerprintChallenges()
@@ -540,8 +552,12 @@ index 0000000..9a15946
 +				case <-ctx.Done():
 +					return
 +				}
-+				sample, output, err := collectFingerprintSample(ctx, auth, model, challenges[i])
++				sample, output, err := collectFingerprintSample(ctx, auth, model, challenges[i], check)
 +				<-fingerprintSlots
++				if errors.Is(err, errInspectionStopped) {
++					events <- event{i, sample, output, err}
++					return
++				}
 +				if sample.Attempts > 0 {
 +					events <- event{i, sample, output, err}
 +				}
@@ -551,6 +567,10 @@ index 0000000..9a15946
 +	go func() { workers.Wait(); close(events) }()
 +	samples := make([]*fingerprintSample, fingerprintTarget)
 +	for e := range events {
++		if errors.Is(e.err, errInspectionStopped) {
++			stopped = true
++			continue
++		}
 +		samples[e.index] = &e.sample
 +		r.InputTokens += e.output.InputTokens
 +		r.OutputTokens += e.output.OutputTokens
@@ -561,6 +581,9 @@ index 0000000..9a15946
 +		mu.Lock()
 +		p.Done = done
 +		mu.Unlock()
++	}
++	if stopped {
++		return
 +	}
 +	var outputs []fingerprintOutput
 +	// Preserve challenge order even when requests complete out of order.
@@ -587,12 +610,12 @@ index 0000000..9a15946
 +}
 +
 +// collectFingerprintSample asks challenge until an answer can be scored. The sample keeps the last answer.
-+func collectFingerprintSample(ctx context.Context, auth credential, model string, challenge fingerprintChallenge) (sample fingerprintSample, out modelResponse, err error) {
++func collectFingerprintSample(ctx context.Context, auth credential, model string, challenge fingerprintChallenge, check func() error) (sample fingerprintSample, out modelResponse, err error) {
 +	sample.fingerprintChallenge = challenge
 +	out, sample.Attempts, err = askCodex(ctx, auth, model, "", challenge.Instructions, challenge.Prompt, challengeTimeout, func(answer string) (err error) {
 +		sample.Text, sample.Parsed, err = fingerprintText(answer, challenge.ExpectedCount)
 +		return err
-+	}, nil)
++	}, check)
 +	sample.Valid = err == nil
 +	if err != nil {
 +		sample.Error = truncate(err.Error(), 500)
@@ -623,7 +646,7 @@ index 0000000..9a15946
 +}
 diff --git a/backend/internal/codexeval/fingerprint_detector.go b/backend/internal/codexeval/fingerprint_detector.go
 new file mode 100644
-index 0000000..fffb2b7
+index 0000000..4f43416
 --- /dev/null
 +++ b/backend/internal/codexeval/fingerprint_detector.go
 @@ -0,0 +1,695 @@
@@ -1324,10 +1347,10 @@ index 0000000..fffb2b7
 +}
 diff --git a/backend/internal/codexeval/model.go b/backend/internal/codexeval/model.go
 new file mode 100644
-index 0000000..6ac7de7
+index 0000000..6fb4dab
 --- /dev/null
 +++ b/backend/internal/codexeval/model.go
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,310 @@
 +package codexeval
 +
 +import (
@@ -1416,8 +1439,8 @@ index 0000000..6ac7de7
 +	}
 +}
 +
-+// executeModel sends directly through the native administrator account sender.
-+func executeModel(ctx context.Context, auth credential, model string, body any, headers http.Header) (result modelResponse, status int, err error) {
++// executeResponse sends a Responses request through the native administrator account sender and reads its stream.
++func executeResponse(ctx context.Context, auth credential, model string, body any, headers http.Header) (out responseBody, status int, err error) {
 +	defer func() {
 +		if recovered := recover(); recovered != nil {
 +			err = fmt.Errorf("模型请求异常：%v", recovered)
@@ -1427,7 +1450,7 @@ index 0000000..6ac7de7
 +	encoder := json.NewEncoder(&request)
 +	encoder.SetEscapeHTML(false)
 +	if err = encoder.Encode(body); err != nil {
-+		return result, 0, err
++		return out, 0, err
 +	}
 +	response, err := sender(ctx, auth.Target.AccountID, bytes.TrimSuffix(request.Bytes(), []byte("\n")), headers)
 +	if response != nil {
@@ -1440,7 +1463,7 @@ index 0000000..6ac7de7
 +			status == http.StatusOK || (status == 0 && errors.As(err, &attempted) && attempted.RequestAttempted()) {
 +			err = retryableError{err}
 +		}
-+		return result, status, err
++		return out, status, err
 +	}
 +	stop := context.AfterFunc(ctx, func() { response.Body.Close() })
 +	defer stop()
@@ -1455,6 +1478,25 @@ index 0000000..6ac7de7
 +		if status == http.StatusRequestTimeout || status >= http.StatusInternalServerError {
 +			err = retryableError{err}
 +		}
++		return out, status, err
++	}
++	out, readErr := readResponseStream(response.Body)
++	if ctx.Err() != nil {
++		return out, status, context.Cause(ctx)
++	}
++	if readErr != nil {
++		return out, status, retryableError{readErr}
++	}
++	return out, status, nil
++}
++
++// executeModel sends directly through the native administrator account sender and requires a completed text answer.
++func executeModel(ctx context.Context, auth credential, model string, body any, headers http.Header) (result modelResponse, status int, err error) {
++	out, status, err := executeResponse(ctx, auth, model, body, headers)
++	result.InputTokens = out.Usage.InputTokens
++	result.OutputTokens = out.Usage.OutputTokens
++	result.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
++	if err != nil {
 +		return result, status, err
 +	}
 +	defer func() {
@@ -1462,17 +1504,7 @@ index 0000000..6ac7de7
 +			err = retryableError{err}
 +		}
 +	}()
-+	out, readErr := readResponseStream(response.Body)
-+	result.InputTokens = out.Usage.InputTokens
-+	result.OutputTokens = out.Usage.OutputTokens
-+	result.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
-+	if ctx.Err() != nil {
-+		return result, status, context.Cause(ctx)
-+	}
-+	if readErr != nil {
-+		return result, status, readErr
-+	}
-+	if (out.Status != "" && out.Status != "completed") || (len(out.Error) > 0 && string(out.Error) != "null") {
++	if !out.completed() {
 +		return result, status, fmt.Errorf("模型响应未完成（%s）：%s", out.Status, out.Error)
 +	}
 +	var answer strings.Builder
@@ -1514,6 +1546,10 @@ index 0000000..6ac7de7
 +			ReasoningTokens int64 `json:"reasoning_tokens"`
 +		} `json:"output_tokens_details"`
 +	} `json:"usage"`
++}
++
++func (r responseBody) completed() bool {
++	return r.Status == "completed" && (len(r.Error) == 0 || string(r.Error) == "null")
 +}
 +
 +// SSEData reads one event, including multi-line data and a final event without a
@@ -1627,7 +1663,7 @@ index 0000000..6ac7de7
 +}
 diff --git a/backend/internal/codexeval/pelican.go b/backend/internal/codexeval/pelican.go
 new file mode 100644
-index 0000000..08281f3
+index 0000000..23b8c3c
 --- /dev/null
 +++ b/backend/internal/codexeval/pelican.go
 @@ -0,0 +1,136 @@
@@ -1769,10 +1805,10 @@ index 0000000..08281f3
 +}
 diff --git a/backend/internal/codexeval/runtime.go b/backend/internal/codexeval/runtime.go
 new file mode 100644
-index 0000000..72603e1
+index 0000000..c969032
 --- /dev/null
 +++ b/backend/internal/codexeval/runtime.go
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,278 @@
 +package codexeval
 +
 +import (
@@ -1868,6 +1904,9 @@ index 0000000..72603e1
 +	summary := StartSummary{Started: []run{}, Busy: []Target{}, Unavailable: []unavailable{}}
 +	req.Model = strings.TrimSpace(req.Model)
 +	req.Effort = strings.TrimSpace(req.Effort)
++	if req.Type == "siwc" && req.Model == "" {
++		req.Model = "gpt-6.1-sol"
++	}
 +	if !validModelName(req.Model, req.Type == "candy" || req.Type == "pelican") {
 +		return summary, fmt.Errorf("请选择有效模型")
 +	}
@@ -1894,6 +1933,7 @@ index 0000000..72603e1
 +		if req.Concurrency < 1 || req.Concurrency > fingerprintMaxConcurrency {
 +			return summary, fmt.Errorf("每账户并发须为 1–%d", fingerprintMaxConcurrency)
 +		}
++	case "siwc":
 +	default:
 +		return summary, fmt.Errorf("未知测试类型")
 +	}
@@ -1937,6 +1977,8 @@ index 0000000..72603e1
 +		case "fingerprint":
 +			fingerprintRunning[id] = &fingerprintProgress{Model: req.Model, Total: fingerprintTarget, Concurrency: req.Concurrency}
 +			r.Progress = fingerprintRunning[id]
++		case "siwc":
++			siwcRunning[id] = true
 +		}
 +		// Start replies expose identity; state serializes progress under the lock.
 +		copyRun := *r
@@ -1947,17 +1989,19 @@ index 0000000..72603e1
 +		mu.Unlock()
 +		go func() {
 +			defer func() { cancel(); mu.Lock(); delete(active, id); mu.Unlock() }()
++			var beforeSend func() error
++			if check != nil {
++				beforeSend = func() error { return check(runCtx, target.AccountID) }
++			}
 +			switch req.Type {
 +			case "candy":
-+				var beforeSend func() error
-+				if check != nil {
-+					beforeSend = func() error { return check(runCtx, target.AccountID) }
-+				}
 +				runCandyChecked(a, req.Model, req.Effort, req.Runs, beforeSend)
 +			case "pelican":
 +				runPelican(a, req.Model, req.Effort, variant)
 +			case "fingerprint":
-+				runFingerprint(runCtx, a, req.Model, fpProgress)
++				runFingerprintChecked(runCtx, a, req.Model, fpProgress, beforeSend)
++			case "siwc":
++				runSIWC(a, req.Model)
 +			}
 +		}()
 +	}
@@ -1984,13 +2028,17 @@ index 0000000..72603e1
 +	}
 +	fp := map[string][]fingerprintResult{}
 +	pl := map[string][]pelicanResult{}
++	sw := map[string][]siwcResult{}
 +	for id, rs := range fingerprintResults {
 +		fp[id] = summaries(rs)
 +	}
 +	for id, rs := range pelicanResults {
 +		pl[id] = summaries(rs)
 +	}
-+	raw, err := json.Marshal(map[string]any{"active": runs, "candy": candyResults, "fingerprint": fp, "pelican": pl, "storage_error": storageError})
++	for id, rs := range siwcResults {
++		sw[id] = summaries(rs)
++	}
++	raw, err := json.Marshal(map[string]any{"active": runs, "candy": candyResults, "fingerprint": fp, "pelican": pl, "siwc": sw, "storage_error": storageError})
 +	return raw, err
 +}
 +func Record(kind string, accountID int64, id string) ([]byte, int) {
@@ -2039,12 +2087,152 @@ index 0000000..72603e1
 +func jsonError(status int, message string) managementResponse {
 +	return jsonResponse(status, map[string]any{"error": map[string]string{"message": message}})
 +}
+diff --git a/backend/internal/codexeval/siwc.go b/backend/internal/codexeval/siwc.go
+new file mode 100644
+index 0000000..db211d8
+--- /dev/null
++++ b/backend/internal/codexeval/siwc.go
+@@ -0,0 +1,134 @@
++package codexeval
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"strings"
++	"time"
++)
++
++const siwcTimeout = time.Minute
++
++type siwcResult struct {
++	Info
++	ID              string    `json:"id"`
++	Time            time.Time `json:"time"`
++	Model           string    `json:"model"`
++	Status          string    `json:"status"`
++	Code            string    `json:"code,omitempty"`
++	HTTPStatus      int       `json:"http_status,omitempty"`
++	Error           string    `json:"error,omitempty"`
++	DurationMS      int64     `json:"duration_ms"`
++	InputTokens     int64     `json:"input_tokens"`
++	OutputTokens    int64     `json:"output_tokens"`
++	ReasoningTokens int64     `json:"reasoning_tokens"`
++}
++
++func (r siwcResult) summary() siwcResult {
++	return r
++}
++
++var (
++	siwcResults = map[string][]siwcResult{}
++	siwcRunning = map[string]bool{}
++)
++
++func runSIWC(auth credential, model string) {
++	r := evaluateSIWC(auth, model)
++	mu.Lock()
++	defer mu.Unlock()
++	siwcResults[auth.ID] = appendRecent(siwcResults[auth.ID], r)
++	delete(siwcRunning, auth.ID)
++	_ = saveStateLocked()
++}
++
++func evaluateSIWC(auth credential, model string) (r siwcResult) {
++	now := time.Now()
++	r = siwcResult{
++		Info:   auth.info(),
++		ID:     fmt.Sprint(now.UnixNano()),
++		Time:   now.UTC(),
++		Model:  model,
++		Status: "failed",
++	}
++	body := map[string]any{
++		"model": model, "store": false, "stream": true,
++		"input": []map[string]string{{"role": "user", "content": "Reply with OK."}},
++	}
++	headers := http.Header{
++		"Content-Type": {"application/json"},
++		"Accept":       {"text/event-stream"},
++		"User-Agent":   {"cpa-siwc-check/" + pluginVersion},
++	}
++	requestCtx, cancel := withModelTimeout(auth.ctx, siwcTimeout)
++	out, status, err := executeResponse(requestCtx, auth, model, body, headers)
++	cancel()
++	r.DurationMS = time.Since(now).Milliseconds()
++	r.InputTokens = out.Usage.InputTokens
++	r.OutputTokens = out.Usage.OutputTokens
++	r.ReasoningTokens = out.Usage.OutputTokensDetails.ReasoningTokens
++	if auth.ctx.Err() != nil {
++		r.Status = "cancelled"
++		r.Error = "检测已取消"
++		return
++	}
++	if err == nil && out.completed() {
++		r.Status = "available"
++		return
++	}
++	if status != http.StatusOK && status > 0 {
++		r.HTTPStatus = status
++	}
++	message := "模型响应未完成"
++	if err != nil {
++		message = err.Error()
++	} else if len(out.Error) > 0 && string(out.Error) != "null" {
++		message = string(out.Error)
++	}
++	r.Code, r.Error = siwcErrorDetails(message)
++	switch {
++	case r.Code == "subscription_sharing_user_not_eligible":
++		r.Status = "restricted"
++	case r.Code == "subscription_sharing_usage_limit_exceeded":
++		r.Status = "limited"
++	case r.Code == "subscription_sharing_invalid_user" || r.HTTPStatus == http.StatusUnauthorized:
++		r.Status = "auth_error"
++	case r.HTTPStatus == http.StatusTooManyRequests:
++		r.Status = "limited"
++	}
++	if r.Error == "" {
++		r.Error = truncate(message, 500)
++	}
++	return
++}
++
++func siwcErrorDetails(message string) (code, text string) {
++	start := strings.IndexByte(message, '{')
++	if start < 0 {
++		return "", truncate(message, 500)
++	}
++	var parsed struct {
++		Error struct {
++			Code    string `json:"code"`
++			Message string `json:"message"`
++		} `json:"error"`
++		Code    string `json:"code"`
++		Message string `json:"message"`
++	}
++	if json.Unmarshal([]byte(message[start:]), &parsed) != nil {
++		return "", truncate(message, 500)
++	}
++	code = truncate(firstText(parsed.Error.Code, parsed.Code), 120)
++	text = truncate(firstText(parsed.Error.Message, parsed.Message, message), 500)
++	return
++}
++
++func firstText(values ...string) string {
++	for _, value := range values {
++		if value = strings.TrimSpace(value); value != "" {
++			return value
++		}
++	}
++	return ""
++}
 diff --git a/backend/internal/codexeval/state.go b/backend/internal/codexeval/state.go
 new file mode 100644
-index 0000000..1e8270a
+index 0000000..31a3a08
 --- /dev/null
 +++ b/backend/internal/codexeval/state.go
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,213 @@
 +package codexeval
 +
 +import (
@@ -2058,13 +2246,14 @@ index 0000000..1e8270a
 +	"slices"
 +)
 +
-+const historySchemaVersion = 2
++const historySchemaVersion = 3
 +
 +type persistedState struct {
 +	SchemaVersion int                            `json:"schema_version"`
 +	Results       map[string][]candyResult       `json:"results"`
 +	Fingerprints  map[string][]fingerprintResult `json:"fingerprints"`
 +	Pelicans      map[string][]pelicanResult     `json:"pelicans,omitempty"`
++	SIWC          map[string][]siwcResult        `json:"siwc,omitempty"`
 +}
 +
 +var (
@@ -2090,6 +2279,7 @@ index 0000000..1e8270a
 +		Results       map[string][]candyResult   `json:"results"`
 +		Fingerprints  json.RawMessage            `json:"fingerprints"`
 +		Pelicans      map[string][]pelicanResult `json:"pelicans"`
++		SIWC          map[string][]siwcResult    `json:"siwc"`
 +	}
 +	var fingerprints map[string][]fingerprintResult
 +	version := 0
@@ -2126,15 +2316,21 @@ index 0000000..1e8270a
 +	if state.Pelicans != nil {
 +		pelicanResults = state.Pelicans
 +	}
++	if state.SIWC != nil {
++		siwcResults = state.SIWC
++	}
 +	keepRecent(candyResults)
 +	keepRecent(fingerprintResults)
 +	keepRecent(pelicanResults)
++	keepRecent(siwcResults)
 +	if version < historySchemaVersion {
-+		for id, records := range pelicanResults {
-+			for i := range records {
-+				records[i].Variant = "original"
++		if version < 2 {
++			for id, records := range pelicanResults {
++				for i := range records {
++					records[i].Variant = "original"
++				}
++				pelicanResults[id] = records
 +			}
-+			pelicanResults[id] = records
 +		}
 +		backup := filepath.Join(filepath.Dir(statePath), fmt.Sprintf("history.v%d.json", version))
 +		copy, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -2171,7 +2367,7 @@ index 0000000..1e8270a
 +}
 +
 +func currentState() persistedState {
-+	return persistedState{SchemaVersion: historySchemaVersion, Results: candyResults, Fingerprints: fingerprintResults, Pelicans: pelicanResults}
++	return persistedState{SchemaVersion: historySchemaVersion, Results: candyResults, Fingerprints: fingerprintResults, Pelicans: pelicanResults, SIWC: siwcResults}
 +}
 +
 +// Call with mu held so all histories are written as one snapshot.
@@ -2211,6 +2407,10 @@ index 0000000..1e8270a
 +		if i := slices.IndexFunc(pelicanResults[authID], func(r pelicanResult) bool { return r.ID == id }); i >= 0 {
 +			record = pelicanResults[authID][i]
 +		}
++	case "siwc":
++		if i := slices.IndexFunc(siwcResults[authID], func(r siwcResult) bool { return r.ID == id || r.RunID == id }); i >= 0 {
++			record = siwcResults[authID][i]
++		}
 +	}
 +	if record == nil {
 +		return jsonError(http.StatusNotFound, "记录不存在，可能已被清空")
@@ -2229,15 +2429,19 @@ index 0000000..1e8270a
 +		candyResults = map[string][]candyResult{}
 +	case "pelican":
 +		pelicanResults = map[string][]pelicanResult{}
++	case "siwc":
++		siwcResults = map[string][]siwcResult{}
 +	case "all":
 +		candyResults, fingerprintResults = map[string][]candyResult{}, map[string][]fingerprintResult{}
 +		pelicanResults = map[string][]pelicanResult{}
++		siwcResults = map[string][]siwcResult{}
 +	default:
 +		return jsonError(http.StatusBadRequest, "未知测试类型")
 +	}
 +	if err := saveStateLocked(); err != nil {
 +		candyResults, fingerprintResults = previous.Results, previous.Fingerprints
 +		pelicanResults = previous.Pelicans
++		siwcResults = previous.SIWC
 +		return jsonError(http.StatusInternalServerError, "清空测试记录失败："+err.Error())
 +	}
 +	return jsonResponse(http.StatusOK, map[string]bool{"cleared": true})
