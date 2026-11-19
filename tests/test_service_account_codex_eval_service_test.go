@@ -89,6 +89,75 @@ type codexErrorBody struct{}
 func (codexErrorBody) Read([]byte) (int, error) { return 0, errors.New("fixture body read") }
 func (codexErrorBody) Close() error             { return nil }
 
+func TestCodexEvalProviderStreamTermination(t *testing.T) {
+	anthropicStart := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"role\":\"assistant\",\"model\":\"m\"}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"The answer may be 21, but\"}}\n\n"
+	geminiStart := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"The answer may be 21, but\"}]}}]}\n\n"
+	for _, tc := range []struct {
+		name, provider, wire string
+		completed            bool
+	}{
+		{"anthropic EOF uses native finalization", "anthropic", anthropicStart, true},
+		{"anthropic done without stop", "anthropic", anthropicStart + "data: [DONE]\n\n", true},
+		{"anthropic complete", "anthropic", anthropicStart + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", true},
+		{"anthropic max tokens", "anthropic", anthropicStart + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", false},
+		{"gemini EOF", "gemini", geminiStart, true},
+		{"gemini done without finish", "gemini", geminiStart + "data: [DONE]\n\n", true},
+		{"gemini complete", "gemini", geminiStart + "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n", true},
+		{"gemini max tokens", "gemini", geminiStart + "data: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n", true},
+		{"gemini safety", "gemini", geminiStart + "data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := io.NopCloser(strings.NewReader(tc.wire))
+			var stream io.ReadCloser
+			if tc.provider == "anthropic" {
+				stream = &codexAnthropicStream{body: body, reader: bufio.NewReader(body), state: apicompat.NewAnthropicEventToResponsesState(), model: "m"}
+			} else {
+				stream = &codexGeminiStream{body: body, reader: bufio.NewReader(body), model: "m"}
+			}
+			defer stream.Close()
+			raw, err := io.ReadAll(stream)
+			require.NoError(t, err)
+			if tc.completed {
+				require.Contains(t, string(raw), "response.completed")
+			} else {
+				require.NotContains(t, string(raw), "response.completed", "partial answers must not pass evaluation")
+				require.True(t, strings.Contains(string(raw), "event: error") || strings.Contains(string(raw), "response.incomplete"), string(raw))
+			}
+		})
+	}
+}
+
+func TestCodexEvalAntigravityAPIKeyProtocols(t *testing.T) {
+	for _, model := range []string{"gemini-3-flash", "claude-sonnet-4-6"} {
+		t.Run(model, func(t *testing.T) {
+			account := &Account{ID: 41, Platform: PlatformAntigravity, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "fixture", "base_url": "https://fixture.invalid"}}
+			repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{accountsByID: map[int64]*Account{41: account}}}
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{newJSONResponse(200, "")}}
+			svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, cfg: &config.Config{}}
+			body := []byte(`{"model":"` + model + `","stream":true,"input":[{"role":"user","content":"Reply with OK."}]}`)
+			resp, err := svc.SendCodexEvaluation(context.Background(), 41, body, nil)
+			require.NoError(t, err)
+			resp.Body.Close()
+			require.Len(t, upstream.requests, 1)
+			req := upstream.requests[0]
+			sent, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			if strings.HasPrefix(model, "gemini-") {
+				require.Equal(t, "/v1beta/models/"+model+":streamGenerateContent", req.URL.Path)
+				require.Equal(t, "fixture", req.Header.Get("x-goog-api-key"))
+				require.True(t, gjson.GetBytes(sent, "contents").IsArray())
+			} else {
+				require.Equal(t, "/antigravity/v1/messages", req.URL.Path)
+				require.Equal(t, "fixture", req.Header.Get("x-api-key"))
+				require.Equal(t, model, gjson.GetBytes(sent, "model").String())
+				require.True(t, gjson.GetBytes(sent, "messages").IsArray())
+			}
+		})
+	}
+}
+
 func TestCodexEvalModelsBypassesAccountProjection(t *testing.T) {
 	gateway := newCodexModelsAPIKeyTestService(&codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 		return ordinaryModelsUpstreamResponse(`{"data":[{"id":"upstream-target"},{"id":"unconfigured-model"}]}`), nil
@@ -213,13 +282,14 @@ func TestCodexEvalMultiProviderSendersAndSIWC(t *testing.T) {
 				Credentials: map[string]any{"api_key": "AIza-fixture", "base_url": "https://generativelanguage.googleapis.com"},
 			}
 			repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{accountsByID: map[int64]*Account{41: account}}}
-			sse := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"thinking...\",\"thought\":true},{\"text\":\"21\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":2}}\n\n"
+			sse := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"thinking...\",\"thought\":true},{\"text\":\"21\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":2}}\n\n"
 			upstream := &queuedHTTPUpstream{responses: []*http.Response{newJSONResponse(200, sse)}}
 			svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, cfg: &config.Config{}}
 			models, err := svc.CodexEvalModels(context.Background(), 41)
 			require.NoError(t, err)
 			require.NotEmpty(t, models)
-			resp, err := svc.SendCodexEvaluation(context.Background(), 41, body, nil)
+			geminiBody := []byte(strings.ReplaceAll(string(body), "requested-model", "gemini-3-flash"))
+			resp, err := svc.SendCodexEvaluation(context.Background(), 41, geminiBody, nil)
 			require.NoError(t, err)
 			raw, err := io.ReadAll(resp.Body)
 			resp.Body.Close()

@@ -102,7 +102,7 @@ func TestCodexInspectionSettingsPersistence(t *testing.T) {
 	if err != nil || settings.Enabled || !settings.NotifyEnabled || settings.MaxTestsPerAccount != 3 || settings.MinWaitMinutes != 15 || settings.MaxWaitMinutes != 35 || settings.NormalPriority != 10 {
 		t.Fatalf("wrong defaults: %+v %v", settings, err)
 	}
-	if settings.ControlModels || !reflect.DeepEqual(settings.DegradedRemoveModels, []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"}) {
+	if settings.ControlModels || !reflect.DeepEqual(settings.DegradedRemoveModels, []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol"}) {
 		t.Fatalf("wrong model control defaults: %+v", settings)
 	}
 	settings.Enabled = true

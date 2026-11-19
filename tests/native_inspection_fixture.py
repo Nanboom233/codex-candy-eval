@@ -45,10 +45,10 @@ def resolve_built_binary(arch="amd64"):
     arch = "arm64" if arch in ("arm64", "aarch64") else "amd64"
     other = "amd64" if arch == "arm64" else "arm64"
     candidates = [
-        ROOT / f"dist/build/linux-{arch}/sub2api-plugins-v0.2.20-linux-{arch}",
-        ROOT.parent.parent / f"dist/build/linux-{arch}/sub2api-plugins-v0.2.20-linux-{arch}",
-        ROOT / f"dist/build/linux-{other}/sub2api-plugins-v0.2.20-linux-{other}",
-        ROOT.parent.parent / f"dist/build/linux-{other}/sub2api-plugins-v0.2.20-linux-{other}",
+        ROOT / f"dist/build/linux-{arch}/sub2api-plugins-v0.2.23-linux-{arch}",
+        ROOT.parent.parent / f"dist/build/linux-{arch}/sub2api-plugins-v0.2.23-linux-{arch}",
+        ROOT / f"dist/build/linux-{other}/sub2api-plugins-v0.2.23-linux-{other}",
+        ROOT.parent.parent / f"dist/build/linux-{other}/sub2api-plugins-v0.2.23-linux-{other}",
         ROOT / "dist/build/sub2api-plugins",
         ROOT.parent.parent / "dist/build/sub2api-plugins",
     ]

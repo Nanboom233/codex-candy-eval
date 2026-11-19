@@ -102,7 +102,7 @@ new file mode 100644
 index 0000000..cbbe400
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,550 @@
 +"use strict";
 +const BASE = "/api/v1/admin/codex-eval";
 +const DEFAULT_MODEL = "gpt-6.1-sol";
@@ -284,7 +284,7 @@ index 0000000..cbbe400
 +  return a;
 + });
 +}
-+function accountRestrictions(account) {
++function accountRestrictions(account, prefix = "") {
 +  const restrictions = [];
 +  if (account.status !== "active") {
 +    const label = ({ inactive: "账户未激活", error: "账户错误", quota_exceeded: "额度已用尽" })[account.status] || account.status;
@@ -295,6 +295,7 @@ index 0000000..cbbe400
 +    ["rate_limit_reset_at", "限流中", ""],
 +    ["overload_until", "过载中", ""],
 +  ]) {
++    if (prefix === "siwc-" && field === "rate_limit_reset_at") continue;
 +    if (Date.parse(account[field]) > Date.now()) restrictions.push({ label, message: [statusText(reason), `预计 ${fmtTime(account[field], false)} 恢复`].filter(Boolean).join("\n") });
 +  }
 +  return restrictions;
@@ -307,13 +308,13 @@ index 0000000..cbbe400
 +  for (const a of credentials) if (switching.has(a.id)) a.disabled = switching.get(a.id);
 +  fillCredentialTypes();
 +  const ids = new Set(credentials.map((a) => a.id));
-+  const usable = new Set(credentials.filter(usableCredential).map((a) => a.id));
 +  const answers = new Set(credentials.flatMap((a) => a.results.map((r) => answerKey(a.id, r))));
 +  const pages = new Set(credentials.flatMap((a) => a.pelicans.map((r) => pelicanKey(a.id, r.id))));
 +  for (const expanded of [candyExpanded, fpExpanded, plExpanded, siwcExpanded]) {
 +    for (const id of expanded) if (!ids.has(id)) expanded.delete(id);
 +  }
-+  for (const selection of [candySelected, fpSelected, plSelected, siwcSelected]) {
++  for (const [prefix, selection] of [["", candySelected], ["fp-", fpSelected], ["pl-", plSelected], ["siwc-", siwcSelected]]) {
++    const usable = new Set(credentials.filter((a) => usableCredential(a, prefix)).map((a) => a.id));
 +    for (const id of selection) if (!usable.has(id)) selection.delete(id);
 +  }
 +  for (const id of candyAnswersExpanded) if (!answers.has(id)) candyAnswersExpanded.delete(id);
@@ -358,7 +359,7 @@ index 0000000..cbbe400
 +    if (loadController === controller) {
 +      loadController = null;
 +      render();
-+      if (!sessionBlocked) pollTimer = setTimeout(load, credentials.some(credentialBusy) ? 2500 : 20000);
++      if (!sessionBlocked) pollTimer = setTimeout(load, (credentials.some(credentialBusy) || inspectionState.running) ? 2500 : 20000);
 +    }
 +  }
 +}
@@ -398,6 +399,7 @@ index 0000000..cbbe400
 +  credentials = [];
 +  evaluationState = { active: [], candy: {}, fingerprint: {}, pelican: {}, siwc: {} };
 +  inspectionState = { results: [] };
++  inspectionStateLoaded = false;
 +  inspectionSettingsLoaded = false;
 +  inspectionDirtyFields.clear();
 +  inspectionField("ntfy_password").value = "";
@@ -447,13 +449,13 @@ index 0000000..cbbe400
 +const BUSY_TESTS = [["running", "糖果测试"], ["fingerprint_running", "指纹测试"], ["pelican_running", "鹈鹕测试"], ["siwc_running", "SIWC 检测"]];
 +const busyTest = (a) => a.task && !(a.task_in_scope ?? a.task.target.group_id === selectedGroup) ? ({ candy: "糖果测试", fingerprint: "指纹测试", pelican: "鹈鹕测试", siwc: "SIWC 检测" }[a.task.type] + "（其他分组）") : BUSY_TESTS.find(([field]) => a[field])?.[1] || "";
 +const credentialBusy = (a) => !!busyTest(a);
-+const usableCredential = (a) => !a.disabled && !a.unavailable;
-+const availableCredential = (a) => usableCredential(a) && !credentialBusy(a);
++const usableCredential = (a, prefix = "") => !a.disabled && (!a.unavailable || (prefix === "siwc-" && !accountRestrictions(a, prefix).length));
++const availableCredential = (a, prefix = "") => usableCredential(a, prefix) && !credentialBusy(a);
 +// Why a test cannot start, shown on its disabled button; empty when it can.
 +const pageBlocker = (prefix) => !selectedGroup ? "没有可用分组" : catalogBlocker() || (!$(prefix + "model").value.trim() ? "请输入模型名称" : pending ? "正在处理上一个操作，请稍候" : "");
 +function runBlocker(prefix, a) {
 +  if (a.disabled) return "账户已停用，启用后才能测试";
-+  if (a.unavailable) return "账户暂不可用：" + unavailableReason(a);
++  if (!usableCredential(a, prefix)) return "账户暂不可用：" + unavailableReason(a);
 +  if (credentialBusy(a)) return `${busyTest(a)}进行中，结束后才能开始新测试`;
 +  return pageBlocker(prefix);
 +}
@@ -461,7 +463,7 @@ index 0000000..cbbe400
 +const selectedCredentials = (prefix, selection) => visibleCredentials(prefix).filter((a) => selection.has(a.id));
 +const batchCredentials = (prefix, selection) => {
 +  const selected = selectedCredentials(prefix, selection);
-+  return (selected.length ? selected : visibleCredentials(prefix)).filter(availableCredential);
++  return (selected.length ? selected : visibleCredentials(prefix)).filter((a) => availableCredential(a, prefix));
 +};
 +async function setCredentialEnabled(id, enabled) {
 +  const a = credentials.find((entry) => entry.id === id);
@@ -511,7 +513,7 @@ index 0000000..cbbe400
 +  if (!$('app').hidden) await load();
 +}
 +function renderSelection(prefix, selection, action) {
-+  const available = visibleCredentials(prefix).filter(availableCredential);
++  const available = visibleCredentials(prefix).filter((a) => availableCredential(a, prefix));
 +  const selected = selectedCredentials(prefix, selection);
 +  const targets = batchCredentials(prefix, selection);
 +  const button = $(prefix + "run-batch");
@@ -630,7 +632,7 @@ index 0000000..cbbe400
 +  $(prefix + "select-all").addEventListener("change", (e) => {
 +    for (const a of visibleCredentials(prefix)) {
 +      if (!e.target.checked) selection.delete(a.id);
-+      else if (availableCredential(a)) selection.add(a.id);
++      else if (availableCredential(a, prefix)) selection.add(a.id);
 +    }
 +    render();
 +  });
@@ -1417,11 +1419,12 @@ new file mode 100644
 index 0000000..ddd5edb
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
-@@ -0,0 +1,545 @@
+@@ -0,0 +1,554 @@
 +"use strict";
 +const INSPECTION_SETTINGS = "/api/v1/admin/settings/codex-eval-inspection";
 +const CANDY_SELECTION_FIELDS = { group_id: "group", account_type: "credential-type", account_plan: "credential-plan", enabled_only: "enabled-only" };
 +let inspectionSettingsLoaded = false;
++let inspectionStateLoaded = false;
 +let inspectionSettingsLoading = false;
 +let inspectionSettingsSaving = false;
 +let inspectionActionPending = false;
@@ -1851,7 +1854,14 @@ index 0000000..ddd5edb
 +  try {
 +    const state = await api(BASE + "/inspection/state", { signal });
 +    if (signal.aborted || sessionBlocked) return;
++    const wasRunning = Boolean(inspectionState.running);
++    const prevFinishedAt = inspectionState.finished_at;
++    const hadState = inspectionStateLoaded;
 +    renderInspectionState(state);
++    inspectionStateLoaded = true;
++    if ((wasRunning && !state.running) || (hadState && Boolean(state.finished_at) && state.finished_at !== prevFinishedAt)) {
++      if (!$("app").hidden && !sessionBlocked) await load();
++    }
 +  } catch (err) {
 +    if (signal.aborted) return;
 +    if (err instanceof AuthError) return showLogin(err.message);
@@ -1960,6 +1970,7 @@ index 0000000..ddd5edb
 +    }
 +    catch (err) {
 +      if (err instanceof AuthError) return showLogin(err.message);
++      inspectionMessage(err.message, true);
 +    } finally { inspectionActionPending = false; if (!sessionBlocked) await loadInspectionState(); }
 +  });
 +}

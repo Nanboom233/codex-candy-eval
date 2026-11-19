@@ -448,7 +448,7 @@ func TestCodexInspectionFingerprintModeAndWildcards(t *testing.T) {
 		lock.Lock()
 		calls++
 		lock.Unlock()
-		nums := make([]string, 320)
+		nums := make([]string, 200)
 		for idx := range nums {
 			nums[idx] = fmt.Sprintf("%d", (idx*37+13)%355+1)
 		}

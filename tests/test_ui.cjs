@@ -16,7 +16,7 @@ const settings = () => ({ enabled: false, group_id: 101, account_type: "all", ac
   min_wait_minutes: 15, max_wait_minutes: 35,
   include_patterns: [], exclude_patterns: [],
   adjust_priority: false, normal_priority: 10, degraded_priority: 99,
-  control_models: false, notify_enabled: true, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"],
+  control_models: false, notify_enabled: true, degraded_remove_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol"],
   ntfy_server: "https://ntfy.sh", ntfy_topic: "", ntfy_username: "", ntfy_password: "", bark_url: "",
   ntfy_password_configured: true, bark_url_configured: false });
 const idle = { phase: "idle", enabled: false, running: false, results: [] };
@@ -1093,6 +1093,118 @@ function groupFixture() {
     assert.equal(submissions.at(-1).type, "siwc");
     assert.equal(submissions.at(-1).model, "gpt-5.4");
     assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id).sort((a, b) => a - b), [33, 88]);
+  } finally { ctx.close(); }
+  {
+    const fixture = groupFixture();
+    const resetAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    fixture.accounts.find((a) => a.id === 33).rate_limit_reset_at = resetAt;
+    fixture.accounts.push(
+      fixtureAccount(88, "healthy OAuth", [101], { type: "oauth" }),
+      fixtureAccount(89, "disabled OAuth", [101], { type: "oauth", schedulable: false }),
+      fixtureAccount(90, "paused OAuth", [101], { type: "oauth", temp_unschedulable_until: resetAt }),
+      fixtureAccount(91, "error OAuth", [101], { type: "oauth", status: "error" }),
+      fixtureAccount(92, "overloaded OAuth", [101], { type: "oauth", overload_until: resetAt }),
+      fixtureAccount(93, "rate limited and paused", [101], { type: "oauth", rate_limit_reset_at: resetAt, temp_unschedulable_until: resetAt }),
+      fixtureAccount(94, "busy OAuth", [101], { type: "oauth" }),
+    );
+    fixture.data.active.push({ id: "busy-siwc", type: "siwc", target: { account_id: 94, group_id: 101 }, progress: { done: 0, total: 1 } });
+    ctx = harness({ auth_token: "fixture" }, { initializePage: true,
+      api: (url) => url.includes("/settings/") ? settings() : fixture.api(url) });
+    try {
+      await tick();
+      await tick();
+      choose(ctx, "siwc-model", "provider/raw");
+      ctx.$("tab-siwc").click();
+      const row = () => ctx.$("siwc-rows").querySelector('[data-row="33"]');
+      const rowSelect = () => row().querySelector('[data-siwc-select="33"]');
+      assert.ok(row().textContent.includes("限流中"), "SIWC retains the native rate-limit badge");
+      assert.equal(row().querySelector('[data-siwc-run="33"]').disabled, false,
+        "A native rate limit must not disable the SIWC row action");
+      assert.equal(rowSelect().disabled, false);
+      for (const id of [89, 90, 91, 92, 93]) {
+        assert.equal(ctx.$("siwc-rows").querySelector(`[data-siwc-run="${id}"]`).disabled, true,
+          "SIWC retains unrelated account restrictions: " + id);
+      }
+      for (const [prefix, type] of [["", "candy"], ["fp-", "fp"], ["pl-", "pl"]]) {
+        assert.equal(ctx.$(prefix + "rows").querySelector(`[data-${type}-run="33"]`).disabled, true,
+          "Other evaluations retain the rate-limit restriction: " + prefix);
+      }
+      const submissions = [];
+      ctx.h.setUpdate((url, options) => { assert.equal(url, "/start"); submissions.push(options.body); });
+      row().querySelector('[data-siwc-run="33"]').click();
+      assert.equal(submissions.at(-1).type, "siwc");
+      assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id), [33]);
+      rowSelect().checked = true;
+      rowSelect().dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+      await ctx.h.load({ refresh: true });
+      assert.equal(rowSelect().checked, true, "Account refresh retains selected rate-limited SIWC targets");
+      ctx.$("siwc-run-batch").click();
+      assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id), [33]);
+      rowSelect().checked = false;
+      rowSelect().dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+      assert.equal(ctx.$("siwc-select-all").disabled, false);
+      ctx.$("siwc-select-all").checked = true;
+      ctx.$("siwc-select-all").dispatchEvent(new ctx.w.Event("change", { bubbles: true }));
+      assert.equal(rowSelect().checked, true, "SIWC select-all includes the rate-limited account");
+      ctx.$("siwc-run-batch").click();
+      assert.deepEqual([...submissions.at(-1).targets].map((target) => target.account_id).sort((a, b) => a - b), [33, 88]);
+      assert.equal(fixture.accounts.find((a) => a.id === 33).rate_limit_reset_at, resetAt);
+    } finally { ctx.close(); }
+  }
+  ctx = harness();
+  try {
+    ctx.$("app").hidden = false;
+    const fixture = groupFixture();
+    const targetAccount = fixture.accounts.find((a) => a.id === 33);
+    targetAccount.priority = 99;
+    targetAccount.extra = { codex_eval_inspection_verdict: "degraded" };
+    let currentInspectionState = { ...idle };
+    let failStart = false;
+    ctx.h.setAPI(async (url, options = {}) => {
+      if (url.includes("/settings/")) return { ...settings(), adjust_priority: true };
+      if (url.endsWith("/inspection/state")) return currentInspectionState;
+      if (url.endsWith("/inspection/start") && options.method === "POST") {
+        if (failStart) throw new Error("inspection start conflict");
+        currentInspectionState = { ...idle, running: true, phase: "testing", started_at: "2026-10-17T12:00:00Z", done: 0, total: 1 };
+        return currentInspectionState;
+      }
+      return fixture.api(url);
+    });
+    await ctx.h.loadInspectionSettings();
+    await ctx.h.load({ refresh: true });
+    for (const prefix of ["", "fp-", "pl-"]) {
+      const tags = [...ctx.$(prefix + "rows").querySelectorAll('[data-row="33"] .tag')].map((tag) => tag.textContent);
+      assert.ok(tags.includes("P99"), "Degraded account must initially show P99 on tab " + prefix);
+      assert.ok(tags.includes("降级"), "Degraded account must initially show 降级 badge on tab " + prefix);
+    }
+    failStart = true;
+    ctx.$("inspection-start").click();
+    await tick();
+    await tick();
+    assert.equal(ctx.$("inspection-save-status").textContent, "inspection start conflict");
+    assert.equal(ctx.$("inspection-save-status").classList.contains("error"), true);
+    failStart = false;
+    ctx.$("inspection-start").click();
+    await tick();
+    await tick();
+    assert.equal(ctx.$("inspection-phase").textContent, "正在测试");
+    targetAccount.priority = 10;
+    targetAccount.extra = { codex_eval_inspection_verdict: "normal" };
+    fixture.data.candy["33"] = [{ run_id: "recovered-run:1", time: "2026-10-17T12:04:00Z", model: "saved/literal",
+      effort: "low", ok: true, answer: "21", duration_ms: 20, input_tokens: 10, output_tokens: 4 }];
+    currentInspectionState = { ...idle, running: false, phase: "completed", started_at: "2026-10-17T12:00:00Z",
+      finished_at: "2026-10-17T12:04:00Z", done: 1, total: 1,
+      results: [{ account_id: 33, account_name: "shared", priority: 99, target_priority: 10, tests: 3, outcome: "updated" }] };
+    await ctx.h.loadInspectionState();
+    for (const prefix of ["", "fp-", "pl-"]) {
+      const tags = [...ctx.$(prefix + "rows").querySelectorAll('[data-row="33"] .tag')].map((tag) => tag.textContent);
+      assert.ok(tags.includes("P10"), "Completed inspection must refresh account priority to P10 on tab " + prefix);
+      assert.equal(tags.includes("降级"), false, "Completed inspection must clear 降级 badge on tab " + prefix);
+    }
+    const callsAfterRecovery = fixture.calls.filter((url) => url.includes("/accounts?") || url.endsWith("/models")).length;
+    await ctx.h.loadInspectionState();
+    assert.equal(fixture.calls.filter((url) => url.includes("/accounts?") || url.endsWith("/models")).length, callsAfterRecovery,
+      "Subsequent idle loadInspectionState calls must not trigger extra /accounts or /models requests");
   } finally { ctx.close(); }
   console.log("Settings and account checks passed: autosave, native shared selection, manual actions, inventory failure protections, Candy history, multi-provider credentials, SIWC, and independent inspection controls.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

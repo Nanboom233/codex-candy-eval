@@ -1,6 +1,6 @@
 diff --git a/backend/internal/codexeval/inspection.go b/backend/internal/codexeval/inspection.go
 new file mode 100644
-index 0000000..0ee668f
+index 0000000..82fcd42
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection.go
 @@ -0,0 +1,829 @@
@@ -891,7 +891,7 @@ index 0000000..8429d59
 +}
 diff --git a/backend/internal/codexeval/inspection_settings.go b/backend/internal/codexeval/inspection_settings.go
 new file mode 100644
-index 0000000..d50e766
+index 0000000..aa06f6a
 --- /dev/null
 +++ b/backend/internal/codexeval/inspection_settings.go
 @@ -0,0 +1,180 @@
@@ -938,7 +938,7 @@ index 0000000..d50e766
 +	return InspectionSettings{Model: "gpt-6.1-sol", Effort: "low", TestType: "candy", MaxTestsPerAccount: 3, MinWaitMinutes: 15, MaxWaitMinutes: 35,
 +		AccountType: "all", AccountPlan: "all", NormalPriority: 10, DegradedPriority: 99, NotifyEnabled: true, NtfyServer: "https://ntfy.sh",
 +		IncludePatterns: []string{}, ExcludePatterns: []string{},
-+		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra"}}
++		DegradedRemoveModels: []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol"}}
 +}
 +
 +func normalizePatternSlice(patterns []string) []string {
@@ -1077,7 +1077,7 @@ index 0000000..d50e766
 +}
 diff --git a/backend/internal/handler/admin/codex_inspection_handler.go b/backend/internal/handler/admin/codex_inspection_handler.go
 new file mode 100644
-index 0000000..930b225
+index 0000000..5064a33
 --- /dev/null
 +++ b/backend/internal/handler/admin/codex_inspection_handler.go
 @@ -0,0 +1,181 @@
@@ -1264,14 +1264,15 @@ index 0000000..930b225
 +}
 diff --git a/backend/internal/service/codex_inspection_models.go b/backend/internal/service/codex_inspection_models.go
 new file mode 100644
-index 0000000..124b2be
+index 0000000..52d4398
 --- /dev/null
 +++ b/backend/internal/service/codex_inspection_models.go
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,112 @@
 +package service
 +
 +import (
 +	"context"
++	"errors"
 +	"maps"
 +
 +	"github.com/Wei-Shaw/sub2api/internal/codexeval"
@@ -1280,10 +1281,19 @@ index 0000000..124b2be
 +const codexInspectionRemovedModels = "codex_eval_inspection_removed_models"
 +const codexInspectionVerdict = "codex_eval_inspection_verdict"
 +
++type codexInspectionStateWriter interface {
++	UpdateCodexInspectionState(context.Context, *Account, map[string]any, map[string]any) (bool, error)
++}
++
++var errCodexInspectionAccountChanged = errors.New("account changed before inspection state was saved")
++
 +func (s *AccountTestService) PersistCodexInspectionVerdict(ctx context.Context, id int64, verdict codexeval.InspectionVerdict, settings codexeval.InspectionSettings) error {
 +	account, err := s.accountRepo.GetByID(ctx, id)
 +	if err != nil {
 +		return err
++	}
++	if enabled, ok := account.Extra["codex_eval_inspection_enabled"].(bool); ok && !enabled {
++		return errCodexInspectionAccountChanged
 +	}
 +	mapping, _ := account.Credentials["model_mapping"].(map[string]any)
 +	mapping = maps.Clone(mapping)
@@ -1350,17 +1360,25 @@ index 0000000..124b2be
 +		if current == verdict {
 +			return nil
 +		}
-+		return s.accountRepo.UpdateExtra(ctx, id, map[string]any{codexInspectionVerdict: string(verdict)})
 +	}
-+	next := *account
-+	next.Credentials = make(map[string]any, len(account.Credentials)+1)
-+	maps.Copy(next.Credentials, account.Credentials)
-+	next.Credentials["model_mapping"] = mapping
-+	next.Extra = make(map[string]any, len(account.Extra)+2)
-+	maps.Copy(next.Extra, account.Extra)
-+	next.Extra[codexInspectionRemovedModels] = removed
-+	next.Extra[codexInspectionVerdict] = string(verdict)
-+	return s.accountRepo.Update(ctx, &next)
++	extra := map[string]any{codexInspectionVerdict: string(verdict)}
++	if changed {
++		extra[codexInspectionRemovedModels] = removed
++	} else {
++		mapping = nil
++	}
++	writer, ok := s.accountRepo.(codexInspectionStateWriter)
++	if !ok {
++		return errors.New("atomic inspection state writer is unavailable")
++	}
++	applied, err := writer.UpdateCodexInspectionState(ctx, account, mapping, extra)
++	if err != nil {
++		return err
++	}
++	if !applied {
++		return errCodexInspectionAccountChanged
++	}
++	return nil
 +}
 diff --git a/backend/internal/service/codex_inspection_settings.go b/backend/internal/service/codex_inspection_settings.go
 new file mode 100644
@@ -1446,4 +1464,91 @@ index 0000000..bf47682
 +	}
 +	codexeval.UpdateInspectionSettings(next)
 +	return next, nil
++}
+diff --git a/backend/internal/repository/account_codex_inspection.go b/backend/internal/repository/account_codex_inspection.go
+new file mode 100644
+index 0000000..789531d
+--- /dev/null
++++ b/backend/internal/repository/account_codex_inspection.go
+@@ -0,0 +1,81 @@
++package repository
++
++import (
++	"context"
++	"encoding/json"
++
++	dbent "github.com/Wei-Shaw/sub2api/ent"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++)
++
++func (r *accountRepository) UpdateCodexInspectionState(ctx context.Context, expected *service.Account, mapping, extra map[string]any) (bool, error) {
++	if expected == nil {
++		return false, service.ErrAccountNilInput
++	}
++	if scoped := r.accountTransactionScope(ctx); scoped != r {
++		return scoped.UpdateCodexInspectionState(ctx, expected, mapping, extra)
++	}
++	if dbent.TxFromContext(ctx) != nil {
++		return r.updateCodexInspectionStateInTx(ctx, clientFromContext(ctx, r.client), expected, mapping, extra)
++	}
++	tx, err := r.client.Tx(ctx)
++	if err != nil {
++		return false, err
++	}
++	defer func() { _ = tx.Rollback() }()
++	applied, err := r.updateCodexInspectionStateInTx(dbent.NewTxContext(ctx, tx), tx.Client(), expected, mapping, extra)
++	if err != nil || !applied {
++		return false, err
++	}
++	if err = tx.Commit(); err != nil {
++		return false, err
++	}
++	r.syncSchedulerAccountSnapshotDetached(ctx, expected.ID)
++	return true, nil
++}
++
++func (r *accountRepository) updateCodexInspectionStateInTx(ctx context.Context, client *dbent.Client, expected *service.Account, mapping, extra map[string]any) (bool, error) {
++	credentials, err := json.Marshal(normalizeJSONMap(expected.Credentials))
++	if err != nil {
++		return false, err
++	}
++	updates := map[string]any{}
++	for _, key := range []string{"codex_eval_inspection_removed_models", "codex_eval_inspection_verdict"} {
++		if value, ok := extra[key]; ok {
++			updates[key] = value
++		}
++	}
++	payload, err := json.Marshal(updates)
++	if err != nil {
++		return false, err
++	}
++	var proxyID any
++	if expected.ProxyID != nil {
++		proxyID = *expected.ProxyID
++	}
++	args := []any{string(payload), expected.ID, expected.Platform, expected.Type, string(credentials), proxyID}
++	credentialsSet := ""
++	if mapping != nil {
++		mappingJSON, err := json.Marshal(mapping)
++		if err != nil {
++			return false, err
++		}
++		credentialsSet = ", credentials = jsonb_set(COALESCE(credentials, '{}'::jsonb), '{model_mapping}', $7::jsonb)"
++		args = append(args, string(mappingJSON))
++	}
++	result, err := client.ExecContext(ctx, `UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb`+credentialsSet+`, updated_at = NOW()
++		WHERE id = $2 AND deleted_at IS NULL AND platform = $3 AND type = $4
++		AND COALESCE(credentials, '{}'::jsonb) = $5::jsonb AND proxy_id IS NOT DISTINCT FROM $6
++		AND COALESCE(extra -> 'codex_eval_inspection_enabled', 'true'::jsonb) <> 'false'::jsonb`, args...)
++	if err != nil {
++		return false, err
++	}
++	affected, err := result.RowsAffected()
++	if err != nil || affected == 0 {
++		return false, err
++	}
++	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &expected.ID, nil, nil); err != nil {
++		return false, err
++	}
++	return true, nil
 +}

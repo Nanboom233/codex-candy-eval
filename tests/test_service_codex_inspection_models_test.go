@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"reflect"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/codexeval"
@@ -15,14 +16,49 @@ type codexInspectionModelRepo struct {
 	*upstreamBillingProbeAccountRepo
 	updates, merges int
 	fail            bool
+	fullWrites      int
+	beforeWrite     func(*Account)
 }
 
 func (r *codexInspectionModelRepo) Update(ctx context.Context, account *Account) error {
+	r.fullWrites++
 	r.updates++
 	if r.fail {
 		return errors.New("fixture account update failure")
 	}
 	return r.upstreamBillingProbeAccountRepo.Update(ctx, account)
+}
+
+func (r *codexInspectionModelRepo) UpdateCodexInspectionState(_ context.Context, expected *Account, mapping, extra map[string]any) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current := r.accounts[expected.ID]
+	if r.beforeWrite != nil {
+		r.beforeWrite(current)
+	}
+	if current.Platform != expected.Platform || current.Type != expected.Type ||
+		!reflect.DeepEqual(current.Credentials, expected.Credentials) || !reflect.DeepEqual(current.ProxyID, expected.ProxyID) ||
+		current.Extra["codex_eval_inspection_enabled"] == false {
+		return false, nil
+	}
+	if r.fail {
+		return false, errors.New("fixture account update failure")
+	}
+	if mapping != nil {
+		r.updates++
+		next := *current
+		next.Credentials = maps.Clone(current.Credentials)
+		next.Credentials["model_mapping"] = maps.Clone(mapping)
+		next.Extra = maps.Clone(current.Extra)
+		current = &next
+		r.accounts[expected.ID] = current
+	} else {
+		r.merges++
+	}
+	for key, value := range extra {
+		current.Extra[key] = value
+	}
+	return true, nil
 }
 
 func (r *codexInspectionModelRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
@@ -159,4 +195,47 @@ func TestCodexInspectionModelWriteFailure(t *testing.T) {
 	require.Equal(t, "normal", a.Extra[codexInspectionVerdict])
 	require.NotContains(t, a.Extra, codexInspectionRemovedModels)
 	require.Zero(t, repo.merges)
+}
+
+func TestCodexInspectionConcurrentAccountChanges(t *testing.T) {
+	for _, change := range []string{"credentials", "status", "priority", "participation", "quota"} {
+		t.Run(change, func(t *testing.T) {
+			svc, repo := newCodexInspectionModelFixture(map[string]any{"gpt-6.1-sol": "gpt-6.1-sol"})
+			repo.beforeWrite = func(current *Account) {
+				switch change {
+				case "credentials":
+					current.Credentials["api_key"] = "new-key"
+				case "status":
+					current.Status, current.Schedulable = StatusDisabled, false
+				case "priority":
+					current.Priority = 7
+				case "participation":
+					current.Extra["codex_eval_inspection_enabled"] = false
+				case "quota":
+					current.Extra["apikey_quota_exhausted"] = true
+				}
+			}
+			settings := codexeval.DefaultInspectionSettings()
+			settings.ControlModels = true
+			err := svc.PersistCodexInspectionVerdict(context.Background(), 20, codexeval.InspectionVerdictDegraded, settings)
+			require.Zero(t, repo.fullWrites, "inspection must never save a full account")
+			if change == "quota" || change == "status" || change == "priority" {
+				require.NoError(t, err)
+				switch change {
+				case "quota":
+					require.True(t, repo.accounts[20].Extra["apikey_quota_exhausted"].(bool))
+				case "status":
+					require.Equal(t, StatusDisabled, repo.accounts[20].Status)
+					require.False(t, repo.accounts[20].Schedulable)
+				case "priority":
+					require.Equal(t, 7, repo.accounts[20].Priority)
+				}
+				require.Equal(t, "degraded", repo.accounts[20].Extra[codexInspectionVerdict])
+			} else {
+				require.ErrorIs(t, err, errCodexInspectionAccountChanged)
+				require.Equal(t, "normal", repo.accounts[20].Extra[codexInspectionVerdict])
+				require.Equal(t, "gpt-6.1-sol", repo.accounts[20].Credentials["model_mapping"].(map[string]any)["gpt-6.1-sol"])
+			}
+		})
+	}
 }

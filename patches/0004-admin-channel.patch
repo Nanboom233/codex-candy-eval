@@ -150,7 +150,7 @@ index 0000000..deeea7b
 +	}
 +}
 diff --git a/backend/internal/repository/http_upstream.go b/backend/internal/repository/http_upstream.go
-index ff19b03..6ff02dd 100644
+index e830b43..acc97f8 100644
 --- a/backend/internal/repository/http_upstream.go
 +++ b/backend/internal/repository/http_upstream.go
 @@ -315,7 +315,7 @@ func doUpstreamRequest(client *http.Client, req *http.Request, drainTimeouts ...
@@ -164,10 +164,10 @@ index ff19b03..6ff02dd 100644
  	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
 new file mode 100644
-index 0000000..85ce9ae
+index 0000000..2d7a264
 --- /dev/null
 +++ b/backend/internal/service/account_codex_eval_service.go
-@@ -0,0 +1,1024 @@
+@@ -0,0 +1,1006 @@
 +package service
 +
 +import (
@@ -421,6 +421,9 @@ index 0000000..85ce9ae
 +	}
 +
 +	if credentialAccount.Platform == PlatformAnthropic || (credentialAccount.RoutesProtocolByInbound() && credentialAccount.GetAPIProtocol() == APIProtocolAnthropic) || (credentialAccount.routesByModel() && credentialAccount.resolveModelRoutedProtocol(model) == APIProtocolAnthropic) {
++		return s.sendCodexAnthropicEvaluation(ctx, account, credentialAccount, model, body)
++	}
++	if credentialAccount.Platform == PlatformAntigravity && credentialAccount.Type == AccountTypeAPIKey && !strings.HasPrefix(model, "gemini-") {
 +		return s.sendCodexAnthropicEvaluation(ctx, account, credentialAccount, model, body)
 +	}
 +	switch credentialAccount.Platform {
@@ -784,14 +787,12 @@ index 0000000..85ce9ae
 +	geminiPayload = applyGeminiCompatThinkingConfig(geminiPayload, claudeBody, model, true)
 +
 +	var req *http.Request
-+	if credentialAccount.IsOAuth() {
++	if credentialAccount.IsOAuth() && credentialAccount.Platform == PlatformGemini {
++		req, err = s.buildGeminiOAuthRequest(ctx, credentialAccount, model, geminiPayload)
++	} else if credentialAccount.IsOAuth() {
 +		accessToken := strings.TrimSpace(credentialAccount.GetCredential("access_token"))
 +		if accessToken == "" {
-+			if credentialAccount.Platform == PlatformGemini && s.geminiTokenProvider != nil {
-+				if token, tokenErr := s.geminiTokenProvider.GetAccessToken(ctx, credentialAccount); tokenErr == nil {
-+					accessToken = strings.TrimSpace(token)
-+				}
-+			} else if credentialAccount.Platform == PlatformAntigravity && s.antigravityGatewayService != nil && s.antigravityGatewayService.GetTokenProvider() != nil {
++			if s.antigravityGatewayService != nil && s.antigravityGatewayService.GetTokenProvider() != nil {
 +				if token, tokenErr := s.antigravityGatewayService.GetTokenProvider().GetAccessToken(ctx, credentialAccount); tokenErr == nil {
 +					accessToken = strings.TrimSpace(token)
 +				}
@@ -828,29 +829,10 @@ index 0000000..85ce9ae
 +			req.Header.Set("Authorization", "Bearer "+accessToken)
 +		}
 +	} else {
-+		apiKey := strings.TrimSpace(credentialAccount.GetCredential("api_key"))
-+		if apiKey == "" {
-+			return nil, fmt.Errorf("No API key available")
-+		}
-+		baseURL := strings.TrimSpace(credentialAccount.GetCredential("base_url"))
-+		if baseURL == "" {
-+			baseURL = geminicli.AIStudioBaseURL
-+		}
-+		normalizedBaseURL, validationErr := s.validateUpstreamBaseURL(baseURL)
-+		if validationErr != nil {
-+			return nil, fmt.Errorf("Invalid base URL: %w", validationErr)
-+		}
-+		fullURL, urlErr := buildGeminiAIStudioModelActionURL(normalizedBaseURL, model, "streamGenerateContent", true)
-+		if urlErr != nil {
-+			return nil, urlErr
-+		}
-+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(geminiPayload))
-+		if err != nil {
-+			return nil, err
-+		}
-+		req.Header.Set("Content-Type", "application/json")
-+		req.Header.Set("Accept", "text/event-stream")
-+		req.Header.Set("x-goog-api-key", apiKey)
++		req, err = s.buildGeminiAPIKeyRequest(ctx, credentialAccount, model, geminiPayload)
++	}
++	if err != nil {
++		return nil, err
 +	}
 +	credentialAccount.ApplyHeaderOverrides(req.Header)
 +
