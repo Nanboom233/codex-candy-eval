@@ -330,7 +330,7 @@ func TestCodexEvalMultiProviderSendersAndSIWC(t *testing.T) {
 
 	t.Run("siwc-probe-oauth-and-siwc-token", func(t *testing.T) {
 		siwcBody := []byte(`{"model":"gpt-5","store":false,"stream":true,"input":[{"role":"user","content":"Reply with OK."}]}`)
-		siwcHeaders := http.Header{"User-Agent": []string{"cpa-siwc-check/0.4.6"}}
+		siwcHeaders := http.Header{"User-Agent": []string{"cpa-siwc-check/0.4.7"}}
 
 		oauthAccount := &Account{
 			ID: 51, Name: "codex-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -367,7 +367,7 @@ func TestCodexEvalMultiProviderSendersAndSIWC(t *testing.T) {
 		require.Len(t, upstream2.requests, 1)
 		require.Equal(t, "https://api.openai.com/v1/responses", upstream2.requests[0].URL.String())
 		require.Equal(t, "Bearer siwc-token-xyz", upstream2.requests[0].Header.Get("Authorization"))
-		require.Equal(t, "cpa-siwc-check/0.4.6", upstream2.requests[0].Header.Get("User-Agent"))
+		require.Equal(t, "cpa-siwc-check/0.4.7", upstream2.requests[0].Header.Get("User-Agent"))
 		boundPayload, err := io.ReadAll(upstream2.requests[0].Body)
 		require.NoError(t, err)
 		require.Equal(t, "gpt-5", gjson.GetBytes(boundPayload, "model").String())

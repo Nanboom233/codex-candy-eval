@@ -1,6 +1,6 @@
 diff --git a/backend/internal/codexeval/web.go b/backend/internal/codexeval/web.go
 new file mode 100644
-index 0000000..d4a1368
+index 0000000000000000000000000000000000000000..7fde9ec4b49bada9fbe463a4638b19898f9c1117
 --- /dev/null
 +++ b/backend/internal/codexeval/web.go
 @@ -0,0 +1,93 @@
@@ -13,7 +13,7 @@ index 0000000..d4a1368
 +	"strings"
 +)
 +
-+const pluginVersion = "0.4.6"
++const pluginVersion = "0.4.7"
 +
 +//go:embed web/ui.html
 +var uiTemplate string
@@ -70,7 +70,7 @@ index 0000000..d4a1368
 +var inspectionScript string
 +
 +var uiHTML = func() []byte {
-+	config, _ := json.Marshal(map[string]any{"requests": fingerprintTarget, "aliases": fingerprintAliases})
++	config, _ := json.Marshal(map[string]any{"requests": fingerprintChallengeCount, "aliases": fingerprintAliases})
 +	fpScript := strings.Replace(fingerprintScript, `/*FINGERPRINT_CONFIG*/{}`, string(config), 1)
 +	variants, _ := json.Marshal(pelicanVariants)
 +	plScript := strings.Replace(pelicanScript, `/*PELICAN_VARIANTS*/[]`, string(variants), 1)
@@ -78,7 +78,7 @@ index 0000000..d4a1368
 +		"/*APP_STYLES*/", temmlStyles+"\n"+uiThemes+"\n"+uiStyles,
 +		"<!--PLUGIN_VERSION-->", pluginVersion,
 +		"<!--CANDY_PROMPT-->", html.EscapeString(candyPrompt),
-+		"<!--FINGERPRINT_LICENSE-->", "<!-- lm-detector\n"+detectorLicense+"-->",
++		"<!--FINGERPRINT_LICENSE-->", "<!-- lm-detector\n"+fingerprintLicense+"-->",
 +		"/*MARKDOWN_SCRIPT*/", markdownScript,
 +		"/*CJK_FRIENDLY_SCRIPT*/", cjkFriendlyScript,
 +		"/*TEXMATH_SCRIPT*/", texmathScript,
@@ -99,7 +99,7 @@ index 0000000..d4a1368
 +func Page() []byte { return uiHTML }
 diff --git a/backend/internal/codexeval/web/app.js b/backend/internal/codexeval/web/app.js
 new file mode 100644
-index 0000000..cbbe400
+index 0000000000000000000000000000000000000000..f20d7eb429e6e76875cd9c303085b983bc6658eb
 --- /dev/null
 +++ b/backend/internal/codexeval/web/app.js
 @@ -0,0 +1,550 @@
@@ -655,7 +655,7 @@ index 0000000..cbbe400
 +localStorage.getItem("auth_token") ? start() : showLogin("请登录 Sub2API 管理面板，登录后刷新本页");
 diff --git a/backend/internal/codexeval/web/candy.js b/backend/internal/codexeval/web/candy.js
 new file mode 100644
-index 0000000..e3da0b1
+index 0000000000000000000000000000000000000000..e3da0b1b2fbdbf727eb90293d9294abbfb2a7173
 --- /dev/null
 +++ b/backend/internal/codexeval/web/candy.js
 @@ -0,0 +1,115 @@
@@ -776,7 +776,7 @@ index 0000000..e3da0b1
 +}
 diff --git a/backend/internal/codexeval/web/catalog.js b/backend/internal/codexeval/web/catalog.js
 new file mode 100644
-index 0000000..d94ab90
+index 0000000000000000000000000000000000000000..c0200ee29617ae1bd5a07b0e4511bc454d278ca8
 --- /dev/null
 +++ b/backend/internal/codexeval/web/catalog.js
 @@ -0,0 +1,130 @@
@@ -912,7 +912,7 @@ index 0000000..d94ab90
 +}
 diff --git a/backend/internal/codexeval/web/components.js b/backend/internal/codexeval/web/components.js
 new file mode 100644
-index 0000000..34b9d0d
+index 0000000000000000000000000000000000000000..afefdc03ab6f27f08526ad0108403c8f3642a242
 --- /dev/null
 +++ b/backend/internal/codexeval/web/components.js
 @@ -0,0 +1,347 @@
@@ -1265,7 +1265,7 @@ index 0000000..34b9d0d
 +}
 diff --git a/backend/internal/codexeval/web/credentials.js b/backend/internal/codexeval/web/credentials.js
 new file mode 100644
-index 0000000..b864792
+index 0000000000000000000000000000000000000000..c277530ea4b862e5c2ccf453e828ef229c3c9d9c
 --- /dev/null
 +++ b/backend/internal/codexeval/web/credentials.js
 @@ -0,0 +1,76 @@
@@ -1347,10 +1347,10 @@ index 0000000..b864792
 +}
 diff --git a/backend/internal/codexeval/web/fingerprint.js b/backend/internal/codexeval/web/fingerprint.js
 new file mode 100644
-index 0000000..bf1d843
+index 0000000000000000000000000000000000000000..f793bb2925af8bc5fa3fa09011d578855e9387da
 --- /dev/null
 +++ b/backend/internal/codexeval/web/fingerprint.js
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,90 @@
 +"use strict";
 +
 +const FP_CONFIG = /*FINGERPRINT_CONFIG*/{};
@@ -1364,34 +1364,61 @@ index 0000000..bf1d843
 +  const id = String(model || "").trim().toLowerCase().split("/").pop();
 +  return Object.hasOwn(FP_CONFIG.aliases, id) ? FP_CONFIG.aliases[id] : id;
 +}
++function fingerprintComparison(r) {
++  const a = r?.attribution;
++  if (!a || !["completed", "partial"].includes(r.status)) return { tone: "neutral", symbol: "chart", label: "" };
++  if (a.decision === "not_model") return { tone: "warn", symbol: "circle-alert", label: "不像语言模型回答" };
++  return fingerprintModelID(r.model) === fingerprintModelID(a.prediction)
++    ? { tone: "ok", symbol: "circle-check", label: "与测试模型一致" }
++    : { tone: "warn", symbol: "shuffle", label: "与测试模型不一致" };
++}
++
++const FINGERPRINT_STATES = { failed: ["bad", "circle-x", "测试失败", "查看详情了解原因"], cancelled: ["neutral", "circle-pause", "测试已停止", ""] };
++
 +function fpOutcome(r) {
-+  const attr = r.attribution;
-+  const states = { failed: ["bad", "circle-x", "测试失败"], cancelled: ["neutral", "circle-pause", "测试已停止"] };
-+  if (states[r.status] || !attr) {
-+    const [tone, symbol, titleHTML] = states[r.status] || ["idle", "fingerprint", "等待测试"];
-+    return resultOutcome({ tone, symbol, titleHTML });
++  const a = r?.attribution, state = FINGERPRINT_STATES[r?.status];
++  if (state || !a) {
++    const [tone, symbol, title, detail] = state || ["idle", "fingerprint", "等待测试", ""];
++    return resultOutcome({ tone, symbol, titleHTML: title, detailHTML: detail });
 +  }
-+  if (attr.decision === "not_model") return resultOutcome({ tone: "warn", symbol: "circle-alert", titleHTML: "不像语言模型回答" });
-+  const matches = fingerprintModelID(r.model) === fingerprintModelID(attr.prediction);
-+  return resultOutcome({ tone: matches ? "ok" : "warn", symbol: matches ? "circle-check" : "shuffle",
-+    titleHTML: `<span class="fp-prediction"><span>${esc(attr.prediction_name)}</span><span class="mono">${fpPercent(attr.probability)}</span></span>`,
-+    detailHTML: `${matches ? "与测试模型一致" : "与测试模型不一致"}${r.status === "partial" ? " · 部分结果" : ""}` });
++  const { tone, symbol, label } = fingerprintComparison(r);
++  if (a.decision === "not_model") return resultOutcome({ tone, symbol, titleHTML: label, detailHTML: "数字序列的变化方式与语言模型不同，未生成排名" });
++  const probability = a.probability != null ? `<span class="fingerprint-probability mono">${fpPercent(a.probability)}</span>` : "";
++  return resultOutcome({
++    tone, symbol,
++    titleHTML: `<span class="fingerprint-prediction"><span>${esc(a.prediction_name)}</span>${probability}</span>`,
++    detailHTML: `${label}${r.status === "partial" ? " · 部分结果" : ""}`,
++  });
 +}
++
++function fingerprintResultHTML(r) {
++  const a = r.attribution, comparison = fingerprintComparison(r), scored = a.probability != null;
++  if (a.decision === "not_model") return `${fpOutcome(r)}<p class="detail-note">评分会检查相邻数字的变化，以及最多相隔三位的数字有多接近。程序生成、排序或打乱顺序的数字可能触发这项判定。</p>`;
++  return `<dl class="fingerprint-summary ${comparison.tone}"><div><dt>${comparison.label ? `${icon(comparison.symbol)}${comparison.label}` : "最接近的模型"}</dt><dd class="mono">${esc(a.prediction_name)}${scored ? `<small>${fpPercent(a.probability)}</small>` : ""}</dd></div><div><dt>模型家族</dt><dd>${esc(a.family_prediction_name)}</dd></div><div><dt>有效回答</dt><dd class="mono">${a.used_outputs} / ${FP_CONFIG.requests}</dd></div></dl>
++    <div class="fingerprint-heading"><h3>候选模型排行</h3><span class="meta">${scored ? "归因概率" : "有效回答不足三条，不计算归因概率"}</span></div>
++    <div class="fingerprint-ranking">${(a.results || []).map((c, i) => `<div class="fingerprint-rank"><span class="meta mono">${String(i + 1).padStart(2, "0")}</span><span class="mono fingerprint-rank-name">${esc(c.display_name)}</span><div class="fingerprint-bar" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, (c.probability || 0) * 100))}%"></span></div><span class="mono">${fpPercent(c.probability)}</span></div>`).join("")}</div>`;
++}
++
++const fingerprintSamplePart = (label, text, mono = false) => `<div class="fingerprint-sample-part"><div class="meta">${label}</div><pre${mono ? ' class="mono"' : ""}>${esc(text)}</pre></div>`;
++
 +function showFingerprintDetail(r) {
-+  const attr = r.attribution;
 +  const samples = r.samples || [];
-+  const ranking = attr && attr.decision !== "not_model" && ["completed", "partial"].includes(r.status)
-+    ? `<section class="result-dialog-section"><h3>候选模型排行</h3><div class="fp-detail-scroll"><table class="fp-detail-table"><thead><tr><th>排名</th><th>模型</th><th>得分</th><th>归因概率</th></tr></thead><tbody>${(attr.results || []).map((c, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(c.display_name)}</td><td class="mono">${Number(c.score).toFixed(4)}</td><td class="mono">${fpPercent(c.probability)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
-+  const part = (label, text) => `<div class="fp-sample-part"><h4>${label}</h4><pre>${esc(text)}</pre></div>`;
-+  $("fp-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fmtTime(r.time))} · ${fmtSec(r.duration_ms)} · 并发 ${esc(r.concurrency)}</p>
-+    ${fpOutcome(r)}${r.error ? `<p class="detail-warning">${esc(r.error)}</p>` : ""}${ranking}
-+    ${samples.length ? `<section class="result-dialog-section"><h3>挑战记录 · ${samples.reduce((n, s) => n + (s.attempts || 0), 0)} 次请求</h3>${samples.map((s, i) => `<details class="fp-sample"><summary>${icon("chevron-right", "chev")}挑战 ${i + 1}<span>${s.parsed_numbers} / ${s.expected_count} 个数字 · ${s.attempts || 0} 次尝试</span><span class="verdict ${s.accepted ? "ok" : "err"}">${s.accepted ? "有效" : "未计入"}</span></summary>${s.instructions ? part("开发者指令", s.instructions) : ""}${part("提示词", s.prompt)}${s.text ? part("回答", s.text) : ""}${s.error ? `<p class="detail-warning">${esc(s.error)}</p>` : ""}</details>`).join("")}</section>` : ""}`;
++  const sampleEntries = samples.map((s, i) => `<details class="fingerprint-sample">
++    <summary>${icon("chevron-right", "chev")}挑战 ${i + 1}<span class="meta">${s.parsed_numbers} / ${s.expected_count} 个数字${s.attempts > 1 ? ` · 重试 ${s.attempts - 1} 次` : ""}</span><span class="verdict ${s.accepted ? "ok" : "err"}">${s.accepted ? "有效" : "未计入"}</span></summary>
++    ${s.instructions ? fingerprintSamplePart("开发者指令", s.instructions) : ""}${fingerprintSamplePart("提示词", s.prompt)}${s.text ? fingerprintSamplePart("回答", s.text, true) : ""}${s.error ? `<p class="detail-warning">${esc(s.error)}</p>` : ""}
++  </details>`).join("");
++  $("fp-detail-body").innerHTML = `<p class="result-dialog-meta"><span class="mono">${esc(r.model)}</span> · ${esc(fmtTime(r.time))} · ${fmtSec(r.duration_ms)}${r.concurrency ? ` · 并发 ${esc(r.concurrency)}` : ""}</p>
++    ${r.attribution && r.status === "partial" ? '<p class="detail-note">部分结果</p>' : ""}
++    ${r.attribution && ["completed", "partial"].includes(r.status) ? fingerprintResultHTML(r) : fpOutcome(r)}
++    ${r.error ? `<p class="detail-note detail-warning">${esc(r.error)}</p>` : ""}
++    ${samples.length ? `<div class="fingerprint-heading"><h3>挑战记录</h3><span class="meta">${samples.reduce((n, s) => n + (s.attempts || 0), 0)} 次请求</span></div>${sampleEntries}` : ""}`;
 +}
++
 +function renderFingerprintRow(a) {
 +  const history = a.fingerprints || [], last = history.at(-1), p = a.fingerprint_running;
 +  return credentialRow({ type: "fp", credential: a, selected: fpSelected.has(a.id), open: fpExpanded.has(a.id), selectable: runnable("fp-", a),
 +    button: collectionButton("fp", a, p, "测试"), result: p ? collectionOutcome(p, p.total, true) : fpOutcome(last || {}), tested: !!(last || p),
-+    meta: `<div class="fp-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
++    meta: `<div class="fingerprint-test-model mono">${esc(p?.model || last?.model || "—")}</div>${listTime(!p && last?.time)}`,
 +    history: () => [...history].reverse().map((r) => historyEntry("fp", a.id, r, fpOutcome(r))).join("") });
 +}
 +function renderFingerprints() {
@@ -1416,7 +1443,7 @@ index 0000000..bf1d843
 +}
 diff --git a/backend/internal/codexeval/web/inspection.js b/backend/internal/codexeval/web/inspection.js
 new file mode 100644
-index 0000000..ddd5edb
+index 0000000000000000000000000000000000000000..957eb8730cef9b48a3f335f11453f32501bf37f4
 --- /dev/null
 +++ b/backend/internal/codexeval/web/inspection.js
 @@ -0,0 +1,554 @@
@@ -1976,7 +2003,7 @@ index 0000000..ddd5edb
 +}
 diff --git a/backend/internal/codexeval/web/pelican.js b/backend/internal/codexeval/web/pelican.js
 new file mode 100644
-index 0000000..8cd1fbd
+index 0000000000000000000000000000000000000000..8cd1fbde6d593d2e804d2049eab310fae69a17a2
 --- /dev/null
 +++ b/backend/internal/codexeval/web/pelican.js
 @@ -0,0 +1,110 @@
@@ -2092,7 +2119,7 @@ index 0000000..8cd1fbd
 +}
 diff --git a/backend/internal/codexeval/web/siwc.js b/backend/internal/codexeval/web/siwc.js
 new file mode 100644
-index 0000000..9a28a0e
+index 0000000000000000000000000000000000000000..9a28a0e5548b691285bc7ab2b12b9caaf8780de2
 --- /dev/null
 +++ b/backend/internal/codexeval/web/siwc.js
 @@ -0,0 +1,54 @@
@@ -2152,10 +2179,10 @@ index 0000000..9a28a0e
 +}
 diff --git a/backend/internal/codexeval/web/storage.js b/backend/internal/codexeval/web/storage.js
 new file mode 100644
-index 0000000..9ec731c
+index 0000000000000000000000000000000000000000..82b9a084135986dbf290c191bb5bceb17c06fc13
 --- /dev/null
 +++ b/backend/internal/codexeval/web/storage.js
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,10 @@
 +"use strict";
 +const PREF_STORE = "sub2api-codex-eval.prefs";
 +const MASK_STORE = "sub2api-codex-eval.masked";
@@ -2166,19 +2193,12 @@ index 0000000..9ec731c
 +function store(name, value) {
 +  try { localStorage.setItem(name, JSON.stringify(value)); } catch (_) {}
 +}
-+function preference(name, fallback) {
-+  const value = stored(PREF_STORE + "." + name);
-+  return value !== null && typeof value === typeof fallback ? value : fallback;
-+}
-+function savePreference(name, value) {
-+  store(PREF_STORE + "." + name, value);
-+}
 diff --git a/backend/internal/codexeval/web/style.css b/backend/internal/codexeval/web/style.css
 new file mode 100644
-index 0000000..853e34f
+index 0000000000000000000000000000000000000000..054bbdd51dee5e892465f325d0463be60afdc183
 --- /dev/null
 +++ b/backend/internal/codexeval/web/style.css
-@@ -0,0 +1,454 @@
+@@ -0,0 +1,470 @@
 +/* Layout */
 +:root {
 +  /* Content stays within CPAMP's 1280px .container width so wide screens don't spread the list apart. */
@@ -2312,11 +2332,11 @@ index 0000000..853e34f
 +@keyframes tip-in { from { opacity: 0; translate: 0 2px; } }
 +
 +/* Tables and code blocks */
-+.fp-detail-scroll, .markdown table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
-+:is(.fp-detail-table, .markdown) :is(th, td) { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
-+:is(.fp-detail-table, .markdown) th { color: var(--muted); font-weight: 500; background: var(--sunken); }
-+:is(.fp-detail-table, .markdown) tr:last-child td { border-bottom: 0; }
-+:is(.fp-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
++.markdown table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
++.markdown :is(th, td) { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
++.markdown th { color: var(--muted); font-weight: 500; background: var(--sunken); }
++.markdown tr:last-child td { border-bottom: 0; }
++:is(.fingerprint-sample, .markdown) pre { overflow: auto; padding: 12px; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
 +
 +/* Page navigation and introduction */
 +header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--section-gap); }
@@ -2352,10 +2372,6 @@ index 0000000..853e34f
 +#refresh[aria-busy="true"] .icon { animation: spin .8s linear infinite; }
 +.panel-intro { margin-bottom: var(--section-gap); color: var(--muted); }
 +.panel-intro p { margin: 0 0 8px; }
-+.principle-body { padding: 16px 18px; font-size: 13px; line-height: 1.8; }
-+.principle-body p { margin: 0 0 10px; }
-+.principle-body p:last-child { margin-bottom: 0; }
-+.principle-body a { color: var(--accent-ink); text-underline-offset: 3px; }
 +
 +/* Result metadata */
 +.result-meta, .latest-top { display: flex; align-items: center; gap: 4px 8px; min-width: 0; }
@@ -2364,9 +2380,9 @@ index 0000000..853e34f
 +.result-meta .model-meta .meta { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 +.verdict { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px 1px 6px; border-radius: 999px; background: var(--status-bg, var(--control-bg)); color: var(--status-ink, var(--muted)); font-size: 12px; font-weight: 600; }
 +.verdict .icon, .metric .icon { width: 13px; height: 13px; }
-+.verdict.ok, .outcome.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
++.verdict.ok, .outcome.ok, .fingerprint-summary.ok { --status-ink: var(--success-ink); --status-bg: var(--success-soft); }
 +.verdict.bad, .outcome.bad { --status-ink: var(--danger-ink); --status-bg: var(--danger-soft); }
-+.outcome.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
++.outcome.warn, .fingerprint-summary.warn { --status-ink: var(--warning-ink); --status-bg: var(--warning-soft); }
 +.verdict.err, .verdict.skip { border: 1px solid var(--control-line); }
 +.meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 +.metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 12px; }
@@ -2400,8 +2416,7 @@ index 0000000..853e34f
 +.toggle { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; font-weight: 600; cursor: pointer; text-align: left; }
 +.toggle .chev { color: var(--faint); }
 +.toggle .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-+.credential .api-key, .credential .tags { padding-left: var(--credential-indent); margin-top: 4px; }
-+.credential .api-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
++.credential .tags { padding-left: var(--credential-indent); margin-top: 4px; }
 +.credential .tags { display: flex; flex-wrap: wrap; gap: 5px; }
 +.credential .name { transition: filter .15s; }
 +.masked .credential .name { filter: blur(5px); user-select: none; }
@@ -2544,16 +2559,33 @@ index 0000000..853e34f
 +.detail-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; line-height: 1.7; }
 +.detail-warning { color: var(--danger-ink); overflow-wrap: anywhere; }
 +
-+/* Fingerprint details */
-+.fp-detail-table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 12px; }
-+.fp-test-model { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-+.fp-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
-+.fp-sample { border-top: 1px solid var(--line); padding: 12px 0; }
-+.fp-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
-+.fp-sample summary .chev { color: var(--muted); }
-+.fp-sample[open] summary .chev { transform: rotate(90deg); }
-+.fp-sample pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
-+.fp-sample h4 { font-size: 14px; font-weight: 500; }
++/* Fingerprint detection */
++.fingerprint-test-model { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
++.fingerprint-prediction { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; }
++.fingerprint-prediction > span:first-child { min-width: 0; }
++.fingerprint-probability { color: var(--status-ink, var(--muted)); font-size: 12px; white-space: nowrap; }
++.fingerprint-summary { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px; gap: 12px; margin: 0 0 20px; }
++.fingerprint-summary > div { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--sunken); }
++.fingerprint-summary > div:first-child { background: var(--status-bg, var(--sunken)); border-color: color-mix(in srgb, var(--status-ink, var(--line)) 25%, var(--line)); }
++.fingerprint-summary > div:first-child dt, .fingerprint-summary > div:first-child small { color: var(--status-ink, var(--muted)); }
++.fingerprint-summary dt { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
++.fingerprint-summary dd { margin: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
++.fingerprint-summary small { display: block; font-size: 13px; color: var(--accent-ink); font-weight: 500; margin-top: 4px; }
++.fingerprint-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 20px 0 10px; }
++.fingerprint-heading h3 { margin: 0; font-size: 14px; }
++.fingerprint-ranking { display: grid; gap: 2px; }
++.fingerprint-rank { display: grid; grid-template-columns: 26px minmax(180px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 12px; }
++.fingerprint-rank:first-child { background: var(--accent-soft); }
++.fingerprint-rank-name { overflow-wrap: anywhere; }
++.fingerprint-rank > :last-child { text-align: right; }
++.fingerprint-bar { height: 7px; overflow: hidden; border-radius: 99px; background: var(--line); }
++.fingerprint-bar span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: var(--accent); }
++.fingerprint-sample { border-top: 1px solid var(--line); padding: 12px 0; }
++.fingerprint-sample summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; cursor: pointer; font-size: 13px; }
++.fingerprint-sample summary .chev { color: var(--muted); }
++.fingerprint-sample[open] summary .chev { transform: rotate(90deg); }
++.fingerprint-sample-part { margin-top: 12px; }
++.fingerprint-sample-part pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; }
 +
 +/* Feedback and login */
 +.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--muted); font-size: 12px; line-height: 20px; margin: 0 4px 10px; }
@@ -2628,6 +2660,10 @@ index 0000000..853e34f
 +  .answer-content { grid-column: 1 / -1; }
 +  .result-dialog { --dialog-padding: 16px; }
 +  #fp-toolbar > .btn { grid-column: 1 / -1; }
++  .fingerprint-summary { grid-template-columns: 1fr 1fr; }
++  .fingerprint-summary > div:first-child { grid-column: 1 / -1; }
++  .fingerprint-rank { grid-template-columns: 18px minmax(0, 1fr) 58px; gap: 8px; padding-inline: 6px; }
++  .fingerprint-rank .fingerprint-bar { display: none; }
 +}
 +@media (prefers-reduced-motion: reduce) {
 +  .spin, #refresh[aria-busy="true"] .icon { animation: none; }
@@ -2635,7 +2671,7 @@ index 0000000..853e34f
 +}
 diff --git a/backend/internal/codexeval/web/theme.css b/backend/internal/codexeval/web/theme.css
 new file mode 100644
-index 0000000..b1851c0
+index 0000000000000000000000000000000000000000..b1851c008366a4258365fa89128857af21915352
 --- /dev/null
 +++ b/backend/internal/codexeval/web/theme.css
 @@ -0,0 +1,52 @@
@@ -2693,7 +2729,7 @@ index 0000000..b1851c0
 +}
 diff --git a/backend/internal/codexeval/web/ui.html b/backend/internal/codexeval/web/ui.html
 new file mode 100644
-index 0000000..143ba9d
+index 0000000000000000000000000000000000000000..143ba9d5b3cd41fd42aa85a9eb8ae246cae5b2c2
 --- /dev/null
 +++ b/backend/internal/codexeval/web/ui.html
 @@ -0,0 +1,209 @@
@@ -2908,7 +2944,7 @@ index 0000000..143ba9d
 +</html>
 diff --git a/frontend/src/views/admin/CodexEvalView.vue b/frontend/src/views/admin/CodexEvalView.vue
 new file mode 100644
-index 0000000..ea5feaf
+index 0000000000000000000000000000000000000000..ea5feaf17273e1ea0256c24793be989c65da8c27
 --- /dev/null
 +++ b/frontend/src/views/admin/CodexEvalView.vue
 @@ -0,0 +1,30 @@

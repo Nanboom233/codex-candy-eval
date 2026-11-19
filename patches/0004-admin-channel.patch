@@ -1,6 +1,6 @@
 diff --git a/backend/internal/handler/admin/account_codex_eval_handler.go b/backend/internal/handler/admin/account_codex_eval_handler.go
 new file mode 100644
-index 0000000..deeea7b
+index 0000000000000000000000000000000000000000..deeea7b035c96f811257ee5ca58a7e3f332c1bc6
 --- /dev/null
 +++ b/backend/internal/handler/admin/account_codex_eval_handler.go
 @@ -0,0 +1,145 @@
@@ -150,10 +150,10 @@ index 0000000..deeea7b
 +	}
 +}
 diff --git a/backend/internal/repository/http_upstream.go b/backend/internal/repository/http_upstream.go
-index e830b43..acc97f8 100644
+index af965e15ac87f63e064ca29f63710d46cb33d69b..e0e2e8b4f318d2b713b56bd4f774c12089d0d7f2 100644
 --- a/backend/internal/repository/http_upstream.go
 +++ b/backend/internal/repository/http_upstream.go
-@@ -315,7 +315,7 @@ func doUpstreamRequest(client *http.Client, req *http.Request, drainTimeouts ...
+@@ -313,7 +313,7 @@ func doUpstreamRequest(client *http.Client, req *http.Request, drainTimeouts ...
  	resp, err := servertiming.Do(client, req.WithContext(ctx))
  	if err != nil {
  		cancel()
@@ -164,10 +164,10 @@ index e830b43..acc97f8 100644
  	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
 new file mode 100644
-index 0000000..2d7a264
+index 0000000000000000000000000000000000000000..8bcd3db8ec139a431455c5af2704e8f09cea1723
 --- /dev/null
 +++ b/backend/internal/service/account_codex_eval_service.go
-@@ -0,0 +1,1006 @@
+@@ -0,0 +1,970 @@
 +package service
 +
 +import (
@@ -605,9 +605,7 @@ index 0000000..2d7a264
 +		state.ToolSearchDeclared = apicompat.HasToolSearchTool(tools)
 +		state.NamespaceTools = apicompat.NamespaceToolNames(tools)
 +		resp.Body = &codexChatStream{body: resp.Body, reader: bufio.NewReader(resp.Body), state: state}
-+		resp.Header.Set("Content-Type", "text/event-stream")
-+		resp.Header.Del("Content-Length")
-+		resp.ContentLength = -1
++		setCodexEvaluationStreamHeaders(resp)
 +	}
 +	return resp, nil
 +}
@@ -650,22 +648,7 @@ index 0000000..2d7a264
 +}
 +
 +func (s *AccountTestService) sendCodexAnthropicEvaluation(ctx context.Context, account, credentialAccount *Account, model string, body []byte) (*http.Response, error) {
-+	cleanedBody := stripCodexAdditionalToolsFromResponsesBody(body)
-+	var responseRequest apicompat.ResponsesRequest
-+	if err := json.Unmarshal(cleanedBody, &responseRequest); err != nil {
-+		return nil, fmt.Errorf("Invalid Responses request: %w", err)
-+	}
-+	responseRequest.Model = model
-+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responseRequest)
-+	if err != nil {
-+		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
-+	}
-+	anthropicReq.Model = model
-+	anthropicReq.Stream = true
-+	if anthropicReq.MaxTokens <= 0 {
-+		anthropicReq.MaxTokens = 16384
-+	}
-+	encoded, err := json.Marshal(anthropicReq)
++	encoded, err := prepareCodexAnthropicRequest(model, body)
 +	if err != nil {
 +		return nil, err
 +	}
@@ -742,41 +725,17 @@ index 0000000..2d7a264
 +		return nil, err
 +	}
 +	if resp.StatusCode != http.StatusOK {
-+		raw, readErr := io.ReadAll(resp.Body)
-+		_ = resp.Body.Close()
-+		resp.Body = io.NopCloser(bytes.NewReader(raw))
-+		resp.ContentLength = int64(len(raw))
-+		return resp, readErr
++		return restoreCodexEvaluationBody(resp)
 +	}
 +	state := apicompat.NewAnthropicEventToResponsesState()
 +	state.Model = model
 +	resp.Body = &codexAnthropicStream{body: resp.Body, reader: bufio.NewReader(resp.Body), state: state, model: model}
-+	if resp.Header == nil {
-+		resp.Header = make(http.Header)
-+	}
-+	resp.Header.Set("Content-Type", "text/event-stream")
-+	resp.Header.Del("Content-Length")
-+	resp.ContentLength = -1
++	setCodexEvaluationStreamHeaders(resp)
 +	return resp, nil
 +}
 +
 +func (s *AccountTestService) sendCodexGeminiEvaluation(ctx context.Context, account, credentialAccount *Account, model string, body []byte) (*http.Response, error) {
-+	cleanedBody := stripCodexAdditionalToolsFromResponsesBody(body)
-+	var responseRequest apicompat.ResponsesRequest
-+	if err := json.Unmarshal(cleanedBody, &responseRequest); err != nil {
-+		return nil, fmt.Errorf("Invalid Responses request: %w", err)
-+	}
-+	responseRequest.Model = model
-+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responseRequest)
-+	if err != nil {
-+		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
-+	}
-+	anthropicReq.Model = model
-+	anthropicReq.Stream = true
-+	if anthropicReq.MaxTokens <= 0 {
-+		anthropicReq.MaxTokens = 16384
-+	}
-+	claudeBody, err := json.Marshal(anthropicReq)
++	claudeBody, err := prepareCodexAnthropicRequest(model, body)
 +	if err != nil {
 +		return nil, err
 +	}
@@ -845,19 +804,10 @@ index 0000000..2d7a264
 +		return nil, err
 +	}
 +	if resp.StatusCode != http.StatusOK {
-+		raw, readErr := io.ReadAll(resp.Body)
-+		_ = resp.Body.Close()
-+		resp.Body = io.NopCloser(bytes.NewReader(raw))
-+		resp.ContentLength = int64(len(raw))
-+		return resp, readErr
++		return restoreCodexEvaluationBody(resp)
 +	}
 +	resp.Body = &codexGeminiStream{body: resp.Body, reader: bufio.NewReader(resp.Body), model: model}
-+	if resp.Header == nil {
-+		resp.Header = make(http.Header)
-+	}
-+	resp.Header.Set("Content-Type", "text/event-stream")
-+	resp.Header.Del("Content-Length")
-+	resp.ContentLength = -1
++	setCodexEvaluationStreamHeaders(resp)
 +	return resp, nil
 +}
 +
@@ -915,13 +865,11 @@ index 0000000..2d7a264
 +			events = apicompat.ChatCompletionsChunkToResponsesEvents(&chunk, s.state)
 +		}
 +		for _, event := range events {
-+			raw, encodeErr := json.Marshal(event)
++			encoded, encodeErr := apicompat.ResponsesEventToSSE(event)
 +			if encodeErr != nil {
 +				return 0, encodeErr
 +			}
-+			s.pending = append(s.pending, []byte("event: "+event.Type+"\ndata: ")...)
-+			s.pending = append(s.pending, raw...)
-+			s.pending = append(s.pending, '\n', '\n')
++			s.pending = append(s.pending, encoded...)
 +		}
 +	}
 +	n := copy(p, s.pending)
@@ -1014,13 +962,11 @@ index 0000000..2d7a264
 +			}
 +		}
 +		for _, event := range events {
-+			raw, encodeErr := json.Marshal(event)
++			encoded, encodeErr := apicompat.ResponsesEventToSSE(event)
 +			if encodeErr != nil {
 +				return 0, encodeErr
 +			}
-+			s.pending = append(s.pending, []byte("event: "+event.Type+"\ndata: ")...)
-+			s.pending = append(s.pending, raw...)
-+			s.pending = append(s.pending, '\n', '\n')
++			s.pending = append(s.pending, encoded...)
 +		}
 +	}
 +	n := copy(p, s.pending)
@@ -1114,11 +1060,11 @@ index 0000000..2d7a264
 +			chunk = inner
 +		}
 +		if um, ok := chunk["usageMetadata"].(map[string]any); ok && um != nil {
-+			if v := codexEvalInt64(um["promptTokenCount"]); v > 0 {
++			if v, _ := toInt64(um["promptTokenCount"]); v > 0 {
 +				s.inputTokens = v
 +			}
-+			cand := codexEvalInt64(um["candidatesTokenCount"])
-+			thought := codexEvalInt64(um["thoughtsTokenCount"])
++			cand, _ := toInt64(um["candidatesTokenCount"])
++			thought, _ := toInt64(um["thoughtsTokenCount"])
 +			if cand+thought > 0 {
 +				s.outputTokens = cand + thought
 +			}
@@ -1159,23 +1105,41 @@ index 0000000..2d7a264
 +	return n, nil
 +}
 +
-+func codexEvalInt64(v any) int64 {
-+	switch val := v.(type) {
-+	case float64:
-+		return int64(val)
-+	case int64:
-+		return val
-+	case int:
-+		return int64(val)
-+	case json.Number:
-+		i, _ := val.Int64()
-+		return i
-+	default:
-+		return 0
++func prepareCodexAnthropicRequest(model string, body []byte) ([]byte, error) {
++	var request apicompat.ResponsesRequest
++	if err := json.Unmarshal(stripCodexAdditionalToolsFromResponsesBody(body), &request); err != nil {
++		return nil, fmt.Errorf("Invalid Responses request: %w", err)
 +	}
++	request.Model = model
++	converted, err := apicompat.ResponsesToAnthropicRequest(&request)
++	if err != nil {
++		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
++	}
++	converted.Model, converted.Stream = model, true
++	if converted.MaxTokens <= 0 {
++		converted.MaxTokens = 16384
++	}
++	return json.Marshal(converted)
++}
++
++func restoreCodexEvaluationBody(resp *http.Response) (*http.Response, error) {
++	raw, err := io.ReadAll(resp.Body)
++	_ = resp.Body.Close()
++	resp.Body = io.NopCloser(bytes.NewReader(raw))
++	resp.ContentLength = int64(len(raw))
++	return resp, err
++}
++
++func setCodexEvaluationStreamHeaders(resp *http.Response) {
++	if resp.Header == nil {
++		resp.Header = make(http.Header)
++	}
++	resp.Header.Set("Content-Type", "text/event-stream")
++	resp.Header.Del("Content-Length")
++	resp.ContentLength = -1
 +}
 diff --git a/backend/internal/service/http_upstream_port.go b/backend/internal/service/http_upstream_port.go
-index e8e7695..d690dc4 100644
+index e8e769575bdbdee7af45bde6fd151d811c6acd2e..d690dc474bcd5c4e208d50c0d6822172e7adc9ab 100644
 --- a/backend/internal/service/http_upstream_port.go
 +++ b/backend/internal/service/http_upstream_port.go
 @@ -6,6 +6,13 @@ import (

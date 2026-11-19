@@ -13,16 +13,20 @@ import (
 	"time"
 )
 
+func resetInspectionTestState(t *testing.T) {
+	t.Helper()
+	mu.Lock()
+	defer mu.Unlock()
+	loaded, stateLoadError, storageError = false, nil, ""
+	candyResults = map[string][]candyResult{}
+	fingerprintResults = map[string][]fingerprintResult{}
+}
+
 func TestCodexInspectionConfirmationAndBoundaries(t *testing.T) {
 	oldDelay := retryDelay
 	retryDelay = time.Millisecond
 	t.Cleanup(func() { retryDelay = oldDelay })
-	mu.Lock()
-	loaded = false
-	stateLoadError = nil
-	storageError = ""
-	candyResults = map[string][]candyResult{}
-	mu.Unlock()
+	resetInspectionTestState(t)
 	var lock sync.Mutex
 	calls := map[int64]int{}
 	updates := map[int64]int{}
@@ -223,12 +227,7 @@ func TestCodexInspectionInvalidInitialSettingsBlockStart(t *testing.T) {
 }
 
 func TestCodexInspectionCancelAndSchedule(t *testing.T) {
-	mu.Lock()
-	loaded = false
-	stateLoadError = nil
-	storageError = ""
-	candyResults = map[string][]candyResult{}
-	mu.Unlock()
+	resetInspectionTestState(t)
 	started := make(chan struct{}, 1)
 	Initialize(t.TempDir(), func(ctx context.Context, _ int64, _ []byte, _ http.Header) (*http.Response, error) {
 		started <- struct{}{}
@@ -429,13 +428,7 @@ func TestCodexInspectionFingerprintModeAndWildcards(t *testing.T) {
 	oldDelay := retryDelay
 	retryDelay = time.Millisecond
 	t.Cleanup(func() { retryDelay = oldDelay })
-	mu.Lock()
-	loaded = false
-	stateLoadError = nil
-	storageError = ""
-	candyResults = map[string][]candyResult{}
-	fingerprintResults = map[string][]fingerprintResult{}
-	mu.Unlock()
+	resetInspectionTestState(t)
 
 	accounts := []InspectionAccount{
 		{Target: Target{AccountID: 1}, Name: "codex-match", Email: "match@team.io", Platform: "openai", Type: "oauth", PlanType: "pro", GroupIDs: []int64{101}, Available: true, Enabled: true, AutoInspectionEnabled: true, Priority: 10},
@@ -523,10 +516,7 @@ func TestCodexInspectionFingerprintModeAndWildcards(t *testing.T) {
 }
 
 func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
-	mu.Lock()
-	loaded, stateLoadError, storageError = false, nil, ""
-	candyResults = map[string][]candyResult{}
-	mu.Unlock()
+	resetInspectionTestState(t)
 	calls, saves, applications, priorityWrites, notifications := 0, 0, 0, 0, 0
 	answer := "20"
 	Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
@@ -622,10 +612,7 @@ func TestCodexInspectionDegradedWrongOnce(t *testing.T) {
 func TestCodexInspectionWriteFailures(t *testing.T) {
 	for _, failedWrite := range []string{"verdict", "priority", "matching"} {
 		t.Run(failedWrite, func(t *testing.T) {
-			mu.Lock()
-			loaded, stateLoadError, storageError = false, nil, ""
-			candyResults = map[string][]candyResult{}
-			mu.Unlock()
+			resetInspectionTestState(t)
 			Initialize(t.TempDir(), func(context.Context, int64, []byte, http.Header) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"20\"}]}]}}\n\n"))}, nil
 			}, func(context.Context, int64) (string, error) { return "write failure", nil })
@@ -686,10 +673,7 @@ func TestCodexInspectionWriteFailures(t *testing.T) {
 }
 
 func TestCodexInspectionParticipationStopsLaterSends(t *testing.T) {
-	mu.Lock()
-	loaded, stateLoadError, storageError = false, nil, ""
-	candyResults = map[string][]candyResult{}
-	mu.Unlock()
+	resetInspectionTestState(t)
 	var lock sync.Mutex
 	a := InspectionAccount{Target: Target{GroupID: 101, AccountID: 92}, GroupIDs: []int64{101}, Type: "oauth", Available: true, Enabled: true, Priority: 10}
 	calls := 0

@@ -7,6 +7,7 @@ if (!source) throw new Error("Set SUB2API_SOURCE to the patched native source tr
 const { JSDOM } = createRequire(path.resolve(source, "frontend/package.json"))("jsdom");
 const web = path.resolve(source, "backend/internal/codexeval/web");
 const read = (name) => fs.readFileSync(path.join(web, name), "utf8");
+assert.match(fs.readFileSync(path.join(web, "../web.go"), "utf8"), /const pluginVersion = "0\.4\.7"/);
 const variants = [...fs.readFileSync(path.join(web, "../pelican.go"), "utf8").matchAll(/\{ID: "([^"]+)", Label: "([^"]+)", language: "[^"]+", Prompt: pelicanPreamble \+([\s\S]*?)\},/g)]
   .map(([, id, label, prompt]) => ({ id, label, prompt: "不使用任何工具，也不要创建或修改文件，直接在回复中完成以下任务：\n\n" +
     [...prompt.matchAll(/"(?:[^"\\]|\\.)*"/g)].map(([literal]) => JSON.parse(literal)).join("") }));
@@ -138,18 +139,32 @@ function groupFixture() {
     assert.equal(detector.$("fp-mode"), null);
     assert.equal(detector.$("fp-principle"), null);
     const record = { model: "openai/gpt-6.1-sol", status: "partial", time: "2026-10-19T12:00:00Z", duration_ms: 10, concurrency: 3,
-      attribution: { decision: "partial", prediction: "gpt-6-astra", prediction_name: "GPT-6 Astra", probability: null,
+      attribution: { decision: "partial", prediction: "gpt-6-astra", prediction_name: "GPT-6 Astra", probability: null, family_prediction_name: "GPT", used_outputs: 2,
         results: [{ display_name: "GPT-6 Astra", score: 1.2, probability: null }] },
       samples: [{ prompt: "fixture prompt", expected_count: 300, parsed_numbers: 200, attempts: 2, accepted: true, text: "fixture output" }] };
     assert.ok(detector.h.fpOutcome(record).includes("与测试模型一致"));
     detector.h.showFingerprintDetail(record);
     assert.ok(detector.$("fp-detail-body").textContent.includes("—"));
-    assert.ok(detector.$("fp-detail-body").textContent.includes("2 次尝试"));
+    assert.ok(detector.$("fp-detail-body").textContent.includes("重试 1 次"));
+    const body = detector.$("fp-detail-body");
+    assert.equal(body.querySelectorAll(".fingerprint-summary > div").length, 3);
+    assert.equal(body.querySelectorAll(".fingerprint-rank").length, 1);
+    assert.equal(body.querySelectorAll("details.fingerprint-sample").length, 1);
+    assert.match(body.querySelector(".fingerprint-heading").textContent, /不计算归因概率/);
+    const completed = { ...record, status: "completed", attribution: { ...record.attribution, decision: "", probability: 0.875,
+      used_outputs: 3, results: [{ display_name: "GPT-6 Astra", probability: 0.875 }] } };
+    assert.match(detector.h.fpOutcome(completed), /fingerprint-prediction/);
+    assert.match(detector.h.fpOutcome(completed), /fingerprint-probability mono">87.5%/);
+    detector.h.showFingerprintDetail(completed);
+    assert.equal(body.querySelector(".fingerprint-bar > span").style.width, "87.5%");
+    assert.match(body.querySelector(".fingerprint-summary").textContent, /87.5%/);
+    assert.match(body.querySelector(".fingerprint-summary").textContent, /3 \/ 3/);
     detector.h.showFingerprintDetail({ ...record, status: "cancelled" });
     assert.ok(detector.$("fp-detail-body").textContent.includes("测试已停止"));
     assert.equal(detector.$("fp-detail-body").textContent.includes("候选模型排行"), false);
     detector.h.showFingerprintDetail({ ...record, attribution: { decision: "not_model", results: null } });
     assert.ok(detector.$("fp-detail-body").textContent.includes("不像语言模型回答"));
+    assert.match(detector.$("fp-detail-body").querySelector(".detail-note:last-of-type").textContent, /最多相隔三位/);
     assert.equal(detector.$("fp-detail-body").textContent.includes("候选模型排行"), false);
   } finally { detector.close(); }
   const entryFixture = groupFixture();
