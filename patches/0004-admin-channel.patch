@@ -164,7 +164,7 @@ index af965e15ac87f63e064ca29f63710d46cb33d69b..e0e2e8b4f318d2b713b56bd4f774c120
  	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 diff --git a/backend/internal/service/account_codex_eval_service.go b/backend/internal/service/account_codex_eval_service.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..8bcd3db8ec139a431455c5af2704e8f09cea1723
+index 0000000000000000000000000000000000000000..2d35cfe54da51d34b2611095d800665402f25bbc
 --- /dev/null
 +++ b/backend/internal/service/account_codex_eval_service.go
 @@ -0,0 +1,970 @@
@@ -561,7 +561,7 @@ index 0000000000000000000000000000000000000000..8bcd3db8ec139a431455c5af2704e8f0
 +	if chat {
 +		applyOpenCodeUpstreamUserAgent(account, apiURL, req.Header)
 +	}
-+	credentialAccount.ApplyHeaderOverrides(req.Header)
++	credentialAccount.ApplyHeaderOverrides(req.Context(), req.Header)
 +	if chat {
 +		applyOpenCodeSessionHeader(nil, account, apiURL, req.Header, body, encoded)
 +	}
@@ -714,7 +714,7 @@ index 0000000000000000000000000000000000000000..8bcd3db8ec139a431455c5af2704e8f0
 +		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
 +		setAnthropicAPIKeyAuthHeader(req.Header, credentialAccount, authToken, baseURL)
 +	}
-+	credentialAccount.ApplyHeaderOverrides(req.Header)
++	credentialAccount.ApplyHeaderOverrides(req.Context(), req.Header)
 +
 +	proxyURL := ""
 +	if account.ProxyID != nil && account.Proxy != nil {
@@ -793,7 +793,7 @@ index 0000000000000000000000000000000000000000..8bcd3db8ec139a431455c5af2704e8f0
 +	if err != nil {
 +		return nil, err
 +	}
-+	credentialAccount.ApplyHeaderOverrides(req.Header)
++	credentialAccount.ApplyHeaderOverrides(req.Context(), req.Header)
 +
 +	proxyURL := ""
 +	if account.ProxyID != nil && account.Proxy != nil {
